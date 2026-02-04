@@ -1,47 +1,65 @@
 
 import React from 'react';
-import { AppState } from '../types';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
-import { DollarSign, TrendingUp, AlertTriangle, Activity, Milk } from 'lucide-react';
+import { AppState, Livestock } from '../types';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, LineChart, Line, AreaChart, Area } from 'recharts';
+import { DollarSign, TrendingUp, AlertTriangle, Activity, Milk, Calendar, ArrowRight, CheckCircle } from 'lucide-react';
 
 interface Props {
   state: AppState;
 }
 
-const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d'];
+const COLORS = ['#059669', '#10B981', '#34D399', '#6EE7B7', '#A7F3D0', '#D1FAE5'];
 
 export const Dashboard: React.FC<Props> = ({ state }) => {
-  
-  // KPIs
-  const totalLivestock = state.livestock.length;
-  const cattleCount = state.livestock.filter(l => l.species === 'CATTLE').length;
-  const goatCount = state.livestock.filter(l => l.species === 'GOAT').length;
+
+  // --- KPIs ---
+  const activeAnimals = state.livestock.filter(l => l.status === 'ACTIVE');
+  const totalLivestock = activeAnimals.length;
+  const cattleCount = activeAnimals.filter(l => l.species === 'CATTLE').length;
+  const goatCount = activeAnimals.filter(l => l.species === 'GOAT').length;
 
   const totalExpenses = state.expenses.reduce((acc, curr) => acc + curr.amount, 0);
   const totalRevenue = state.sales.reduce((acc, curr) => acc + curr.amount, 0);
-  // eslint-disable-next-line
   const netProfit = totalRevenue - totalExpenses;
 
-  // Calculate Total Milk for "Today" (or recent) across all dairy animals
+  // --- DAIRY METRICS ---
   const todayStr = new Date().toISOString().split('T')[0];
-  const totalMilkToday = state.livestock.reduce((total, animal) => {
-      const todaysRecord = animal.milkProductionHistory?.find(r => r.date === todayStr);
-      return total + (todaysRecord ? todaysRecord.quantity : 0);
-  }, 0);
+  const last7Days = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date();
+    d.setDate(d.getDate() - (6 - i));
+    return d.toISOString().split('T')[0];
+  });
 
-  const totalMilkAllTime = state.livestock.reduce((total, animal) => {
-      return total + (animal.milkProductionHistory?.reduce((sum, r) => sum + r.quantity, 0) || 0);
-  }, 0);
-  
-  // Dynamic Category Counts (Combined)
-  const categoryCounts = state.categories.map(cat => ({
-    name: cat,
-    count: state.livestock.filter(c => c.category === cat).length
-  })).sort((a, b) => b.count - a.count);
+  const milkData = last7Days.map(date => {
+    const dailyTotal = state.livestock.reduce((sum, animal) => {
+      const record = animal.milkProductionHistory?.find(r => r.date === date);
+      return sum + (record ? record.quantity : 0);
+    }, 0);
+    return { date: date.slice(5), liters: dailyTotal };
+  });
 
-  const topCategory = categoryCounts[0] || { name: 'N/A', count: 0 };
+  const totalMilkToday = milkData[milkData.length - 1].liters;
 
-  // Chart Data Preparation
+  // --- UPCOMING TASKS (Vaccinations/Checks due) ---
+  const upcomingTasks = state.livestock.flatMap(animal => {
+    // Check medical records for nextDueDate
+    const medicalTasks = (animal.healthHistory || [])
+      .filter(r => r.nextDueDate && r.nextDueDate >= todayStr)
+      .map(r => ({
+        id: r.id,
+        animalId: animal.id,
+        tag: animal.tagId,
+        type: 'HEALTH',
+        task: r.type,
+        date: r.nextDueDate!,
+        description: `Follow-up: ${r.medicineName || 'Checkup'}`
+      }));
+
+    return medicalTasks;
+  }).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()).slice(0, 5);
+
+  // --- FINANCIAL TREND (Mini) ---
+  // Simple approximation for the chart
   const expenseByCategory = state.expenses.reduce((acc, curr) => {
     acc[curr.category] = (acc[curr.category] || 0) + curr.amount;
     return acc;
@@ -50,105 +68,167 @@ export const Dashboard: React.FC<Props> = ({ state }) => {
   const pieData = Object.keys(expenseByCategory).map(key => ({
     name: key,
     value: expenseByCategory[key]
-  }));
-
-  const speciesDistribution = [
-      { name: 'Cattle', count: cattleCount },
-      { name: 'Goats', count: goatCount }
-  ];
+  })).sort((a, b) => b.value - a.value);
 
   return (
-    <div className="space-y-6 animate-fade-in">
-      {/* KPI Cards */}
+    <div className="space-y-6 animate-fade-in pb-10">
+
+      {/* HEADER STATS */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex items-center space-x-4">
-          <div className="p-3 bg-blue-100 text-blue-600 rounded-lg">
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between hover:shadow-md transition-shadow">
+          <div>
+            <p className="text-sm font-medium text-gray-400">Total Animals</p>
+            <h3 className="text-3xl font-black text-gray-800 mt-1">{totalLivestock}</h3>
+            <div className="flex gap-2 mt-2 text-xs font-bold">
+              <span className="text-blue-600 bg-blue-50 px-2 py-1 rounded">{cattleCount} Cattle</span>
+              <span className="text-purple-600 bg-purple-50 px-2 py-1 rounded">{goatCount} Goats</span>
+            </div>
+          </div>
+          <div className="bg-gray-50 p-4 rounded-full text-gray-400">
             <Activity size={24} />
           </div>
-          <div>
-            <p className="text-sm text-gray-500 font-medium">Total Animals</p>
-            <h3 className="text-2xl font-bold text-gray-800">{totalLivestock}</h3>
-            <p className="text-xs text-gray-400">
-              {cattleCount} Cattle • {goatCount} Goats
-            </p>
-          </div>
         </div>
 
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex items-center space-x-4">
-          <div className="p-3 bg-sky-100 text-sky-600 rounded-lg">
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between hover:shadow-md transition-shadow">
+          <div>
+            <p className="text-sm font-medium text-gray-400">Milk Today</p>
+            <h3 className="text-3xl font-black text-sky-600 mt-1">{totalMilkToday.toFixed(1)} L</h3>
+            <p className="text-xs text-gray-400 mt-2">Daily yield across herd</p>
+          </div>
+          <div className="bg-sky-50 p-4 rounded-full text-sky-500">
             <Milk size={24} />
           </div>
+        </div>
+
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between hover:shadow-md transition-shadow">
           <div>
-            <p className="text-sm text-gray-500 font-medium">Dairy Production</p>
-            <h3 className="text-2xl font-bold text-gray-800">{totalMilkToday} Liters</h3>
-            <p className="text-xs text-sky-600">Yield Today (All Species)</p>
+            <p className="text-sm font-medium text-gray-400">Net Profit</p>
+            <h3 className={`text-3xl font-black mt-1 ${netProfit >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+              {netProfit >= 0 ? '+' : ''}PKR {Math.abs(netProfit).toLocaleString()}
+            </h3>
+            <p className="text-xs text-gray-400 mt-2">Revenue - Expenses</p>
+          </div>
+          <div className={`p-4 rounded-full ${netProfit >= 0 ? 'bg-emerald-50 text-emerald-500' : 'bg-red-50 text-red-500'}`}>
+            <TrendingUp size={24} />
           </div>
         </div>
 
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex items-center space-x-4">
-          <div className="p-3 bg-green-100 text-green-600 rounded-lg">
-            <DollarSign size={24} />
-          </div>
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between hover:shadow-md transition-shadow">
           <div>
-            <p className="text-sm text-gray-500 font-medium">Total Revenue</p>
-            <h3 className="text-2xl font-bold text-gray-800">PKR {totalRevenue.toLocaleString()}</h3>
-            <p className="text-xs text-green-600">Across all verticals</p>
+            <p className="text-sm font-medium text-gray-400">Alerts</p>
+            <h3 className="text-3xl font-black text-amber-500 mt-1">{upcomingTasks.length}</h3>
+            <p className="text-xs text-gray-400 mt-2">Upcoming tasks / Due</p>
           </div>
-        </div>
-
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex items-center space-x-4">
-          <div className="p-3 bg-amber-100 text-amber-600 rounded-lg">
+          <div className="bg-amber-50 p-4 rounded-full text-amber-500">
             <AlertTriangle size={24} />
-          </div>
-          <div>
-            <p className="text-sm text-gray-500 font-medium">Low Stock Alert</p>
-            <h3 className="text-2xl font-bold text-gray-800">{state.feed.filter(f => f.quantity <= f.reorderLevel).length} Items</h3>
-            <p className="text-xs text-gray-400">Need Reordering</p>
           </div>
         </div>
       </div>
 
-      {/* Charts Section */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Expense Breakdown */}
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-          <h3 className="text-lg font-semibold text-gray-800 mb-4">Financial Outflow Breakdown</h3>
-          <div className="h-80">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={pieData}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={60}
-                  outerRadius={100}
-                  paddingAngle={5}
-                  dataKey="value"
-                >
-                  {pieData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+      {/* MAIN CONTENT GRID */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+        {/* LEFT COL: Charts */}
+        <div className="lg:col-span-2 space-y-6">
+
+          {/* Milk Production Trend */}
+          <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="font-bold text-gray-800 flex items-center gap-2"><Milk size={18} className="text-sky-500" /> Milk Production Trend (7 Days)</h3>
+            </div>
+            <div className="h-64">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={milkData}>
+                  <defs>
+                    <linearGradient id="colorMilk" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#0ea5e9" stopOpacity={0.1} />
+                      <stop offset="95%" stopColor="#0ea5e9" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
+                  <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 12 }} />
+                  <YAxis axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 12 }} />
+                  <Tooltip contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} />
+                  <Area type="monotone" dataKey="liters" stroke="#0ea5e9" strokeWidth={3} fillOpacity={1} fill="url(#colorMilk)" />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* Expense Breakdown */}
+          <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+            <h3 className="font-bold text-gray-800 mb-6 flex items-center gap-2"><DollarSign size={18} className="text-emerald-600" /> Expense Analysis</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-center">
+              <div className="h-64 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie data={pieData} cx="50%" cy="50%" innerRadius={60} outerRadius={80} paddingAngle={5} dataKey="value">
+                      {pieData.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />)}
+                    </Pie>
+                    <Tooltip formatter={(value) => `PKR ${value.toLocaleString()}`} />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+              <div>
+                <div className="space-y-3">
+                  {pieData.slice(0, 5).map((entry, idx) => (
+                    <div key={idx} className="flex items-center justify-between text-sm">
+                      <div className="flex items-center gap-2">
+                        <div className="w-3 h-3 rounded-full" style={{ backgroundColor: COLORS[idx % COLORS.length] }}></div>
+                        <span className="text-gray-600 font-medium">{entry.name}</span>
+                      </div>
+                      <span className="font-bold text-gray-800">{(entry.value / totalExpenses * 100).toFixed(1)}%</span>
+                    </div>
                   ))}
-                </Pie>
-                <Tooltip formatter={(value) => `PKR ${value.toLocaleString()}`} />
-                <Legend />
-              </PieChart>
-            </ResponsiveContainer>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
-        {/* Species Distribution */}
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-          <h3 className="text-lg font-semibold text-gray-800 mb-4">Farm Population by Species</h3>
-          <div className="h-80">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={speciesDistribution}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="name" />
-                <YAxis />
-                <Tooltip />
-                <Bar dataKey="count" fill="#10b981" radius={[4, 4, 0, 0]} barSize={60} />
-              </BarChart>
-            </ResponsiveContainer>
+        {/* RIGHT COL: Widgets */}
+        <div className="space-y-6">
+
+          {/* Upcoming Tasks */}
+          <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 h-full">
+            <h3 className="font-bold text-gray-800 mb-6 flex items-center gap-2">
+              <Calendar size={18} className="text-amber-500" />
+              Upcoming Tasks
+            </h3>
+
+            <div className="space-y-4">
+              {upcomingTasks.length > 0 ? upcomingTasks.map((task, idx) => (
+                <div key={idx} className="flex gap-4 items-start p-3 hover:bg-gray-50 rounded-xl transition-colors border border-transparent hover:border-gray-100 cursor-pointer group">
+                  <div className="bg-amber-100 text-amber-600 p-2 rounded-lg shrink-0 group-hover:bg-amber-200 transition-colors">
+                    <AlertTriangle size={16} />
+                  </div>
+                  <div>
+                    <p className="text-xs font-bold text-amber-600 uppercase mb-0.5">{task.date} • {task.tag}</p>
+                    <p className="text-sm font-bold text-gray-800">{task.description}</p>
+                    <p className="text-xs text-gray-400 mt-1">{task.task} Due</p>
+                  </div>
+                </div>
+              )) : (
+                <div className="text-center py-10">
+                  <CheckCircle className="mx-auto text-gray-200 mb-2" size={40} />
+                  <p className="text-gray-400 text-sm">No pending tasks for next 30 days.</p>
+                </div>
+              )}
+            </div>
+
+            <button className="w-full mt-6 py-3 text-xs font-bold text-gray-500 border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors flex items-center justify-center gap-2">
+              VIEW ALL TASKS <ArrowRight size={14} />
+            </button>
+          </div>
+
+          {/* Quick Actions (Visual Only) */}
+          <div className="bg-gradient-to-br from-emerald-600 to-teal-700 p-6 rounded-2xl shadow-lg text-white">
+            <h3 className="font-bold text-lg mb-2">Farm Health Score</h3>
+            <div className="text-5xl font-black mb-2">98<span className="text-2xl opacity-60">%</span></div>
+            <p className="text-emerald-100 text-sm mb-6">Based on mortality, vaccination coverage, and growth rates.</p>
+            <div className="h-2 bg-black/20 rounded-full overflow-hidden">
+              <div className="h-full bg-emerald-300 w-[98%]"></div>
+            </div>
           </div>
         </div>
       </div>

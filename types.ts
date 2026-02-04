@@ -15,19 +15,30 @@ export enum ExpenseCategory {
   OTHER = 'OTHER'
 }
 
-export type MedicalRecordType = 'VACCINATION' | 'TREATMENT' | 'CHECKUP' | 'INJURY';
+export type MedicalRecordType = 'VACCINATION' | 'TREATMENT' | 'CHECKUP' | 'INJURY' | 'HEAT' | 'OTHER';
 
 export interface MedicalRecord {
   id: string;
   date: string;
   time: string;
   type: MedicalRecordType;
-  medicineName: string;
-  doctorName: string;
+  medicineName?: string;
+  doctorName?: string;
   cost: number;
   notes: string;
   nextDueDate?: string;
   imageUrl?: string;
+}
+
+export interface MedicineInventory {
+  id: string;
+  name: string;
+  batchNumber: string;
+  expiryDate: string;
+  quantity: number;
+  unit: 'ML' | 'DOSE' | 'TABLET';
+  costPerUnit: number;
+  lowStockThreshold: number;
 }
 
 export interface BirthRecord {
@@ -92,6 +103,41 @@ export interface Breeder {
   notes?: string;
 }
 
+
+export interface Customer {
+  id: string;
+  name: string;
+  contact: string;
+  address?: string;
+  status: 'ACTIVE' | 'INACTIVE';
+  notes?: string;
+}
+
+export interface Invoice {
+  id: string;
+  customerId: string;
+  customerName: string;
+  createdDate: string;
+  dueDate: string;
+  billingPeriodStart: string;
+  billingPeriodEnd: string;
+  status: 'PAID' | 'UNPAID' | 'PARTIAL';
+  items: {
+    description: string;
+    amount: number;
+  }[];
+  totalAmount: number;
+  amountPaid: number;
+  notes?: string;
+}
+
+export interface PalaiProfile {
+  startDate: string;
+  ratePerMonth?: number;
+  feedPlan?: 'BASIC' | 'PREMIUM' | 'CUSTOM';
+  specialInstructions?: string;
+}
+
 export interface Livestock {
   id: string;
   tagId: string;
@@ -101,19 +147,35 @@ export interface Livestock {
   gender: 'MALE' | 'FEMALE';
   weight: number;
   dob: string;
-  purchaseDate: string;
-  purchasePrice: number;
+  purchaseDate?: string;
+  purchasePrice?: number;
+  ownership?: 'OWNED' | 'PALAI';
+  palaiCustomerId?: string;
+  palaiProfile?: PalaiProfile; // New detailed profile
   status: LivestockStatus;
-  location: string;
+  location?: string;
   imageUrl?: string;
+  notes?: string;
   medicalHistory: MedicalRecord[];
   breedingHistory: InseminationRecord[];
   weightHistory: WeightRecord[];
   milkProductionHistory?: MilkRecord[];
   serviceDetails?: ServiceDetails;
-  notes?: string;
   damId?: string; // Mother
   sireId?: string; // Father
+}
+
+export interface AppState {
+  livestock: Livestock[];
+  expenses: Expense[];
+  sales: Sale[];
+  feed: FeedInventory[];
+  infrastructure: Infrastructure[];
+  dietPlans: DietPlan[];
+  breeders: Breeder[];
+  categories: string[];
+  customers: Customer[]; // New Customer Registry
+  invoices: Invoice[]; // New Invoice Ledger
 }
 
 export interface Expense {
@@ -123,23 +185,54 @@ export interface Expense {
   date: string;
   description: string;
   relatedAnimalId?: string;
+  location?: string;
+  farmId?: string;
+  supplier?: string;
+  paymentStatus?: 'PAID' | 'PENDING' | 'PARTIAL';
+  paymentDate?: string;
 }
 
 export interface Sale {
   id: string;
-  animalId: string;
-  amount: number;
+  itemType: 'ANIMAL' | 'MILK' | 'MANURE' | 'OTHER';
+
+  // Animal Sale Specifics
+  soldAnimalIds?: string[]; // Supports multiple animals
+  saleType?: 'SINGLE_ANIMAL' | 'BULK_ANIMALS' | 'OTHER';
+
+  // Financials
+  amount: number; // Total Sale Value
+  pricingMethod?: 'PER_ANIMAL' | 'LUMP_SUM'; // For bulk sales
+  pricePerAnimal?: number;
+
+  // Payment Tracking
+  paymentStatus: 'PAID' | 'PENDING' | 'PARTIAL';
+  amountReceived: number;
+  paymentMethod?: 'CASH' | 'BANK' | 'CHEQUE' | 'OTHER';
+  paymentDate?: string;
+
+  quantity?: number; // For non-animal items like Milk (liters)
   date: string;
   buyer: string;
-  weightAtSale: number;
+  buyerContact?: string;
+  weightAtSale?: number; // Avg or Total depending on context
+  description?: string;
+  location?: string;
 }
 
 export interface FeedInventory {
   id: string;
   name: string;
+  category?: 'FEED' | 'MEDICINE';
   quantity: number;
+  unit?: string;
   unitCost: number;
   reorderLevel: number;
+  batchNumber?: string;
+  expiryDate?: string;
+  location?: string;
+  feedType?: 'GRASS' | 'TMR' | 'WANDA' | 'OTHER';
+  defaultSupplier?: string;
 }
 
 export interface Infrastructure {

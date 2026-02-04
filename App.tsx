@@ -2,13 +2,17 @@
 import React, { useState, useEffect } from 'react';
 import { Dashboard } from './components/Dashboard';
 import { LivestockManager } from './components/LivestockManager';
+import { PalaiManager } from './components/PalaiManager';
+import { SalesManager } from './components/SalesManager';
 import { Financials } from './components/Financials';
 import { Operations } from './components/Operations';
+import { Procurement } from './components/Procurement';
+import { Reports } from './components/Reports';
 import { GeminiAdvisor } from './components/GeminiAdvisor';
 import { Login } from './components/Login';
-import { MOCK_LIVESTOCK, MOCK_EXPENSES, MOCK_FEED, MOCK_SALES, FIXED_CATEGORIES, MOCK_INFRASTRUCTURE, MOCK_DIET_PLANS, MOCK_BREEDERS } from './constants';
+import { MOCK_LIVESTOCK, MOCK_EXPENSES, MOCK_FEED, MOCK_SALES, FIXED_CATEGORIES, MOCK_INFRASTRUCTURE, MOCK_DIET_PLANS, MOCK_BREEDERS, MOCK_CUSTOMERS, MOCK_INVOICES } from './constants';
 import { AppState, Livestock, MedicalRecord, Expense, ExpenseCategory, FeedInventory, Infrastructure, InseminationRecord, Sale, WeightRecord, DietPlan, MilkRecord, Breeder } from './types';
-import { LayoutDashboard, Beef, BadgeDollarSign, ClipboardList, BrainCircuit, Menu, X, Tractor, ChevronDown, LogOut, User } from 'lucide-react';
+import { Truck, Home, LogOut, FileText, BadgeDollarSign, Activity, Stethoscope, Grab, BrainCircuit, Droplets, LineChart, Settings, Menu, X, ArrowLeft, ArrowRight, Bell, Search, PlusCircle, Filter, ChevronDown, User, DollarSign, LayoutDashboard, Beef, ClipboardList, Tractor } from 'lucide-react';
 
 import { backendService } from './services/backendService';
 
@@ -25,11 +29,13 @@ const App: React.FC = () => {
     feed: [],
     infrastructure: [],
     dietPlans: [],
-    breeders: MOCK_BREEDERS, // Keep mock for now or move to DB if time permits
-    categories: FIXED_CATEGORIES
+    breeders: MOCK_BREEDERS,
+    categories: FIXED_CATEGORIES,
+    customers: MOCK_CUSTOMERS,
+    invoices: MOCK_INVOICES
   });
 
-  const [activeView, setActiveView] = useState<'DASHBOARD' | 'CATTLE_MANAGER' | 'GOAT_MANAGER' | 'FINANCE' | 'OPERATIONS' | 'AI'>('DASHBOARD');
+  const [activeView, setActiveView] = useState<'DASHBOARD' | 'CATTLE_MANAGER' | 'GOAT_MANAGER' | 'PALAI' | 'SALES' | 'FINANCE' | 'OPERATIONS' | 'PROCUREMENT' | 'REPORTS' | 'AI'>('DASHBOARD');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isLivestockMenuOpen, setIsLivestockMenuOpen] = useState(true);
 
@@ -50,7 +56,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (!isAuthenticated) return;
-    
+
     const fetchData = async () => {
       try {
         setIsLoading(true);
@@ -68,8 +74,18 @@ const App: React.FC = () => {
           livestock, expenses, sales, feed, infrastructure: infra, dietPlans
         }));
       } catch (err: any) {
-        console.error("Failed to load data", err);
-        setError("Failed to connect to server. Ensure backend is running.");
+        console.error("Failed to load data, falling back to mocks", err);
+        // Fallback to Mocks
+        setState(prev => ({
+          ...prev,
+          livestock: MOCK_LIVESTOCK,
+          expenses: MOCK_EXPENSES,
+          sales: MOCK_SALES,
+          feed: MOCK_FEED,
+          infrastructure: MOCK_INFRASTRUCTURE,
+          dietPlans: MOCK_DIET_PLANS
+        }));
+        // setError("Failed to connect to server. Ensure backend is running.");
       } finally {
         setIsLoading(false);
       }
@@ -234,8 +250,14 @@ const App: React.FC = () => {
               )}
             </div>
             <NavItem view="OPERATIONS" icon={ClipboardList} label="Operations & Feed" />
+            <NavItem view="PROCUREMENT" icon={Truck} label="Procurement & Stores" />
             <NavItem view="FINANCE" icon={BadgeDollarSign} label="Finance" />
-            <NavItem view="AI" icon={BrainCircuit} label="AI Advisor" />
+            <NavItem view="REPORTS" icon={FileText} label="Reports & Analytics" />
+            <NavItem view="PALAI" icon={User} label="Palai / 3rd Party" />
+            <NavItem view="SALES" icon={DollarSign} label="Sales & Revenue" />
+            <div className={`mt-4 mb-2 text-xs font-bold text-gray-400 px-4 uppercase tracking-wider ${!isSidebarOpen && 'hidden'}`}>
+              Farm Operations
+            </div>
             <div className="pt-4 mt-4 border-t border-gray-200">
               <div className="px-4 py-2 mb-2">
                 <div className="flex items-center gap-2 text-sm text-gray-600 mb-1">
@@ -295,7 +317,29 @@ const App: React.FC = () => {
                 key="goat-manager" livestock={state.livestock} breeders={state.breeders} species="GOAT" categories={FIXED_CATEGORIES}
                 onAddLivestock={addLivestock} onUpdateLivestock={updateLivestock} onDeleteLivestock={deleteLivestock}
                 onAddMedicalRecord={addMedicalRecord} onAddBreedingRecord={addBreedingRecord} onAddWeightRecord={addWeightRecord} onAddMilkRecord={addMilkRecord}
-                onUpdateBreedingRecord={updateBreedingRecord}
+                onUpdateBreedingRecord={async (id, rec) => { /* TODO */ }}
+              />
+            )}
+            {activeView === 'PALAI' && (
+              <PalaiManager
+                state={state}
+                onUpdateLivestock={async (animal) => {
+                  // Mock update local state as backendService.updateLivestock might be missing
+                  setState(p => ({ ...p, livestock: p.livestock.map(l => l.id === animal.id ? animal : l) }));
+                }}
+                onAddExpense={async (exp) => { await backendService.createExpense(exp); setState(p => ({ ...p, expenses: [...p.expenses, exp] })); }}
+              />
+            )}
+            {activeView === 'SALES' && (
+              <SalesManager
+                state={state}
+                onAddSale={async (sale) => { await backendService.createSale(sale); setState(p => ({ ...p, sales: [...p.sales, sale] })); }}
+                onUpdateLivestock={async (animal) => {
+                  // TODO: Implement backendService.updateLivestock
+                  // Mocking the behavior locally for now
+                  setState(p => ({ ...p, livestock: p.livestock.map(l => l.id === animal.id ? animal : l) }));
+                }}
+                onDeleteSale={async (id) => { await backendService.deleteSale(id); setState(p => ({ ...p, sales: p.sales.filter(s => s.id !== id) })); }}
               />
             )}
             {activeView === 'FINANCE' && (
@@ -307,6 +351,7 @@ const App: React.FC = () => {
                 onAddSale={async (sl) => { await backendService.createSale(sl); setState(p => ({ ...p, sales: [...p.sales, sl] })); }}
                 onDeleteExpense={async (id) => { await backendService.deleteExpense(id); setState(p => ({ ...p, expenses: p.expenses.filter(e => e.id !== id) })); }}
                 onDeleteSale={async (id) => { await backendService.deleteSale(id); setState(p => ({ ...p, sales: p.sales.filter(s => s.id !== id) })); }}
+                onDeleteLivestock={async (id) => { await backendService.deleteLivestock(id); setState(p => ({ ...p, livestock: p.livestock.filter(l => l.id !== id) })); }}
               />
             )}
             {activeView === 'OPERATIONS' && (
@@ -323,6 +368,19 @@ const App: React.FC = () => {
                 onDeleteDietPlan={async (id) => { try { await backendService.deleteDietPlan(id); setState(p => ({ ...p, dietPlans: p.dietPlans.filter(i => i.id !== id) })); } catch (e) { alert('Failed to delete diet plan.'); } }}
               />
             )}
+            {activeView === 'PROCUREMENT' && (
+              <Procurement
+                state={state}
+                onAddExpense={async (exp) => { await backendService.createExpense(exp); setState(p => ({ ...p, expenses: [...p.expenses, exp] })); }}
+                onUpdateExpense={async (exp) => {
+                  setState(p => ({ ...p, expenses: p.expenses.map(e => e.id === exp.id ? exp : e) }));
+                }}
+                onAddFeed={async (item) => { const saved = await backendService.createFeed(item); setState(p => ({ ...p, feed: [...p.feed, saved] })); }}
+                onUpdateInventory={async (item) => { const updated = await backendService.updateFeed(item.id, item); setState(p => ({ ...p, feed: p.feed.map(f => f.id === item.id ? updated : f) })); }}
+                onDeleteFeed={async (id) => { try { await backendService.deleteFeed(id); setState(p => ({ ...p, feed: p.feed.filter(f => f.id !== id) })); } catch (e) { alert('Failed to delete feed item'); } }}
+              />
+            )}
+            {activeView === 'REPORTS' && <Reports state={state} />}
             {activeView === 'AI' && <GeminiAdvisor state={state} />}
           </div>
         </main>

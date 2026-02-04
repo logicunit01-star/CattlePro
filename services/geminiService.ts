@@ -3,12 +3,13 @@ import { GoogleGenAI } from "@google/genai";
 import { AppState } from "../types";
 import { FIXED_CATEGORIES } from "../constants";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+const apiKey = process.env.API_KEY || "";
+const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
 
 export const generateFarmAnalysis = async (state: AppState, query: string): Promise<string> => {
   // Use gemini-3-pro-preview for advanced reasoning and complex analysis.
   const model = 'gemini-3-pro-preview';
-  
+
   // Prepare a dynamic summary of categories
   const categoryBreakdown = FIXED_CATEGORIES.reduce((acc, cat) => {
     acc[cat] = state.livestock.filter(c => c.category === cat).length;
@@ -16,8 +17,8 @@ export const generateFarmAnalysis = async (state: AppState, query: string): Prom
   }, {} as Record<string, number>);
 
   const speciesBreakdown = {
-      cattle: state.livestock.filter(c => c.species === 'CATTLE').length,
-      goats: state.livestock.filter(c => c.species === 'GOAT').length
+    cattle: state.livestock.filter(c => c.species === 'CATTLE').length,
+    goats: state.livestock.filter(c => c.species === 'GOAT').length
   };
 
   // Prepare a summary of the state to send to the model context
@@ -45,6 +46,10 @@ export const generateFarmAnalysis = async (state: AppState, query: string): Prom
   `;
 
   try {
+    if (!ai) {
+      return "API Key is missing. Please add GEMINI_API_KEY to your .env file.";
+    }
+
     const response = await ai.models.generateContent({
       model: model,
       contents: prompt,

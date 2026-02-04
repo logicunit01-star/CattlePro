@@ -51,6 +51,8 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
     const [isLoggingBirth, setIsLoggingBirth] = useState<string | null>(null);
     const [isAddingWeight, setIsAddingWeight] = useState(false);
     const [isAddingMilk, setIsAddingMilk] = useState(false);
+    const [isBatchMode, setIsBatchMode] = useState(false);
+    const [selectedBatchIds, setSelectedBatchIds] = useState<string[]>([]);
 
     // Form States
     const [animalForm, setAnimalForm] = useState<Omit<Partial<Livestock>, 'serviceDetails'> & { serviceDetails?: Partial<ServiceDetails> }>({
@@ -73,11 +75,20 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
     const [newWeight, setNewWeight] = useState<Partial<WeightRecord>>({ date: new Date().toISOString().split('T')[0], weight: 0, notes: '' });
     const [newMilk, setNewMilk] = useState<Partial<MilkRecord>>({ date: new Date().toISOString().split('T')[0], session: 'MORNING', quantity: 0, fatContent: 0, notes: '' });
 
+    // Entry Options State
+    const [isPregnantEntry, setIsPregnantEntry] = useState(false);
+    const [pregnantDate, setPregnantDate] = useState(new Date().toISOString().split('T')[0]);
+    const [isAddingCalfEntry, setIsAddingCalfEntry] = useState(false);
+    const [calfDetails, setCalfDetails] = useState({ gender: 'FEMALE', weight: 15, ageMonths: 1, name: '' });
+
     const handleOpenAdd = () => {
         setAnimalForm({
             tagId: '', category: categories[0], breed: '', gender: 'MALE', weight: 0, dob: '', purchaseDate: '', purchasePrice: 0, status: 'ACTIVE', location: '', notes: '', imageUrl: '', medicalHistory: [], breedingHistory: [], weightHistory: [], milkProductionHistory: [],
             serviceDetails: { feedPlan: 'BASIC', monthlyFee: 0, specialInstructions: '' }
         });
+        setIsPregnantEntry(false);
+        setIsAddingCalfEntry(false);
+        setCalfDetails({ gender: 'FEMALE', weight: 15, ageMonths: 1, name: '' });
         setIsEditing(false);
         setCurrentView('ANIMAL_FORM');
     };
@@ -193,7 +204,7 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                 id: Math.random().toString(36).substr(2, 9),
                 tagId: `${selectedAnimal.tagId}-${T.offspringTag}-${i + 1}`,
                 species: selectedAnimal.species,
-                category: 'Breeding',
+                category: 'Calf',
                 breed: selectedAnimal.breed,
                 gender: birth.genders[i],
                 weight: birth.weights[i],
@@ -362,13 +373,108 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                                 <input type="number" value={animalForm.purchasePrice} onChange={e => setAnimalForm({ ...animalForm, purchasePrice: parseFloat(e.target.value) })} className="w-full border-b-2 border-gray-100 focus:border-emerald-500 py-2 outline-none" />
                             </div>
                         </div>
+
+                        {/* Female Specific Options */}
+                        {animalForm.gender === 'FEMALE' && (
+                            <div className="col-span-1 md:col-span-2 bg-emerald-50 rounded-2xl p-6 border border-emerald-100">
+                                <h4 className="text-sm font-bold text-emerald-800 uppercase tracking-widest mb-4 flex items-center gap-2"><Settings size={16} /> Reproduction Entry Options</h4>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                                    <div className="space-y-3">
+                                        <label className="flex items-center gap-3 cursor-pointer">
+                                            <input type="checkbox" checked={isPregnantEntry} onChange={e => setIsPregnantEntry(e.target.checked)} className="w-5 h-5 text-emerald-600 rounded focus:ring-emerald-500 border-gray-300" />
+                                            <span className="font-bold text-gray-700">Mark as Pregnant?</span>
+                                        </label>
+                                        {isPregnantEntry && (
+                                            <div className="pl-8 animate-fade-in">
+                                                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Est. Conception Date</label>
+                                                <input type="date" value={pregnantDate} onChange={e => setPregnantDate(e.target.value)} className="w-full bg-white border border-emerald-200 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500" />
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    <div className="space-y-3">
+                                        <label className="flex items-center gap-3 cursor-pointer">
+                                            <input type="checkbox" checked={isAddingCalfEntry} onChange={e => setIsAddingCalfEntry(e.target.checked)} className="w-5 h-5 text-emerald-600 rounded focus:ring-emerald-500 border-gray-300" />
+                                            <span className="font-bold text-gray-700">Add {T.offspring} with Mother?</span>
+                                        </label>
+                                        {isAddingCalfEntry && (
+                                            <div className="pl-8 space-y-3 animate-fade-in">
+                                                <div className="grid grid-cols-2 gap-3">
+                                                    <div>
+                                                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Gender</label>
+                                                        <select value={calfDetails.gender} onChange={e => setCalfDetails({ ...calfDetails, gender: e.target.value })} className="w-full bg-white border border-emerald-200 rounded-lg px-2 py-2 outline-none text-sm">
+                                                            <option value="MALE">Male</option>
+                                                            <option value="FEMALE">Female</option>
+                                                        </select>
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Age (Months)</label>
+                                                        <input type="number" value={calfDetails.ageMonths} onChange={e => setCalfDetails({ ...calfDetails, ageMonths: parseFloat(e.target.value) })} className="w-full bg-white border border-emerald-200 rounded-lg px-2 py-2 outline-none text-sm" />
+                                                    </div>
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">{T.offspring} Name/Tag (Optional)</label>
+                                                    <input type="text" value={calfDetails.name} onChange={e => setCalfDetails({ ...calfDetails, name: e.target.value })} placeholder={`Auto: ${animalForm.tagId}-${T.offspringTag}-1`} className="w-full bg-white border border-emerald-200 rounded-lg px-3 py-2 outline-none text-sm" />
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
                     </div>
                     <div className="mt-12 flex justify-end gap-6">
                         <button onClick={() => setCurrentView('LIST')} className="font-bold text-gray-400 hover:text-gray-600">CANCEL</button>
                         <button onClick={() => {
                             if (!animalForm.tagId) return alert("Tag ID Required");
-                            const final = { ...animalForm, id: isEditing ? selectedAnimal!.id : Math.random().toString(36).substr(2, 9), species } as Livestock;
-                            isEditing ? onUpdateLivestock(final) : onAddLivestock(final);
+
+                            // 1. Save Mother
+                            const motherId = isEditing ? selectedAnimal!.id : Math.random().toString(36).substr(2, 9);
+                            const finalMother = { ...animalForm, id: motherId, species } as Livestock;
+                            isEditing ? onUpdateLivestock(finalMother) : onAddLivestock(finalMother);
+
+                            // 2. Add Pregnancy Record if checked (only for new mothers usually, or edits)
+                            if (isPregnantEntry && animalForm.gender === 'FEMALE') {
+                                const breedingRec: InseminationRecord = {
+                                    id: Math.random().toString(36).substr(2, 9),
+                                    date: pregnantDate,
+                                    sireId: 'Unknown',
+                                    sireBreed: 'Unknown',
+                                    breederId: 'Self',
+                                    strawBatchId: '',
+                                    technician: 'Self',
+                                    status: 'CONFIRMED',
+                                    expectedBirthDate: new Date(new Date(pregnantDate).getTime() + (T.gestationDays * 24 * 60 * 60 * 1000)).toISOString().split('T')[0],
+                                    cost: 0
+                                };
+                                onAddBreedingRecord(motherId, breedingRec);
+                            }
+
+                            // 3. Add Calf if checked
+                            if (isAddingCalfEntry && animalForm.gender === 'FEMALE') {
+                                const calfDob = new Date();
+                                calfDob.setMonth(calfDob.getMonth() - calfDetails.ageMonths);
+
+                                const calf: Livestock = {
+                                    id: Math.random().toString(36).substr(2, 9),
+                                    tagId: calfDetails.name || `${animalForm.tagId}-${T.offspringTag}-1`,
+                                    species: species,
+                                    category: 'Calf', // Generic
+                                    breed: animalForm.breed,
+                                    gender: calfDetails.gender as any,
+                                    weight: calfDetails.weight,
+                                    dob: calfDob.toISOString().split('T')[0],
+                                    status: 'ACTIVE',
+                                    damId: motherId,
+                                    location: animalForm.location,
+                                    purchaseDate: animalForm.purchaseDate,
+                                    purchasePrice: 0,
+                                    notes: `Auto-added with mother ${animalForm.tagId}`,
+                                    medicalHistory: [], breedingHistory: [], weightHistory: [], milkProductionHistory: []
+                                };
+                                onAddLivestock(calf);
+                            }
+
                             setCurrentView('LIST');
                         }} className="bg-emerald-600 text-white px-10 py-3 rounded-xl font-bold shadow-lg shadow-emerald-100 hover:bg-emerald-700 transition-all">SAVE RECORD</button>
                     </div>
@@ -499,7 +605,7 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                             {isAddingHealthRecord && (
                                 <div className="mb-12 bg-emerald-50 border border-emerald-100 rounded-3xl p-8 animate-slide-up">
                                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                                        <div><label className="block text-[10px] font-black text-emerald-600 uppercase mb-1">Type</label><select className="w-full p-2 rounded-lg border border-emerald-200" value={newHealthRecord.type} onChange={e => setNewHealthRecord({ ...newHealthRecord, type: e.target.value as any })}><option value="VACCINATION">Vaccination</option><option value="TREATMENT">Treatment</option><option value="CHECKUP">General Checkup</option><option value="INJURY">Injury Care</option></select></div>
+                                        <div><label className="block text-[10px] font-black text-emerald-600 uppercase mb-1">Type</label><select className="w-full p-2 rounded-lg border border-emerald-200" value={newHealthRecord.type} onChange={e => setNewHealthRecord({ ...newHealthRecord, type: e.target.value as any })}><option value="VACCINATION">Vaccination</option><option value="TREATMENT">Treatment</option><option value="CHECKUP">General Checkup</option><option value="INJURY">Injury Care</option><option value="HEAT">Heat Detection</option><option value="OTHER">Other</option></select></div>
                                         <div><label className="block text-[10px] font-black text-emerald-600 uppercase mb-1">Medicine/Treatment</label><input type="text" className="w-full p-2 rounded-lg border border-emerald-200" value={newHealthRecord.medicineName} onChange={e => setNewHealthRecord({ ...newHealthRecord, medicineName: e.target.value })} placeholder="Penicillin, Vaccine X..." /></div>
                                         <div><label className="block text-[10px] font-black text-emerald-600 uppercase mb-1">Doctor Name</label><input type="text" className="w-full p-2 rounded-lg border border-emerald-200" value={newHealthRecord.doctorName} onChange={e => setNewHealthRecord({ ...newHealthRecord, doctorName: e.target.value })} /></div>
                                         <div><label className="block text-[10px] font-black text-emerald-600 uppercase mb-1">Cost (PKR)</label><input type="number" className="w-full p-2 rounded-lg border border-emerald-200" value={newHealthRecord.cost} onChange={e => setNewHealthRecord({ ...newHealthRecord, cost: parseFloat(e.target.value) })} /></div>
@@ -723,7 +829,16 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                                                         </div>
                                                     </div>
                                                     <div className="flex items-center gap-3">
-                                                        {rec.status === 'PENDING' && <button onClick={() => handleConfirmPregnancy(rec.id)} className="bg-blue-600 text-white px-6 py-2.5 rounded-xl text-xs font-black shadow-lg shadow-blue-100 hover:scale-105 transition-all">CONFIRM PREGNANCY</button>}
+                                                        {rec.status === 'PENDING' && (
+                                                            <div className="flex gap-2">
+                                                                <button onClick={() => {
+                                                                    if (!confirm("Mark as Not Pregnant (Empty)?")) return;
+                                                                    const updated = { ...rec, status: 'FAILED' as const };
+                                                                    onUpdateBreedingRecord(selectedAnimal.id, updated);
+                                                                }} className="bg-gray-100 text-gray-600 px-4 py-2.5 rounded-xl text-xs font-black hover:bg-gray-200 transition-all">PD -</button>
+                                                                <button onClick={() => handleConfirmPregnancy(rec.id)} className="bg-blue-600 text-white px-6 py-2.5 rounded-xl text-xs font-black shadow-lg shadow-blue-100 hover:scale-105 transition-all">PD + (CONFIRM)</button>
+                                                            </div>
+                                                        )}
                                                         {rec.status === 'CONFIRMED' && <button onClick={() => setIsLoggingBirth(rec.id)} className="bg-emerald-600 text-white px-6 py-2.5 rounded-xl text-xs font-black shadow-lg shadow-emerald-100 flex items-center gap-2 hover:scale-105 transition-all"><Baby size={16} /> LOG {T.birth.toUpperCase()}</button>}
                                                         {rec.status === 'COMPLETED' && rec.birthRecord && <div className="text-right"><p className="text-[10px] font-black text-emerald-600 uppercase mb-1 tracking-widest">SUCCESSFUL BIRTH</p><p className="text-lg font-black text-gray-800">{rec.birthRecord.count} {T.offspring}(s)</p></div>}
                                                     </div>
@@ -754,7 +869,7 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
             <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-6 flex flex-col md:flex-row gap-6 justify-between items-center">
                 <div className="flex bg-gray-100 p-1.5 rounded-2xl overflow-x-auto no-scrollbar max-w-full">
                     {categories.map((cat) => (
-                                <button key={cat} onClick={() => setActiveCategoryTab(cat)} className={`px-6 py-2.5 rounded-xl text-xs font-black transition-all whitespace-nowrap flex items-center gap-2 ${activeCategoryTab === cat ? `bg-white shadow-sm ${species === 'GOAT' ? 'text-amber-700' : 'text-emerald-700'}` : 'text-gray-500 hover:text-gray-900'}`}>
+                        <button key={cat} onClick={() => setActiveCategoryTab(cat)} className={`px-6 py-2.5 rounded-xl text-xs font-black transition-all whitespace-nowrap flex items-center gap-2 ${activeCategoryTab === cat ? `bg-white shadow-sm ${species === 'GOAT' ? 'text-amber-700' : 'text-emerald-700'}` : 'text-gray-500 hover:text-gray-900'}`}>
                             {getCategoryIcon(cat, 16)} {cat.toUpperCase()}
                         </button>
                     ))}
@@ -765,9 +880,42 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                 </div>
             </div>
 
+            {selectedBatchIds.length > 0 && (
+                <div className="bg-gray-900 text-white rounded-2xl p-4 flex items-center justify-between animate-slide-up shadow-2xl sticky top-4 z-30">
+                    <div className="flex items-center gap-4">
+                        <span className="font-black text-emerald-400 text-lg px-4">{selectedBatchIds.length} Selected</span>
+                        <div className="h-8 w-px bg-gray-700"></div>
+                        <button onClick={() => {
+                            const date = prompt("Vaccination Date (YYYY-MM-DD)", new Date().toISOString().split('T')[0]);
+                            const medicine = prompt("Medicine Name");
+                            if (date && medicine) {
+                                selectedBatchIds.forEach(id => onAddMedicalRecord(id, {
+                                    id: Math.random().toString(36).substr(2, 9),
+                                    date, time: '09:00', type: 'VACCINATION', medicineName: medicine, doctorName: 'Self', cost: 0, notes: 'Bulk Vaccination'
+                                }));
+                                alert("Records Added");
+                                setSelectedBatchIds([]);
+                                setIsBatchMode(false);
+                            }
+                        }} className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg font-bold text-xs flex items-center gap-2 transition-all"><Stethoscope size={16} /> VACCINATE</button>
+                    </div>
+                    <button onClick={() => { setSelectedBatchIds([]); setIsBatchMode(false); }} className="text-gray-400 hover:text-white font-bold text-xs">CANCEL SELECTION</button>
+                </div>
+            )}
+
+            <div className="flex justify-end px-2 mb-4">
+                <button onClick={() => setIsBatchMode(!isBatchMode)} className={`text-xs font-bold px-4 py-2 rounded-lg transition-all ${isBatchMode ? 'bg-gray-800 text-white shadow-lg' : 'bg-white text-gray-500 border border-gray-200 hover:bg-gray-50'}`}>{isBatchMode ? 'EXIT BATCH MODE' : 'ENABLE BATCH ACTIONS'}</button>
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
                 {filteredLivestock.map((animal) => (
-                    <div key={animal.id} onClick={() => { setSelectedAnimalId(animal.id); setCurrentView('DETAILS'); setDetailTab('INFO'); }} className={`bg-white rounded-3xl border border-gray-100 overflow-hidden hover:shadow-2xl hover:-translate-y-1 transition-all cursor-pointer group relative ${species === 'GOAT' ? 'hover:border-amber-200' : ''}`}>
+                    <div key={animal.id} onClick={() => {
+                        if (isBatchMode) {
+                            setSelectedBatchIds(prev => prev.includes(animal.id) ? prev.filter(id => id !== animal.id) : [...prev, animal.id]);
+                        } else {
+                            setSelectedAnimalId(animal.id); setCurrentView('DETAILS'); setDetailTab('INFO');
+                        }
+                    }} className={`bg-white rounded-3xl border overflow-hidden hover:shadow-2xl hover:-translate-y-1 transition-all cursor-pointer group relative ${isBatchMode && selectedBatchIds.includes(animal.id) ? 'border-4 border-emerald-500 bg-emerald-50 ring-4 ring-emerald-100' : 'border-gray-100'}`}>
                         <div className="p-6">
                             <div className="flex justify-between items-start mb-6">
                                 <div className="flex items-center gap-4">
