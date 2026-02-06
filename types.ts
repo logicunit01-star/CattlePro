@@ -113,6 +113,51 @@ export interface Customer {
   notes?: string;
 }
 
+export type EntityType = 'VENDOR' | 'CUSTOMER' | 'PALAI_CLIENT';
+
+export interface Entity {
+  id: string;
+  type: EntityType;
+  name: string;
+  contact: string;
+  address?: string;
+  email?: string;
+  status: 'ACTIVE' | 'INACTIVE';
+  openingBalance: number; // Positive = Receivable (They owe us), Negative = Payable (We owe them)
+  currentBalance: number;
+  notes?: string;
+}
+
+export interface Bill {
+  id: string;
+  entityId: string; // Vendor ID
+  date: string;
+  dueDate?: string;
+  invoiceNumber?: string; // Vendor's invoice #
+  items: {
+    description: string;
+    amount: number;
+    expenseCategory?: ExpenseCategory;
+  }[];
+  totalAmount: number;
+  paidAmount: number;
+  status: 'DRAFT' | 'POSTED' | 'PAID' | 'PARTIAL' | 'OVERDUE';
+  attachmentUrl?: string;
+  notes?: string;
+}
+
+export interface LedgerRecord {
+  id: string;
+  date: string;
+  entityId: string;
+  referenceType: 'BILL' | 'SALE' | 'PAYMENT' | 'OPENING_BALANCE' | 'EXPENSE';
+  referenceId?: string; // ID of the Bill/Sale
+  description: string;
+  debit: number; // Money coming IN (Receivable increases, Payable decreases)
+  credit: number; // Money going OUT (Payable increases, Receivable decreases)
+  balanceAfter: number; // Running balance for the entity
+}
+
 export interface Invoice {
   id: string;
   customerId: string;
@@ -174,8 +219,13 @@ export interface AppState {
   dietPlans: DietPlan[];
   breeders: Breeder[];
   categories: string[];
-  customers: Customer[]; // New Customer Registry
-  invoices: Invoice[]; // New Invoice Ledger
+  customers: Customer[]; // Legacy, will migrate to entities
+  invoices: Invoice[];
+
+  // New Finance Model
+  entities: Entity[];
+  bills: Bill[];
+  ledger: LedgerRecord[];
 }
 
 export interface Expense {

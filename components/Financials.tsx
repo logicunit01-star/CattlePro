@@ -1,12 +1,13 @@
 
 import React, { useState } from 'react';
-import { Expense, ExpenseCategory, Sale, Livestock } from '../types';
-import { Plus, DollarSign, Truck, Wrench, Syringe, Briefcase, Home, Stethoscope, Dna, ArrowLeft, Trash2 } from 'lucide-react';
+import { Expense, ExpenseCategory, Sale, Livestock, Entity } from '../types';
+import { Plus, DollarSign, Truck, Wrench, Syringe, Briefcase, Home, Stethoscope, Dna, ArrowLeft, Trash2, Store, User } from 'lucide-react';
 
 interface Props {
     expenses: Expense[];
     sales: Sale[];
     livestockList?: Livestock[];
+    entities: Entity[];
     onAddExpense: (e: Expense) => void;
     onAddSale: (s: Sale) => void;
     onDeleteExpense: (id: string) => void;
@@ -15,7 +16,7 @@ interface Props {
 
 type FinancialView = 'LIST' | 'ADD_EXPENSE' | 'ADD_SALE';
 
-export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [], onAddExpense, onAddSale, onDeleteExpense, onDeleteSale }) => {
+export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [], entities, onAddExpense, onAddSale, onDeleteExpense, onDeleteSale }) => {
     const [activeTab, setActiveTab] = useState<'EXPENSES' | 'SALES'>('EXPENSES');
     const [viewMode, setViewMode] = useState<FinancialView>('LIST');
 
@@ -112,9 +113,21 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                             <input type="text" className="w-full border border-gray-300 rounded-lg px-4 py-2 outline-none focus:ring-2 focus:ring-emerald-500" value={newExpense.location || ''} onChange={e => setNewExpense({ ...newExpense, location: e.target.value })} placeholder="e.g. Shed A" />
                         </div>
                         <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">Farm / Org</label>
-                            <input type="text" className="w-full border border-gray-300 rounded-lg px-4 py-2 outline-none focus:ring-2 focus:ring-emerald-500" value={newExpense.farmId || ''} onChange={e => setNewExpense({ ...newExpense, farmId: e.target.value })} placeholder="Main Farm" />
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Vendor / Payee</label>
+                            <select
+                                className="w-full border border-gray-300 rounded-lg px-4 py-2 outline-none focus:ring-2 focus:ring-emerald-500"
+                                value={newExpense.supplier || ''}
+                                onChange={e => setNewExpense({ ...newExpense, supplier: e.target.value })}
+                            >
+                                <option value="">Select Vendor...</option>
+                                <option value="CASH">Cash / Petty Cash</option>
+                                {entities.filter(e => e.type === 'VENDOR').map(v => (
+                                    <option key={v.id} value={v.id}>{v.name}</option>
+                                ))}
+                            </select>
+                            <p className="text-xs text-gray-400 mt-1">Manage Vendors in "Entity Registry"</p>
                         </div>
+
                     </div>
                     <div className="flex justify-end gap-3 pt-4">
                         <button onClick={() => setViewMode('LIST')} className="px-6 py-2 text-gray-600 hover:text-gray-800 font-medium">Cancel</button>
@@ -176,8 +189,18 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">Buyer Name</label>
-                            <input type="text" className="w-full border border-gray-300 rounded-lg px-4 py-2 outline-none focus:ring-2 focus:ring-emerald-500" value={newSale.buyer} onChange={e => setNewSale({ ...newSale, buyer: e.target.value })} />
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Buyer (Customer)</label>
+                            <select
+                                className="w-full border border-gray-300 rounded-lg px-4 py-2 outline-none focus:ring-2 focus:ring-emerald-500"
+                                value={newSale.buyer}
+                                onChange={e => setNewSale({ ...newSale, buyer: e.target.value })}
+                            >
+                                <option value="">Select Customer...</option>
+                                <option value="Walk-In">Walk-In Customer</option>
+                                {entities.filter(e => e.type === 'CUSTOMER' || e.type === 'PALAI_CLIENT').map(c => (
+                                    <option key={c.id} value={c.name}>{c.name}</option>
+                                ))}
+                            </select>
                         </div>
                         <div>
                             <label className="block text-sm font-medium text-gray-700 mb-1">Date</label>

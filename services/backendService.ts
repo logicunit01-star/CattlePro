@@ -67,6 +67,14 @@ export const backendService = {
         const res = await fetch(`${API_BASE_URL}/livestock/${id}`, { method: 'DELETE' });
         await handleDeleteResponse(res);
     },
+    updateLivestock: async (id: string, data: Livestock): Promise<Livestock> => {
+        const res = await fetch(`${API_BASE_URL}/livestock/${id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data),
+        });
+        return handleResponse(res);
+    },
 
     // Finance
     getExpenses: async (): Promise<Expense[]> => {
