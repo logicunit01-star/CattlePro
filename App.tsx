@@ -64,18 +64,20 @@ const App: React.FC = () => {
     const fetchData = async () => {
       try {
         setIsLoading(true);
-        const [livestock, expenses, sales, feed, infra, dietPlans] = await Promise.all([
+        const [livestock, expenses, sales, feed, infra, dietPlans, entities, ledger] = await Promise.all([
           backendService.getLivestock(),
           backendService.getExpenses(),
           backendService.getSales(),
           backendService.getFeed(),
           backendService.getInfrastructure(),
-          backendService.getDietPlans()
+          backendService.getDietPlans(),
+          backendService.getEntities(),
+          backendService.getLedger()
         ]);
 
         setState(prev => ({
           ...prev,
-          livestock, expenses, sales, feed, infrastructure: infra, dietPlans
+          livestock, expenses, sales, feed, infrastructure: infra, dietPlans, entities, ledger
         }));
       } catch (err: any) {
         console.error("Failed to load data, falling back to mocks", err);
@@ -201,135 +203,39 @@ const App: React.FC = () => {
   const handleCreateExpense = async (exp: Expense) => {
     try {
       await backendService.createExpense(exp);
+      // Re-fetch affected modules to ensure UI is in sync with Backend Ledger Logic
+      const [expenses, entities, ledger] = await Promise.all([
+        backendService.getExpenses(),
+        backendService.getEntities(),
+        backendService.getLedger()
+      ]);
 
-      // Ledger Logic
-      if (exp.supplier && exp.supplier !== 'CASH') {
-        const entity = state.entities.find(e => e.id === exp.supplier);
-        if (entity) {
-          const newBalance = entity.currentBalance - exp.amount;
-          const updatedEntity = { ...entity, currentBalance: newBalance };
-
-          const ledgerRec: LedgerRecord = {
-            id: Math.random().toString(36).substr(2, 9),
-            date: exp.date,
-            entityId: entity.id,
-            referenceType: 'EXPENSE',
-            referenceId: exp.id,
-            description: `Expense: ${exp.description}`,
-            debit: 0,
-            credit: exp.amount,
-            balanceAfter: newBalance
-          };
-
-          setState(prev => ({
-            ...prev,
-            expenses: [...prev.expenses, exp],
-            entities: prev.entities.map(e => e.id === entity.id ? updatedEntity : e),
-            ledger: [...prev.ledger, ledgerRec]
-          }));
-          return;
-        }
-      }
-
-      setState(prev => ({ ...prev, expenses: [...prev.expenses, exp] }));
+      setState(prev => ({ ...prev, expenses, entities, ledger }));
     } catch (e) { alert("Failed to save expense"); }
   };
 
   const handleCreateSale = async (sale: Sale) => {
     try {
       await backendService.createSale(sale);
-
-      const entity = state.entities.find(e => e.name === sale.buyer);
-
-      if (entity) {
-        const newBalanceAfterSale = entity.currentBalance + sale.amount;
-        const ledgerSale: LedgerRecord = {
-          id: Math.random().toString(36).substr(2, 9),
-          date: sale.date,
-          entityId: entity.id,
-          referenceType: 'SALE',
-          referenceId: sale.id,
-          description: `Sale: ${sale.description || 'Livestock Sale'}`,
-          debit: sale.amount,
-          credit: 0,
-          balanceAfter: newBalanceAfterSale
-        };
-
-        let finalBalance = newBalanceAfterSale;
-        let ledgerPayment: LedgerRecord | null = null;
-
-        if (sale.amountReceived > 0) {
-          finalBalance = newBalanceAfterSale - sale.amountReceived;
-          ledgerPayment = {
-            id: Math.random().toString(36).substr(2, 9) + '_P',
-            date: sale.date,
-            entityId: entity.id,
-            referenceType: 'PAYMENT',
-            referenceId: sale.id,
-            description: `Payment Received for Sale`,
-            debit: 0,
-            credit: sale.amountReceived,
-            balanceAfter: finalBalance
-          };
-        }
-
-        const updatedEntity = { ...entity, currentBalance: finalBalance };
-
-        const newLedger = [...state.ledger, ledgerSale];
-        if (ledgerPayment) newLedger.push(ledgerPayment);
-
-        setState(prev => ({
-          ...prev,
-          sales: [...prev.sales, sale],
-          entities: prev.entities.map(e => e.id === entity.id ? updatedEntity : e),
-          ledger: newLedger
-        }));
-        return;
-      }
-
-      setState(prev => ({ ...prev, sales: [...prev.sales, sale] }));
+      const [sales, entities, ledger] = await Promise.all([
+        backendService.getSales(),
+        backendService.getEntities(),
+        backendService.getLedger()
+      ]);
+      setState(prev => ({ ...prev, sales, entities, ledger }));
     } catch (e) { alert("Failed to create sale"); }
   };
 
   /* Financial Helpers */
-  const handleAddPayment = (payment: { entityId: string, amount: number, date: string, notes?: string }) => {
-    const entity = state.entities.find(e => e.id === payment.entityId);
-    if (!entity) return;
-
-    // Logic:
-    // Vendor (Payable - Negative Identity): Payment = Money Out = Debit Vendor = Balance becomes Less Negative (Add Positive Amount)
-    // Customer (Receivable - Positive Identity): Payment = Money In = Credit Customer = Balance becomes Less Positive (Subtract Amount)
-
-    let balanceChange = 0;
-    let type: 'PAYMENT_SENT' | 'PAYMENT_RECEIVED' = 'PAYMENT_SENT';
-
-    if (entity.type === 'VENDOR') {
-      balanceChange = payment.amount;
-      type = 'PAYMENT_SENT';
-    } else {
-      balanceChange = -payment.amount;
-      type = 'PAYMENT_RECEIVED';
-    }
-
-    const newBalance = entity.currentBalance + balanceChange;
-    const updatedEntity = { ...entity, currentBalance: newBalance };
-
-    const ledgerRec: LedgerRecord = {
-      id: Math.random().toString(36).substr(2, 9),
-      date: payment.date,
-      entityId: entity.id,
-      referenceType: 'PAYMENT',
-      description: payment.notes || 'Transaction Recorded',
-      debit: type === 'PAYMENT_SENT' ? payment.amount : 0,
-      credit: type === 'PAYMENT_RECEIVED' ? payment.amount : 0,
-      balanceAfter: newBalance
-    };
-
-    setState(prev => ({
-      ...prev,
-      entities: prev.entities.map(e => e.id === entity.id ? updatedEntity : e),
-      ledger: [...prev.ledger, ledgerRec]
-    }));
+  const handleAddPayment = async (payment: { entityId: string, amount: number, date: string, notes?: string }) => {
+    try {
+      await backendService.createPayment(payment);
+      const [entities, ledger] = await Promise.all([
+        backendService.getEntities(),
+        backendService.getLedger()
+      ]);
+      setState(prev => ({ ...prev, entities, ledger }));
+    } catch (e) { alert("Failed to record payment"); }
   };
 
   const addEntity = (entity: Entity) => {

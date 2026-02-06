@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import { Expense, ExpenseCategory, Sale, Livestock, Entity } from '../types';
-import { Plus, DollarSign, Truck, Wrench, Syringe, Briefcase, Home, Stethoscope, Dna, ArrowLeft, Trash2, Store, User } from 'lucide-react';
+import { Plus, DollarSign, Truck, Wrench, Syringe, Briefcase, Home, Stethoscope, Dna, ArrowLeft, Trash2, Store, User, Share2 } from 'lucide-react';
 
 interface Props {
     expenses: Expense[];
@@ -348,6 +348,16 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                                 +PKR {sale.amount.toLocaleString()}
                                             </td>
                                             <td className="px-6 py-4 whitespace-nowrap text-right">
+                                                <button
+                                                    onClick={() => {
+                                                        const text = `*INVOICE RECEIPT*\n\nDate: ${sale.date}\nItem: Livestock Sale (ID: ${sale.animalId})\nWeight: ${sale.weightAtSale} kg\nAmount: PKR ${sale.amount.toLocaleString()}\nStatus: ${sale.amountReceived >= sale.amount ? 'PAID' : 'PENDING'}\n\nThank you for your business!`;
+                                                        window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
+                                                    }}
+                                                    className="p-1.5 rounded-lg text-gray-400 hover:bg-green-50 hover:text-green-600 transition-colors mr-2"
+                                                    title="Share Invoice"
+                                                >
+                                                    <Share2 size={16} />
+                                                </button>
                                                 <button
                                                     onClick={() => { if (confirm('Delete this sale?')) onDeleteSale(sale.id); }}
                                                     className="p-1.5 rounded-lg text-gray-400 hover:bg-red-50 hover:text-red-600 transition-colors"

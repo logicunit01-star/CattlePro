@@ -1,6 +1,7 @@
-import { Livestock, MedicalRecord, Expense, Sale, FeedInventory, Infrastructure, DietPlan, InseminationRecord, WeightRecord, MilkRecord } from '../types';
 
-const API_BASE_URL = 'http://127.0.0.1:8381/api';
+import { Livestock, MedicalRecord, Expense, Sale, FeedInventory, Infrastructure, DietPlan, InseminationRecord, WeightRecord, MilkRecord, Entity, LedgerRecord } from '../types';
+
+const API_BASE_URL = 'http://localhost:3001/api';
 
 const handleResponse = async (response: Response) => {
     if (!response.ok) {
@@ -23,6 +24,10 @@ export const backendService = {
         const res = await fetch(`${API_BASE_URL}/livestock`);
         return handleResponse(res);
     },
+    getLivestockById: async (id: string): Promise<Livestock | null> => {
+        const list = await backendService.getLivestock();
+        return list.find(l => l.id === id) || null;
+    },
     createLivestock: async (data: Livestock): Promise<Livestock> => {
         const res = await fetch(`${API_BASE_URL}/livestock`, {
             method: 'POST',
@@ -30,42 +35,6 @@ export const backendService = {
             body: JSON.stringify(data),
         });
         return handleResponse(res);
-    },
-    addMedicalRecord: async (animalId: string, record: MedicalRecord): Promise<MedicalRecord> => {
-        const res = await fetch(`${API_BASE_URL}/livestock/${animalId}/medical-records`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(record),
-        });
-        return handleResponse(res);
-    },
-    addBreedingRecord: async (animalId: string, record: InseminationRecord): Promise<InseminationRecord> => {
-        const res = await fetch(`${API_BASE_URL}/livestock/${animalId}/breeding-records`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(record),
-        });
-        return handleResponse(res);
-    },
-    addWeightRecord: async (animalId: string, record: WeightRecord): Promise<WeightRecord> => {
-        const res = await fetch(`${API_BASE_URL}/livestock/${animalId}/weight-records`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(record),
-        });
-        return handleResponse(res);
-    },
-    addMilkRecord: async (animalId: string, record: MilkRecord): Promise<MilkRecord> => {
-        const res = await fetch(`${API_BASE_URL}/livestock/${animalId}/milk-records`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(record),
-        });
-        return handleResponse(res);
-    },
-    deleteLivestock: async (id: string): Promise<void> => {
-        const res = await fetch(`${API_BASE_URL}/livestock/${id}`, { method: 'DELETE' });
-        await handleDeleteResponse(res);
     },
     updateLivestock: async (id: string, data: Livestock): Promise<Livestock> => {
         const res = await fetch(`${API_BASE_URL}/livestock/${id}`, {
@@ -75,8 +44,42 @@ export const backendService = {
         });
         return handleResponse(res);
     },
+    deleteLivestock: async (id: string): Promise<void> => {
+        const res = await fetch(`${API_BASE_URL}/livestock/${id}`, { method: 'DELETE' });
+        await handleDeleteResponse(res);
+    },
 
-    // Finance
+    // Detailed Records (Updates the main livestock object as sub-resources are not separate in lightweight backend)
+    addMedicalRecord: async (animalId: string, record: MedicalRecord): Promise<MedicalRecord> => {
+        const animal = await backendService.getLivestockById(animalId);
+        if (!animal) throw new Error("Animal not found");
+        const updated = { ...animal, medicalHistory: [...(animal.medicalHistory || []), record] };
+        await backendService.updateLivestock(animalId, updated);
+        return record;
+    },
+    addBreedingRecord: async (animalId: string, record: InseminationRecord): Promise<InseminationRecord> => {
+        const animal = await backendService.getLivestockById(animalId);
+        if (!animal) throw new Error("Animal not found");
+        const updated = { ...animal, breedingHistory: [...(animal.breedingHistory || []), record] };
+        await backendService.updateLivestock(animalId, updated);
+        return record;
+    },
+    addWeightRecord: async (animalId: string, record: WeightRecord): Promise<WeightRecord> => {
+        const animal = await backendService.getLivestockById(animalId);
+        if (!animal) throw new Error("Animal not found");
+        const updated = { ...animal, weightHistory: [...(animal.weightHistory || []), record], weight: record.weight };
+        await backendService.updateLivestock(animalId, updated);
+        return record;
+    },
+    addMilkRecord: async (animalId: string, record: MilkRecord): Promise<MilkRecord> => {
+        const animal = await backendService.getLivestockById(animalId);
+        if (!animal) throw new Error("Animal not found");
+        const updated = { ...animal, milkProductionHistory: [...(animal.milkProductionHistory || []), record] };
+        await backendService.updateLivestock(animalId, updated);
+        return record;
+    },
+
+    // Finance (Unified with Ledger)
     getExpenses: async (): Promise<Expense[]> => {
         const res = await fetch(`${API_BASE_URL}/finance/expenses`);
         return handleResponse(res);
@@ -108,6 +111,44 @@ export const backendService = {
     deleteSale: async (id: string): Promise<void> => {
         const res = await fetch(`${API_BASE_URL}/finance/sales/${id}`, { method: 'DELETE' });
         await handleDeleteResponse(res);
+    },
+
+    // Entities & Ledger
+    getEntities: async (): Promise<Entity[]> => {
+        const res = await fetch(`${API_BASE_URL}/entities`);
+        return handleResponse(res);
+    },
+    createEntity: async (data: Entity): Promise<Entity> => {
+        const res = await fetch(`${API_BASE_URL}/entities`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data),
+        });
+        return handleResponse(res);
+    },
+    updateEntity: async (id: string, data: Entity): Promise<Entity> => {
+        const res = await fetch(`${API_BASE_URL}/entities/${id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data),
+        });
+        return handleResponse(res);
+    },
+    deleteEntity: async (id: string): Promise<void> => {
+        const res = await fetch(`${API_BASE_URL}/entities/${id}`, { method: 'DELETE' });
+        await handleDeleteResponse(res);
+    },
+    getLedger: async (): Promise<LedgerRecord[]> => {
+        const res = await fetch(`${API_BASE_URL}/finance/ledger`);
+        return handleResponse(res);
+    },
+    createPayment: async (payment: { entityId: string, amount: number, date: string, notes?: string, type?: string }): Promise<LedgerRecord> => {
+        const res = await fetch(`${API_BASE_URL}/finance/payments`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payment),
+        });
+        return handleResponse(res);
     },
 
     // Operations
@@ -186,10 +227,7 @@ export const backendService = {
 
     // Auth (Mock)
     login: async (email: string, password: string): Promise<{ user: { name: string; email: string }, token: string }> => {
-        // Simulate network delay
         await new Promise(resolve => setTimeout(resolve, 1000));
-
-        // Mock success
         return {
             user: { name: 'Farm Manager', email },
             token: 'mock-jwt-token'

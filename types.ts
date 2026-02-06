@@ -305,13 +305,4 @@ export interface DietPlan {
   assignedAnimalIds: string[];
 }
 
-export interface AppState {
-  livestock: Livestock[];
-  expenses: Expense[];
-  sales: Sale[];
-  feed: FeedInventory[];
-  infrastructure: Infrastructure[];
-  dietPlans: DietPlan[];
-  breeders: Breeder[];
-  categories: string[];
-}
+// Duplicate AppState removed

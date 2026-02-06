@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import { AppState, Expense, FeedInventory, ExpenseCategory } from '../types';
-import { Calendar, DollarSign, Truck, ShoppingCart, User, AlertTriangle, CheckCircle, Clock, Search, Layers, Archive, Activity, RefreshCw } from 'lucide-react';
+import { Calendar, DollarSign, Truck, ShoppingCart, User, AlertTriangle, CheckCircle, Clock, Search, Layers, Archive, Activity, RefreshCw, MinusCircle } from 'lucide-react';
 
 interface Props {
     state: AppState;
@@ -209,7 +209,17 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                     </div>
                                     <div>
                                         <label className="block text-xs font-bold text-emerald-700 uppercase mb-1">Supplier</label>
-                                        <input type="text" value={procurementForm.supplier} onChange={e => setProcurementForm({ ...procurementForm, supplier: e.target.value })} className="w-full border border-emerald-200 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500" />
+                                        <select
+                                            value={procurementForm.supplier}
+                                            onChange={e => setProcurementForm({ ...procurementForm, supplier: e.target.value })}
+                                            className="w-full border border-emerald-200 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
+                                        >
+                                            <option value="">Select Vendor...</option>
+                                            {state.entities.filter(e => e.type === 'VENDOR').map(v => (
+                                                <option key={v.id} value={v.id}>{v.name}</option>
+                                            ))}
+                                            <option value="CASH">Cash / Walk-in</option>
+                                        </select>
                                     </div>
                                 </div>
 
@@ -344,6 +354,19 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                     </span>
                                     <span className="text-xs text-gray-400">@ PKR {item.unitCost}/{item.unit}</span>
                                 </div>
+                                <button
+                                    onClick={() => {
+                                        const qty = prompt(`Amount of ${item.name} consumed (in ${item.unit})?`);
+                                        if (qty && !isNaN(parseFloat(qty))) {
+                                            const consumed = parseFloat(qty);
+                                            onUpdateInventory({ ...item, quantity: item.quantity - consumed });
+                                            alert(`Recorded utilization of ${consumed} ${item.unit}`);
+                                        }
+                                    }}
+                                    className="w-full mb-3 bg-amber-50 text-amber-700 text-xs font-bold py-2 rounded-lg hover:bg-amber-100 flex items-center justify-center gap-2 border border-amber-200"
+                                >
+                                    <MinusCircle size={14} /> RECORD USAGE
+                                </button>
                                 <div className="pt-3 border-t border-gray-50 flex justify-between items-end">
                                     <div>
                                         <p className="text-[10px] uppercase font-bold text-gray-400">Inventory Value</p>
