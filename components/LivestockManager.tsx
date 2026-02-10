@@ -628,15 +628,15 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                         <button onClick={() => { setCurrentView('LIST'); setSelectedAnimalId(null); }} className="bg-white p-3 rounded-xl border border-gray-200 text-gray-400 hover:text-gray-800 shadow-sm transition-all">
                             <ArrowLeft size={24} />
                         </button>
-                        <div className="w-24 h-24 rounded-2xl overflow-hidden border-2 border-white shadow-xl">
-                            {selectedAnimal.imageUrl ? <img src={selectedAnimal.imageUrl} className="w-full h-full object-cover" /> : getPlaceholderVisual(selectedAnimal.category)}
+                        <div className="w-24 h-24 rounded-2xl overflow-hidden border-2 border-white shadow-lg relative group">
+                            {selectedAnimal.imageUrl ? <img src={selectedAnimal.imageUrl} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" /> : getPlaceholderVisual(selectedAnimal.category)}
                         </div>
                         <div>
                             <div className="flex items-center gap-3 mb-1">
-                                <h2 className="text-3xl font-black text-gray-800 tracking-tighter">{selectedAnimal.tagId}</h2>
-                                <span className={`px-4 py-1 rounded-full text-[10px] font-black uppercase ${getStatusColor(selectedAnimal.status)}`}>{selectedAnimal.status}</span>
+                                <h2 className="text-4xl font-extrabold text-slate-800 tracking-tight font-display">{selectedAnimal.tagId}</h2>
+                                <span className={`px-3 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider ${getStatusColor(selectedAnimal.status)}`}>{selectedAnimal.status}</span>
                             </div>
-                            <p className="text-gray-500 font-medium">{selectedAnimal.breed} • {selectedAnimal.category} {species.toLowerCase()}</p>
+                            <p className="text-slate-500 font-medium text-sm flex items-center gap-2">{selectedAnimal.breed} <span className="w-1 h-1 rounded-full bg-slate-300"></span> {selectedAnimal.category} {species.toLowerCase()}</p>
                         </div>
                     </div>
                     <div className="flex items-center gap-3">
@@ -687,16 +687,16 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                     </div>
                 </div>
 
-                <div className="flex bg-white rounded-2xl p-1.5 shadow-sm border border-gray-200 overflow-x-auto no-scrollbar">
+                <div className="flex bg-white/50 backdrop-blur-sm rounded-xl p-1.5 shadow-sm border border-slate-200/60 overflow-x-auto no-scrollbar gap-2">
                     {[
-                        { id: 'INFO', label: 'OVERVIEW', icon: Info },
-                        { id: 'MEDICAL', label: 'HEALTH LOG', icon: Stethoscope },
-                        { id: 'WEIGHT', label: 'WEIGHT HISTORY', icon: Scale },
-                        { id: 'BREEDING', label: 'REPRODUCTION', icon: Dna, hide: selectedAnimal.gender !== 'FEMALE' },
-                        { id: 'PRODUCTION', label: 'MILK RECORDS', icon: Droplets, hide: selectedAnimal.category !== 'Dairy' }
+                        { id: 'INFO', label: 'Overview', icon: Info },
+                        { id: 'MEDICAL', label: 'Medical', icon: Stethoscope },
+                        { id: 'WEIGHT', label: 'Weight', icon: Scale },
+                        { id: 'BREEDING', label: 'Breeding', icon: Dna, hide: selectedAnimal.gender !== 'FEMALE' },
+                        { id: 'PRODUCTION', label: 'Production', icon: Droplets, hide: selectedAnimal.category !== 'Dairy' }
                     ].filter(t => !t.hide).map(tab => (
-                        <button key={tab.id} onClick={() => setDetailTab(tab.id as any)} className={`flex-1 flex items-center justify-center gap-2 px-6 py-3 rounded-xl text-xs font-black transition-all whitespace-nowrap ${detailTab === tab.id ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-100' : 'text-gray-400 hover:bg-gray-50 hover:text-gray-600'}`}>
-                            <tab.icon size={16} /> {tab.label}
+                        <button key={tab.id} onClick={() => setDetailTab(tab.id as any)} className={`flex-1 flex items-center justify-center gap-2 px-6 py-2.5 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${detailTab === tab.id ? 'bg-white text-emerald-700 shadow-md ring-1 ring-slate-100' : 'text-slate-400 hover:bg-white/50 hover:text-slate-600'}`}>
+                            <tab.icon size={16} className={detailTab === tab.id ? 'text-emerald-500' : ''} /> {tab.label}
                         </button>
                     ))}
                 </div>
@@ -1044,23 +1044,23 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
         <div className="space-y-6 animate-fade-in">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                 <div>
-                    <h2 className="text-3xl font-black text-gray-800 tracking-tighter">{species === 'CATTLE' ? 'Cattle Herd' : 'Goat Flock'} Manager</h2>
-                    <p className="text-sm text-gray-500 font-medium">Inventory & Lifecycle Monitoring System</p>
+                    <h2 className="text-3xl font-extrabold text-slate-800 tracking-tight font-display">{species === 'CATTLE' ? 'Cattle Herd' : 'Goat Flock'} Manager</h2>
+                    <p className="text-sm text-slate-500 font-medium">Inventory & Lifecycle Monitoring System</p>
                 </div>
-                <button onClick={handleOpenAdd} className={`${species === 'GOAT' ? 'bg-amber-600 shadow-amber-100 hover:bg-amber-700' : 'bg-emerald-600 shadow-emerald-100 hover:bg-emerald-700'} text-white px-6 py-3 rounded-2xl flex items-center gap-2 shadow-xl font-bold transition-all`}><Plus size={20} /> REGISTER {T.animal.toUpperCase()}</button>
+                <button onClick={handleOpenAdd} className={`${species === 'GOAT' ? 'bg-gradient-to-r from-amber-500 to-orange-600 shadow-amber-200' : 'bg-gradient-to-r from-emerald-500 to-teal-600 shadow-emerald-200'} text-white px-6 py-3 rounded-2xl flex items-center gap-2 shadow-lg hover:shadow-xl hover:-translate-y-0.5 font-bold transition-all`}><Plus size={20} /> REGISTER {T.animal.toUpperCase()}</button>
             </div>
 
-            <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-6 flex flex-col md:flex-row gap-6 justify-between items-center">
-                <div className="flex bg-gray-100 p-1.5 rounded-2xl overflow-x-auto no-scrollbar max-w-full">
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-4 flex flex-col md:flex-row gap-4 justify-between items-center premium-card">
+                <div className="flex bg-slate-50 p-1.5 rounded-xl overflow-x-auto no-scrollbar max-w-full border border-slate-100">
                     {categories.map((cat) => (
-                        <button key={cat} onClick={() => setActiveCategoryTab(cat)} className={`px-6 py-2.5 rounded-xl text-xs font-black transition-all whitespace-nowrap flex items-center gap-2 ${activeCategoryTab === cat ? `bg-white shadow-sm ${species === 'GOAT' ? 'text-amber-700' : 'text-emerald-700'}` : 'text-gray-500 hover:text-gray-900'}`}>
+                        <button key={cat} onClick={() => setActiveCategoryTab(cat)} className={`px-5 py-2 rounded-lg text-xs font-bold transition-all whitespace-nowrap flex items-center gap-2 ${activeCategoryTab === cat ? `bg-white shadow-sm ring-1 ring-slate-200 ${species === 'GOAT' ? 'text-amber-700' : 'text-emerald-700'}` : 'text-slate-400 hover:text-slate-700'}`}>
                             {getCategoryIcon(cat, 16)} {cat.toUpperCase()}
                         </button>
                     ))}
                 </div>
-                <div className="relative w-full md:max-w-xs">
-                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-                    <input type="text" placeholder="Search Tag or Breed..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-12 pr-4 py-3 bg-gray-50 border-none rounded-2xl focus:ring-2 focus:ring-emerald-500 outline-none font-medium text-sm" />
+                <div className="relative w-full md:max-w-xs group">
+                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-emerald-500 transition-colors" size={18} />
+                    <input type="text" placeholder="Search Tag or Breed..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-transparent rounded-xl focus:bg-white focus:border-emerald-200 focus:ring-4 focus:ring-emerald-50 outline-none font-medium text-sm transition-all" />
                 </div>
             </div>
 
@@ -1116,16 +1116,16 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                         } else {
                             setSelectedAnimalId(animal.id); setCurrentView('DETAILS'); setDetailTab('INFO');
                         }
-                    }} className={`bg-white rounded-3xl border overflow-hidden hover:shadow-2xl hover:-translate-y-1 transition-all cursor-pointer group relative ${isBatchMode && selectedBatchIds.includes(animal.id) ? 'border-4 border-emerald-500 bg-emerald-50 ring-4 ring-emerald-100' : 'border-gray-100'}`}>
-                        <div className="p-6">
-                            <div className="flex justify-between items-start mb-6">
+                    }} className={`bg-white rounded-2xl border overflow-hidden premium-card cursor-pointer group relative transition-all duration-300 ${isBatchMode && selectedBatchIds.includes(animal.id) ? 'border-2 border-emerald-500 bg-emerald-50/50' : 'border-slate-100 hover:border-emerald-200'}`}>
+                        <div className="p-5">
+                            <div className="flex justify-between items-start mb-5">
                                 <div className="flex items-center gap-4">
-                                    <div className="w-16 h-16 rounded-2xl overflow-hidden border-2 border-white shadow-lg bg-gray-50">
+                                    <div className="w-14 h-14 rounded-xl overflow-hidden border border-slate-100 shadow-sm bg-slate-50 group-hover:scale-105 transition-transform duration-300">
                                         {animal.imageUrl ? <img src={animal.imageUrl} className="w-full h-full object-cover" /> : getPlaceholderVisual(animal.category)}
                                     </div>
                                     <div>
-                                        <h3 className="font-black text-gray-800 text-xl tracking-tight">{animal.tagId}</h3>
-                                        <p className="text-xs font-bold text-gray-400 uppercase">{animal.breed}</p>
+                                        <h3 className="font-extrabold text-slate-800 text-lg tracking-tight font-display group-hover:text-emerald-700 transition-colors">{animal.tagId}</h3>
+                                        <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">{animal.breed}</p>
                                     </div>
                                 </div>
                                 <div className="flex items-center gap-2">
@@ -1135,23 +1135,23 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                                             if (!confirm(`Remove ${animal.tagId} from records?`)) return;
                                             onDeleteLivestock(animal.id);
                                         }}
-                                        className="p-1.5 rounded-lg text-gray-400 hover:bg-red-50 hover:text-red-600 transition-colors"
+                                        className="p-1.5 rounded-lg text-slate-300 hover:bg-red-50 hover:text-red-600 transition-colors opacity-0 group-hover:opacity-100"
                                         title="Delete"
                                     >
                                         <Trash2 size={16} />
                                     </button>
-                                    <span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest ${getStatusColor(animal.status)} shadow-sm`}>{animal.status}</span>
+                                    <span className={`px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider ${getStatusColor(animal.status)}`}>{animal.status}</span>
                                 </div>
                             </div>
-                            <div className="grid grid-cols-2 gap-y-4 text-xs">
-                                <div className={`flex items-center gap-2 font-black text-gray-600 uppercase tracking-tighter`}><Scale size={16} className={species === 'GOAT' ? 'text-amber-500' : 'text-emerald-500'} /> {animal.weight} KG</div>
-                                <div className={`flex items-center gap-2 font-black text-gray-600 uppercase tracking-tighter`}><Calendar size={16} className={species === 'GOAT' ? 'text-amber-500' : 'text-emerald-500'} /> {animal.dob}</div>
-                                {animal.damId && <div className="col-span-2 flex items-center gap-2 font-black text-pink-600 uppercase tracking-tighter"><Baby size={16} /> Mother: {livestock.find(l => l.id === animal.damId)?.tagId || 'Unknown'}</div>}
+                            <div className="grid grid-cols-2 gap-y-3 gap-x-4 text-xs">
+                                <div className={`flex items-center gap-2 font-bold text-slate-600`}><Scale size={14} className={species === 'GOAT' ? 'text-amber-500' : 'text-emerald-500'} /> {animal.weight} KG</div>
+                                <div className={`flex items-center gap-2 font-bold text-slate-600`}><Calendar size={14} className={species === 'GOAT' ? 'text-amber-500' : 'text-emerald-500'} /> {getAgeDisplay(animal.dob)}</div>
+                                {animal.damId && <div className="col-span-2 flex items-center gap-2 font-bold text-slate-400"><Baby size={14} /> <span className="text-slate-500">Dam: {livestock.find(l => l.id === animal.damId)?.tagId || 'Unknown'}</span></div>}
                             </div>
                         </div>
-                        <div className={`bg-gray-50 px-6 py-4 border-t border-gray-100 flex justify-between items-center transition-colors ${species === 'GOAT' ? 'group-hover:bg-amber-600' : 'group-hover:bg-emerald-600'}`}>
-                            <span className="text-[10px] font-black text-gray-400 tracking-widest group-hover:text-white uppercase">Open Records</span>
-                            <ChevronRight size={18} className="text-gray-300 group-hover:text-white" />
+                        <div className={`bg-slate-50/50 px-5 py-3 border-t border-slate-100 flex justify-between items-center transition-colors ${species === 'GOAT' ? 'group-hover:bg-amber-50' : 'group-hover:bg-emerald-50'}`}>
+                            <span className={`text-[10px] font-bold text-slate-400 tracking-widest uppercase transition-colors ${species === 'GOAT' ? 'group-hover:text-amber-700' : 'group-hover:text-emerald-700'}`}>View Profile</span>
+                            <ChevronRight size={16} className={`text-slate-300 transition-colors ${species === 'GOAT' ? 'group-hover:text-amber-600' : 'group-hover:text-emerald-600'} group-hover:translate-x-1 duration-300`} />
                         </div>
                     </div>
                 ))}

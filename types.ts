@@ -2,6 +2,21 @@
 export type LivestockSpecies = 'CATTLE' | 'GOAT';
 export type LivestockStatus = 'ACTIVE' | 'SICK' | 'SOLD' | 'DECEASED';
 
+export interface Location {
+  id: string;
+  name: string; // e.g. City X
+  type: 'CITY' | 'REGION';
+}
+
+export interface Farm {
+  id: string; // Unique Farm ID
+  name: string; // e.g. Farm A
+  locationId: string; // Reference to Location
+  type: 'DAIRY' | 'MEAT' | 'MIXED';
+  currency: string;
+  costCenterCode: string; // Accounting reference
+}
+
 export enum ExpenseCategory {
   FEED = 'FEED',
   VACCINE = 'VACCINE',
@@ -118,6 +133,7 @@ export type EntityType = 'VENDOR' | 'CUSTOMER' | 'PALAI_CLIENT';
 export interface Entity {
   id: string;
   type: EntityType;
+  farmId?: string; // If present, entity is specific to this farm. If null, global entity.
   name: string;
   contact: string;
   address?: string;
@@ -130,6 +146,7 @@ export interface Entity {
 
 export interface Bill {
   id: string;
+  farmId: string; // Mandatory Farm Context
   entityId: string; // Vendor ID
   date: string;
   dueDate?: string;
@@ -148,6 +165,7 @@ export interface Bill {
 
 export interface LedgerRecord {
   id: string;
+  farmId: string; // Mandatory Farm Context
   date: string;
   entityId: string;
   referenceType: 'BILL' | 'SALE' | 'PAYMENT' | 'OPENING_BALANCE' | 'EXPENSE';
@@ -160,6 +178,7 @@ export interface LedgerRecord {
 
 export interface Invoice {
   id: string;
+  farmId: string; // Mandatory Farm Context
   customerId: string;
   customerName: string;
   createdDate: string;
@@ -185,6 +204,7 @@ export interface PalaiProfile {
 
 export interface Livestock {
   id: string;
+  farmId: string; // Mandatory Farm Context
   tagId: string;
   species: LivestockSpecies;
   category: string;
@@ -198,7 +218,7 @@ export interface Livestock {
   palaiCustomerId?: string;
   palaiProfile?: PalaiProfile; // New detailed profile
   status: LivestockStatus;
-  location?: string;
+  location?: string; // Barn/Pen within the farm (derived context can be useful)
   imageUrl?: string;
   notes?: string;
   medicalHistory: MedicalRecord[];
@@ -211,6 +231,10 @@ export interface Livestock {
 }
 
 export interface AppState {
+  farms: Farm[];
+  locations: Location[];
+  currentFarmId: string | null; // Selected context (null = Consolidated View if authorized)
+
   livestock: Livestock[];
   expenses: Expense[];
   sales: Sale[];
@@ -226,17 +250,19 @@ export interface AppState {
   entities: Entity[];
   bills: Bill[];
   ledger: LedgerRecord[];
+  consumptionLogs: ConsumptionLog[]; // New: Track feed usage history
 }
 
 export interface Expense {
   id: string;
+  farmId: string; // Mandatory Farm Context
   category: ExpenseCategory;
   amount: number;
   date: string;
   description: string;
   relatedAnimalId?: string;
   location?: string;
-  farmId?: string;
+  farmName?: string; // Optional denormalized for display
   supplier?: string;
   paymentStatus?: 'PAID' | 'PENDING' | 'PARTIAL';
   paymentDate?: string;
@@ -244,6 +270,7 @@ export interface Expense {
 
 export interface Sale {
   id: string;
+  farmId: string; // Mandatory Farm Context
   itemType: 'ANIMAL' | 'MILK' | 'MANURE' | 'OTHER';
 
   // Animal Sale Specifics
@@ -272,8 +299,9 @@ export interface Sale {
 
 export interface FeedInventory {
   id: string;
+  farmId: string; // Mandatory Farm Context
   name: string;
-  category?: 'FEED' | 'MEDICINE';
+  category?: 'FEED' | 'MEDICINE' | 'TOOL' | 'SUPPLY' | 'EQUIPMENT' | 'OTHER';
   quantity: number;
   unit?: string;
   unitCost: number;
@@ -283,26 +311,146 @@ export interface FeedInventory {
   location?: string;
   feedType?: 'GRASS' | 'TMR' | 'WANDA' | 'OTHER';
   defaultSupplier?: string;
+  description?: string;
+}
+
+export interface MaintenanceRecord {
+  id: string;
+  infrastructureId: string; // Links to the asset
+  date: string;
+  type: 'PREVENTIVE' | 'REPAIR' | 'INSPECTION';
+  description: string;
+  cost: number;
+  performedBy: string;
+  nextServiceDate?: string; // When next service is due
 }
 
 export interface Infrastructure {
   id: string;
+  farmId: string; // Mandatory Farm Context
   name: string;
   assetTag: string;
-  category: 'EQUIPMENT' | 'BUILDING' | 'PASTURE' | 'TOOL' | 'VEHICLE';
-  status: 'OPERATIONAL' | 'NEEDS_REPAIR' | 'UNDER_MAINTENANCE';
+  category: 'EQUIPMENT' | 'BUILDING' | 'PASTURE' | 'VEHICLE' | 'MACHINERY';
+  status: 'OPERATIONAL' | 'NEEDS_REPAIR' | 'UNDER_MAINTENANCE' | 'DISPOSED';
   location: string;
   purchaseDate: string;
   value: number;
   imageUrl?: string;
+
+  // Maintenance Tracking
+  lastServiceDate?: string; // Auto-updated from logs
+  nextServiceDue?: string;
+  maintenanceLog?: MaintenanceRecord[];
+
+  // Depreciation
+  lifespanYears?: number;
+  depreciationRate?: number; // % per year
+  notes?: string;
+}
+
+export type DietTargetType = 'INDIVIDUAL' | 'CATEGORY' | 'GROUP' | 'ALL';
+export type DietStatus = 'DRAFT' | 'ACTIVE' | 'ARCHIVED' | 'COMPLETED';
+
+export interface DietPlanItem {
+  id: string;
+  inventoryId: string; // Link to FeedInventory
+  inventoryName: string; // Denormalized for display
+  quantity: number; // Daily amount per animal
+  unit: string; // e.g., 'kg', 'g'
+  costPerUnit?: number; // Snapshot of cost at plan creation (optional)
 }
 
 export interface DietPlan {
   id: string;
+  farmId: string; // Mandatory Farm Context
   name: string;
-  scheduleType: 'DAILY' | 'WEEKLY' | 'MONTHLY';
-  description: string;
-  assignedAnimalIds: string[];
+  targetType: DietTargetType;
+  targetId?: string; // ID of animal, or 'Milking Cows', 'Calves', etc.
+  targetName?: string; // Display name for target
+  status: DietStatus;
+  startDate: string;
+  endDate?: string;
+  items: DietPlanItem[];
+  notes?: string;
+  // Computed fields (optional)
+  totalAnimals?: number;
+  costPerAnimalPerDay?: number;
+  totalCostPerDay?: number;
 }
 
-// Duplicate AppState removed
+export interface ConsumptionLog {
+  id: string;
+  farmId: string;
+  dietPlanId: string;
+  date: string;
+  itemId: string; // FeedInventory ID
+  quantityUsed: number; // Total consumed
+  cost: number; // Total cost for this entry
+  unit: string;
+}
+
+// --- MEDICINE MODULE ---
+
+export interface TreatmentItem {
+  id: string;
+  inventoryId: string; // Link to FeedInventory (Medicine)
+  inventoryName: string;
+  dosage: number; // Amount per animal
+  unit: string; // ml, tablet, etc.
+  costPerUnit?: number;
+}
+
+export interface TreatmentProtocol {
+  id: string;
+  farmId: string;
+  name: string; // e.g. "Deworming Protocol A"
+  targetType: DietTargetType; // Reuse: INDIVIDUAL | CATEGORY | GROUP
+  targetId?: string;
+  targetName?: string;
+  status: DietStatus; // Reuse: DRAFT | ACTIVE | ARCHIVED
+  scheduleType: 'ONE_OFF' | 'RECURRING' | 'AS_NEEDED';
+  frequency?: string; // e.g. "Every 3 months"
+  items: TreatmentItem[];
+  notes?: string;
+  // Computed
+  costPerAnimal?: number;
+}
+
+export interface TreatmentLog {
+  id: string;
+  farmId: string;
+  protocolId?: string; // Optional if ad-hoc
+  date: string;
+  animalId?: string; // If specific animal
+  targetGroup?: string; // If mass treatment
+  itemId: string;
+  medicineName: string;
+  quantityUsed: number;
+  cost: number;
+  performedBy?: string;
+}
+
+export interface AppState {
+  farms: Farm[];
+  locations: Location[];
+  currentLocationId: string | null;
+  currentFarmId: string | null;
+
+  livestock: Livestock[];
+  expenses: Expense[];
+  sales: Sale[];
+  feed: FeedInventory[]; // Helper: Includes Medicines
+  infrastructure: Infrastructure[];
+  dietPlans: DietPlan[];
+  treatmentProtocols: TreatmentProtocol[]; // New
+  breeders: Breeder[];
+  categories: string[];
+  customers: Customer[];
+  invoices: Invoice[];
+
+  entities: Entity[];
+  bills: Bill[];
+  ledger: LedgerRecord[];
+  consumptionLogs: ConsumptionLog[];
+  treatmentLogs: TreatmentLog[]; // New
+}

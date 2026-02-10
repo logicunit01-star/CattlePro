@@ -9,8 +9,10 @@ interface Props {
 }
 
 export const Reports: React.FC<Props> = ({ state }) => {
-    const [activeReport, setActiveReport] = useState<'FINANCIAL' | 'HERD' | 'OPERATIONS'>('FINANCIAL');
+    const [activeReport, setActiveReport] = useState<'FINANCIAL' | 'HERD' | 'OPERATIONS' | 'DETAILED_LOGS' | 'FEED'>('FINANCIAL');
     const [dateRange, setDateRange] = useState({ start: '', end: '' });
+    const [logPeriod, setLogPeriod] = useState<'DAILY' | 'WEEKLY' | 'MONTHLY'>('DAILY');
+    const [logCategory, setLogCategory] = useState<'MILK' | 'FINANCE'>('MILK');
 
     // --- FINANCIAL CALCS ---
     const calculateFinancials = () => {
@@ -61,40 +63,130 @@ export const Reports: React.FC<Props> = ({ state }) => {
 
     return (
         <div className="space-y-6 animate-fade-in p-2">
-            <div className="flex justify-between items-center">
+            <div className="flex justify-between items-center mb-6">
                 <div>
-                    <h2 className="text-2xl font-bold text-gray-800">Business Reports</h2>
-                    <p className="text-sm text-gray-500">Standardized reports for farm analysis and export</p>
+                    <h2 className="text-3xl font-extrabold text-slate-800 tracking-tight font-display">Business Reports</h2>
+                    <p className="text-sm text-slate-500 font-medium">Standardized insights for farm analysis and export</p>
                 </div>
-                <button onClick={() => window.print()} className="flex items-center gap-2 bg-gray-800 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-700 transition-colors">
-                    <Download size={16} /> Export / Print
+                <button onClick={() => window.print()} className="flex items-center gap-2 bg-slate-800 text-white px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-slate-700 hover:shadow-lg hover:-translate-y-0.5 transition-all shadow-slate-200">
+                    <Download size={18} /> Export / Print
                 </button>
             </div>
 
             {/* Navigation Tab */}
-            <div className="flex space-x-4 border-b border-gray-200">
-                <button onClick={() => setActiveReport('FINANCIAL')} className={`pb-3 px-4 text-sm font-medium border-b-2 transition-colors ${activeReport === 'FINANCIAL' ? 'border-emerald-500 text-emerald-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>Financial Performance</button>
-                <button onClick={() => setActiveReport('HERD')} className={`pb-3 px-4 text-sm font-medium border-b-2 transition-colors ${activeReport === 'HERD' ? 'border-emerald-500 text-emerald-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>Herd Demographics</button>
-                <button onClick={() => setActiveReport('OPERATIONS')} className={`pb-3 px-4 text-sm font-medium border-b-2 transition-colors ${activeReport === 'OPERATIONS' ? 'border-emerald-500 text-emerald-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>Operational Health</button>
+            <div className="flex bg-slate-100/50 p-1.5 rounded-xl gap-2 w-full md:w-fit mb-8 overflow-x-auto no-scrollbar">
+                <button onClick={() => setActiveReport('FINANCIAL')} className={`px-6 py-2.5 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${activeReport === 'FINANCIAL' ? 'bg-white text-emerald-700 shadow-sm ring-1 ring-slate-200' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-200/50'}`}>Financial Performance</button>
+                <button onClick={() => setActiveReport('HERD')} className={`px-6 py-2.5 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${activeReport === 'HERD' ? 'bg-white text-emerald-700 shadow-sm ring-1 ring-slate-200' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-200/50'}`}>Herd Demographics</button>
+                <button onClick={() => setActiveReport('FEED')} className={`px-6 py-2.5 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${activeReport === 'FEED' ? 'bg-white text-emerald-700 shadow-sm ring-1 ring-slate-200' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-200/50'}`}>Feed Consumption</button>
+                <button onClick={() => setActiveReport('OPERATIONS')} className={`px-6 py-2.5 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${activeReport === 'OPERATIONS' ? 'bg-white text-emerald-700 shadow-sm ring-1 ring-slate-200' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-200/50'}`}>Operations</button>
+                <button onClick={() => setActiveReport('DETAILED_LOGS')} className={`px-6 py-2.5 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${activeReport === 'DETAILED_LOGS' ? 'bg-white text-emerald-700 shadow-sm ring-1 ring-slate-200' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-200/50'}`}>Detailed Logs</button>
             </div>
+
+            {/* --- FEED REPORT --- */}
+            {activeReport === 'FEED' && (
+                <div className="space-y-6 animate-fade-in">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        {/* 1. Consumption by Item (Pie/Table) */}
+                        <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
+                            <h3 className="font-bold text-gray-800 mb-6 flex items-center gap-2"><Activity size={18} /> Feed Usage by Ingredient</h3>
+                            <div className="overflow-y-auto max-h-72">
+                                <table className="min-w-full text-sm">
+                                    <thead className="bg-gray-50 sticky top-0">
+                                        <tr>
+                                            <th className="px-4 py-2 text-left">Ingredient</th>
+                                            <th className="px-4 py-2 text-right">Total Qty</th>
+                                            <th className="px-4 py-2 text-right">Total Cost</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {(() => {
+                                            const usage = new Map<string, { name: string, qty: number, cost: number, unit: string }>();
+                                            state.consumptionLogs?.forEach(log => {
+                                                const existing = usage.get(log.itemId) || { name: state.feed.find(f => f.id === log.itemId)?.name || 'Unknown', qty: 0, cost: 0, unit: log.unit };
+                                                usage.set(log.itemId, { ...existing, qty: existing.qty + log.quantityUsed, cost: existing.cost + log.cost });
+                                            });
+
+                                            return Array.from(usage.values()).map((u, idx) => (
+                                                <tr key={idx} className="border-b">
+                                                    <td className="px-4 py-3 font-medium text-gray-700">{u.name}</td>
+                                                    <td className="px-4 py-3 text-right">{u.qty.toFixed(1)} {u.unit}</td>
+                                                    <td className="px-4 py-3 text-right font-bold text-slate-700">PKR {u.cost.toLocaleString()}</td>
+                                                </tr>
+                                            ));
+                                        })()}
+                                        {(state.consumptionLogs || []).length === 0 && <tr><td colSpan={3} className="text-center py-4 text-gray-400">No consumption logs found.</td></tr>}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        {/* 2. Consumption by Diet Plan */}
+                        <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
+                            <h3 className="font-bold text-gray-800 mb-6 flex items-center gap-2"><TrendingUp size={18} /> Cost by Diet Plan</h3>
+                            <div className="overflow-y-auto max-h-72">
+                                <table className="min-w-full text-sm">
+                                    <thead className="bg-gray-50 sticky top-0">
+                                        <tr>
+                                            <th className="px-4 py-2 text-left">Plan Name</th>
+                                            <th className="px-4 py-2 text-right">Total Cost</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {(() => {
+                                            const planCost = new Map<string, number>();
+                                            state.consumptionLogs?.forEach(log => {
+                                                const name = state.dietPlans.find(p => p.id === log.dietPlanId)?.name || 'Unknown Plan';
+                                                planCost.set(name, (planCost.get(name) || 0) + log.cost);
+                                            });
+
+                                            return Array.from(planCost.entries()).sort((a, b) => b[1] - a[1]).map(([name, cost], idx) => (
+                                                <tr key={idx} className="border-b">
+                                                    <td className="px-4 py-3 font-medium text-gray-700">{name}</td>
+                                                    <td className="px-4 py-3 text-right font-bold text-emerald-600">PKR {cost.toLocaleString()}</td>
+                                                </tr>
+                                            ));
+                                        })()}
+                                        {(state.consumptionLogs || []).length === 0 && <tr><td colSpan={2} className="text-center py-4 text-gray-400">No data available.</td></tr>}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* --- FINANCIAL REPORT --- */}
             {activeReport === 'FINANCIAL' && (
                 <div className="space-y-6 animate-fade-in">
                     {/* Summary Cards */}
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                        <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
-                            <p className="text-gray-500 text-xs font-bold uppercase mb-2">Net Profit (6 Mo)</p>
-                            <h3 className="text-3xl font-black text-emerald-600">PKR {monthlyData.reduce((acc, m) => acc + m.Profit, 0).toLocaleString()}</h3>
-                            <p className="text-xs text-gray-400 mt-1">Total revenue minus expenses</p>
+                        <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm premium-card group">
+                            <div className="flex justify-between items-start">
+                                <div>
+                                    <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mb-2">Net Profit (6 Mo)</p>
+                                    <h3 className="text-3xl font-black text-emerald-600 font-display group-hover:scale-105 transition-transform origin-left">PKR {monthlyData.reduce((acc, m) => acc + m.Profit, 0).toLocaleString()}</h3>
+                                </div>
+                                <div className="p-3 bg-emerald-50 rounded-xl text-emerald-600 group-hover:bg-emerald-600 group-hover:text-white transition-colors"><TrendingUp size={24} /></div>
+                            </div>
+                            <p className="text-xs text-slate-400 mt-2 font-medium">Total revenue minus expenses</p>
                         </div>
-                        <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
-                            <p className="text-gray-500 text-xs font-bold uppercase mb-2">Total Revenue (6 Mo)</p>
-                            <h3 className="text-3xl font-black text-gray-800">PKR {monthlyData.reduce((acc, m) => acc + m.Revenue, 0).toLocaleString()}</h3>
+                        <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm premium-card group">
+                            <div className="flex justify-between items-start">
+                                <div>
+                                    <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mb-2">Total Revenue (6 Mo)</p>
+                                    <h3 className="text-3xl font-black text-slate-800 font-display group-hover:scale-105 transition-transform origin-left">PKR {monthlyData.reduce((acc, m) => acc + m.Revenue, 0).toLocaleString()}</h3>
+                                </div>
+                                <div className="p-3 bg-sky-50 rounded-xl text-sky-600 group-hover:bg-sky-600 group-hover:text-white transition-colors"><DollarSign size={24} /></div>
+                            </div>
                         </div>
-                        <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
-                            <p className="text-gray-500 text-xs font-bold uppercase mb-2">Total Expenses (6 Mo)</p>
-                            <h3 className="text-3xl font-black text-red-500">PKR {monthlyData.reduce((acc, m) => acc + m.Expenses, 0).toLocaleString()}</h3>
+                        <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm premium-card group">
+                            <div className="flex justify-between items-start">
+                                <div>
+                                    <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mb-2">Total Expenses (6 Mo)</p>
+                                    <h3 className="text-3xl font-black text-red-500 font-display group-hover:scale-105 transition-transform origin-left">PKR {monthlyData.reduce((acc, m) => acc + m.Expenses, 0).toLocaleString()}</h3>
+                                </div>
+                                <div className="p-3 bg-red-50 rounded-xl text-red-500 group-hover:bg-red-600 group-hover:text-white transition-colors"><Activity size={24} /></div>
+                            </div>
                         </div>
                     </div>
 
@@ -194,22 +286,22 @@ export const Reports: React.FC<Props> = ({ state }) => {
             {/* --- HERD REPORT --- */}
             {activeReport === 'HERD' && (
                 <div className="space-y-6 animate-fade-in">
-                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                        <div className="bg-white p-4 rounded-xl border border-gray-200 text-center">
-                            <h3 className="text-4xl font-black text-emerald-600">{active.length}</h3>
-                            <p className="text-gray-500 text-xs font-bold uppercase mt-1">Active Animals</p>
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                        <div className="bg-white p-6 rounded-2xl border border-slate-100 text-center premium-card hover:-translate-y-1 transition-transform">
+                            <h3 className="text-4xl font-extrabold text-emerald-600 font-display">{active.length}</h3>
+                            <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mt-2">Active Animals</p>
                         </div>
-                        <div className="bg-white p-4 rounded-xl border border-gray-200 text-center">
-                            <h3 className="text-4xl font-black text-blue-600">{active.filter(a => a.gender === 'F').length}</h3>
-                            <p className="text-gray-500 text-xs font-bold uppercase mt-1">Females</p>
+                        <div className="bg-white p-6 rounded-2xl border border-slate-100 text-center premium-card hover:-translate-y-1 transition-transform">
+                            <h3 className="text-4xl font-extrabold text-blue-600 font-display">{active.filter(a => a.gender === 'F').length}</h3>
+                            <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mt-2">Females</p>
                         </div>
-                        <div className="bg-white p-4 rounded-xl border border-gray-200 text-center">
-                            <h3 className="text-4xl font-black text-indigo-600">{state.livestock.reduce((acc, curr) => acc + (curr.birthRecordHistory?.length || 0), 0)}</h3>
-                            <p className="text-gray-500 text-xs font-bold uppercase mt-1">Total Births</p>
+                        <div className="bg-white p-6 rounded-2xl border border-slate-100 text-center premium-card hover:-translate-y-1 transition-transform">
+                            <h3 className="text-4xl font-extrabold text-indigo-600 font-display">{state.livestock.reduce((acc, curr) => acc + (curr.birthRecordHistory?.length || 0), 0)}</h3>
+                            <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mt-2">Total Births</p>
                         </div>
-                        <div className="bg-white p-4 rounded-xl border border-gray-200 text-center">
-                            <h3 className="text-4xl font-black text-gray-600">{sold.length + deceased.length}</h3>
-                            <p className="text-gray-500 text-xs font-bold uppercase mt-1">Exits (Sold/Dead)</p>
+                        <div className="bg-white p-6 rounded-2xl border border-slate-100 text-center premium-card hover:-translate-y-1 transition-transform">
+                            <h3 className="text-4xl font-extrabold text-slate-600 font-display">{sold.length + deceased.length}</h3>
+                            <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mt-2">Exits (Sold/Dead)</p>
                         </div>
                     </div>
 
@@ -266,6 +358,135 @@ export const Reports: React.FC<Props> = ({ state }) => {
                     <Activity size={48} className="mx-auto text-gray-300 mb-4" />
                     <h3 className="text-lg font-bold text-gray-600">Operations Report</h3>
                     <p className="text-gray-400 max-w-md mx-auto mt-2">Detailed analysis of vaccination compliance, breeding efficiency intervals, and employee performance metrics will appear here.</p>
+                </div>
+            )}
+
+            {/* --- DETAILED LOGS REPORT --- */}
+            {activeReport === 'DETAILED_LOGS' && (
+                <div className="space-y-6 animate-fade-in">
+                    {/* Controls */}
+                    <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex flex-col md:flex-row justify-between items-center gap-4 premium-card">
+                        <div className="flex bg-slate-100 p-1 rounded-lg">
+                            <button onClick={() => setLogCategory('MILK')} className={`px-4 py-2 rounded-md text-sm font-bold transition-all ${logCategory === 'MILK' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}>Milk Logs</button>
+                            <button onClick={() => setLogCategory('FINANCE')} className={`px-4 py-2 rounded-md text-sm font-bold transition-all ${logCategory === 'FINANCE' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}>Financial Logs</button>
+                        </div>
+                        <div className="flex bg-slate-100 p-1 rounded-lg">
+                            <button onClick={() => setLogPeriod('DAILY')} className={`px-4 py-2 rounded-md text-xs font-bold transition-all ${logPeriod === 'DAILY' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}>DAILY</button>
+                            <button onClick={() => setLogPeriod('WEEKLY')} className={`px-4 py-2 rounded-md text-xs font-bold transition-all ${logPeriod === 'WEEKLY' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}>WEEKLY</button>
+                            <button onClick={() => setLogPeriod('MONTHLY')} className={`px-4 py-2 rounded-md text-xs font-bold transition-all ${logPeriod === 'MONTHLY' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}>MONTHLY</button>
+                        </div>
+                    </div>
+
+                    {/* Report Table Content */}
+                    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden premium-card">
+                        <div className="overflow-x-auto">
+                            <table className="min-w-full text-sm">
+                                <thead className="bg-slate-50 border-b border-slate-100">
+                                    <tr>
+                                        <th className="px-6 py-4 text-left font-bold text-slate-500 uppercase text-xs tracking-wider">Period</th>
+                                        {logCategory === 'MILK' ? (
+                                            <>
+                                                <th className="px-6 py-4 text-left font-bold text-slate-500 uppercase text-xs tracking-wider">Records</th>
+                                                <th className="px-6 py-4 text-right font-bold text-slate-500 uppercase text-xs tracking-wider">Total Yield (L)</th>
+                                                <th className="px-6 py-4 text-right font-bold text-slate-500 uppercase text-xs tracking-wider">Avg/Record</th>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <th className="px-6 py-4 text-right font-bold text-slate-500 uppercase text-xs tracking-wider">Income</th>
+                                                <th className="px-6 py-4 text-right font-bold text-slate-500 uppercase text-xs tracking-wider">Expense</th>
+                                                <th className="px-6 py-4 text-right font-bold text-slate-500 uppercase text-xs tracking-wider">Net Profit</th>
+                                            </>
+                                        )}
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-50">
+                                    {/* GENERATE ROWS DYNAMICALLY */}
+                                    {(() => {
+                                        // Helper to group data
+                                        const groupData = () => {
+                                            const map = new Map();
+
+                                            if (logCategory === 'MILK') {
+                                                state.livestock.forEach(animal => {
+                                                    animal.milkProductionHistory?.forEach(record => {
+                                                        let key = record.date;
+                                                        if (logPeriod === 'MONTHLY') key = record.date.slice(0, 7); // YYYY-MM
+                                                        if (logPeriod === 'WEEKLY') {
+                                                            const d = new Date(record.date);
+                                                            const day = d.getDay();
+                                                            const diff = d.getDate() - day + (day === 0 ? -6 : 1); // adjust when day is sunday
+                                                            const monday = new Date(d.setDate(diff)).toISOString().slice(0, 10);
+                                                            key = `Week of ${monday}`;
+                                                        }
+
+                                                        const existing = map.get(key) || { count: 0, total: 0 };
+                                                        map.set(key, { count: existing.count + 1, total: existing.total + record.quantity });
+                                                    });
+                                                });
+                                            } else {
+                                                // FINANCE
+                                                state.sales.forEach(s => {
+                                                    let key = s.date;
+                                                    if (logPeriod === 'MONTHLY') key = s.date.slice(0, 7);
+                                                    if (logPeriod === 'WEEKLY') {
+                                                        const d = new Date(s.date);
+                                                        const day = d.getDay();
+                                                        const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+                                                        const monday = new Date(d.setDate(diff)).toISOString().slice(0, 10);
+                                                        key = `Week of ${monday}`;
+                                                    }
+                                                    const existing = map.get(key) || { income: 0, expense: 0 };
+                                                    map.set(key, { ...existing, income: existing.income + s.amount });
+                                                });
+                                                state.expenses.forEach(e => {
+                                                    let key = e.date;
+                                                    if (logPeriod === 'MONTHLY') key = e.date.slice(0, 7);
+                                                    if (logPeriod === 'WEEKLY') {
+                                                        const d = new Date(e.date);
+                                                        const day = d.getDay();
+                                                        const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+                                                        const monday = new Date(d.setDate(diff)).toISOString().slice(0, 10);
+                                                        key = `Week of ${monday}`;
+                                                    }
+
+                                                    const existing = map.get(key) || { income: 0, expense: 0 };
+                                                    map.set(key, { ...existing, expense: existing.expense + e.amount });
+                                                });
+                                            }
+                                            return Array.from(map.entries()).sort().reverse(); // Newest first
+                                        };
+
+                                        const rows = groupData();
+
+                                        if (rows.length === 0) {
+                                            return <tr><td colSpan={4} className="px-6 py-8 text-center text-slate-400 font-medium">No records found for this category.</td></tr>;
+                                        }
+
+                                        return rows.map(([period, data]) => (
+                                            <tr key={period} className="hover:bg-slate-50/80 transition-colors group">
+                                                <td className="px-6 py-4 font-bold text-slate-700">{period}</td>
+                                                {logCategory === 'MILK' ? (
+                                                    <>
+                                                        <td className="px-6 py-4 font-medium text-slate-600">{data.count} Records</td>
+                                                        <td className="px-6 py-4 text-right font-black text-sky-600 group-hover:scale-105 transition-transform origin-right">{data.total.toFixed(1)} L</td>
+                                                        <td className="px-6 py-4 text-right font-bold text-slate-400">{(data.total / data.count).toFixed(1)} L</td>
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <td className="px-6 py-4 text-right font-bold text-emerald-600 group-hover:text-emerald-700">+PKR {data.income.toLocaleString()}</td>
+                                                        <td className="px-6 py-4 text-right font-bold text-red-500 group-hover:text-red-600">-PKR {data.expense.toLocaleString()}</td>
+                                                        <td className={`px-6 py-4 text-right font-black ${data.income - data.expense >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                                                            PKR {(data.income - data.expense).toLocaleString()}
+                                                        </td>
+                                                    </>
+                                                )}
+                                            </tr>
+                                        ));
+                                    })()}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
                 </div>
             )}
         </div>

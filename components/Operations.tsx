@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
-import { AppState, FeedInventory, Infrastructure, DietPlan } from '../types';
-import { Warehouse, Construction, AlertCircle, Plus, Trash2, Edit2, Tag, X, Save, CheckCircle, ArrowLeft, Utensils, CalendarClock, Beef, Upload, Image as ImageIcon } from 'lucide-react';
+import { AppState, FeedInventory, Infrastructure, DietPlan, TreatmentProtocol, TreatmentLog, TreatmentItem, MaintenanceRecord } from '../types';
+import { Warehouse, Construction, AlertCircle, Plus, Trash2, Edit2, Tag, X, Save, CheckCircle, ArrowLeft, Utensils, CalendarClock, Beef, Upload, Image as ImageIcon, Stethoscope, Pill } from 'lucide-react';
 
 interface Props {
     state: AppState;
@@ -14,6 +14,12 @@ interface Props {
     onAddDietPlan: (plan: DietPlan) => void | Promise<void>;
     onUpdateDietPlan: (plan: DietPlan) => void | Promise<void>;
     onDeleteDietPlan: (id: string) => void | Promise<void>;
+    onRunDailyProcessing: () => Promise<void>;
+    onAddTreatmentProtocol: (plan: TreatmentProtocol) => void | Promise<void>;
+    onUpdateTreatmentProtocol: (plan: TreatmentProtocol) => void | Promise<void>;
+    onDeleteTreatmentProtocol: (id: string) => void | Promise<void>;
+    onLogTreatment: (logs: TreatmentLog[]) => void | Promise<void>;
+    onAddExpense: (expense: any) => Promise<void>;
 }
 
 export const Operations: React.FC<Props> = ({
@@ -26,10 +32,27 @@ export const Operations: React.FC<Props> = ({
     onDeleteInfrastructure,
     onAddDietPlan,
     onUpdateDietPlan,
-    onDeleteDietPlan
+    onDeleteDietPlan,
+    onRunDailyProcessing,
+    onAddTreatmentProtocol,
+    onUpdateTreatmentProtocol,
+    onDeleteTreatmentProtocol,
+    onLogTreatment,
+    onAddExpense
 }) => {
-    const [activeTab, setActiveTab] = useState<'FEED' | 'MEDICINE' | 'INFRA' | 'DIET'>('FEED');
-    const [viewMode, setViewMode] = useState<'LIST' | 'FORM'>('LIST');
+    const [activeTab, setActiveTab] = useState<'FEED' | 'MEDICINE' | 'SUPPLIES' | 'INFRA' | 'DIET'>('FEED');
+    const [viewMode, setViewMode] = useState<'LIST' | 'FORM' | 'PROTOCOL' | 'SERVICE'>('LIST');
+
+    // --- SERVICE STATE ---
+    const [servicingAsset, setServicingAsset] = useState<Infrastructure | null>(null);
+    const [serviceForm, setServiceForm] = useState<Partial<MaintenanceRecord>>({
+        date: new Date().toISOString().split('T')[0],
+        type: 'PREVENTIVE',
+        description: '',
+        cost: 0,
+        performedBy: '',
+        nextServiceDate: ''
+    });
 
     // --- FEED STATE ---
     const [editingFeed, setEditingFeed] = useState<FeedInventory | null>(null);
@@ -46,10 +69,78 @@ export const Operations: React.FC<Props> = ({
     // --- DIET PLAN STATE ---
     const [editingDiet, setEditingDiet] = useState<DietPlan | null>(null);
     const [dietForm, setDietForm] = useState<Partial<DietPlan>>({
-        name: '', scheduleType: 'DAILY', description: '', assignedAnimalIds: []
+        name: '', status: 'DRAFT', startDate: new Date().toISOString().split('T')[0], items: [], targetType: 'CATEGORY'
     });
 
+    // --- TREATMENT PROTOCOL STATE ---
+    const [editingProtocol, setEditingProtocol] = useState<TreatmentProtocol | null>(null);
+    const [protocolForm, setProtocolForm] = useState<Partial<TreatmentProtocol>>({
+        name: '', status: 'DRAFT', scheduleType: 'RECURRING', items: [], targetType: 'CATEGORY'
+    });
+    const [applyingProtocol, setApplyingProtocol] = useState<TreatmentProtocol | null>(null);
+
     // --- HELPERS ---
+    const openAddProtocol = () => {
+        setEditingProtocol(null);
+        setProtocolForm({ name: '', status: 'DRAFT', scheduleType: 'RECURRING', items: [], targetType: 'CATEGORY', targetId: '', frequency: 'Monthly' });
+        setViewMode('PROTOCOL');
+    };
+
+    const handleApplyProtocol = async (protocol: TreatmentProtocol) => {
+        if (!state.currentFarmId) return alert("Select a farm first");
+
+        const confirmMsg = `Apply protocol "${protocol.name}"?\nThis will deduct stock and log treatments for ${protocol.targetName || 'all targets'}.`;
+        if (!confirm(confirmMsg)) return;
+
+        const performDate = new Date().toISOString().split('T')[0];
+        const logs: TreatmentLog[] = [];
+
+        // Determine animals
+        let animalsToTreat = [];
+        if (protocol.targetType === 'INDIVIDUAL' && protocol.targetId) {
+            const animal = state.livestock.find(l => l.id === protocol.targetId);
+            if (animal) animalsToTreat.push(animal);
+        } else if (protocol.targetType === 'CATEGORY' && protocol.targetId) {
+            animalsToTreat = state.livestock.filter(l => l.category === protocol.targetName && l.farmId === state.currentFarmId && l.status === 'ACTIVE');
+        } else {
+            // Fallback or GROUP logic
+            animalsToTreat = state.livestock.filter(l => l.farmId === state.currentFarmId && l.status === 'ACTIVE');
+        }
+
+        if (animalsToTreat.length === 0) {
+            alert("No active animals found for this target.");
+            return;
+        }
+
+        let animalsProcessed = 0;
+        animalsToTreat.forEach(animal => {
+            protocol.items.forEach(item => {
+                const invItem = state.feed.find(f => f.id === item.inventoryId);
+                logs.push({
+                    id: Math.random().toString(36).substr(2, 9),
+                    farmId: state.currentFarmId!,
+                    protocolId: protocol.id,
+                    date: performDate,
+                    animalId: animal.id,
+
+                    itemId: item.inventoryId,
+                    medicineName: item.inventoryName,
+                    quantityUsed: item.dosage,
+                    cost: (invItem?.unitCost || 0) * item.dosage,
+                    performedBy: 'Manager' // TODO: Get current user
+                });
+            });
+            animalsProcessed++;
+        });
+
+        try {
+            await onLogTreatment(logs);
+            alert(`Successfully logged treatments for ${animalsProcessed} animals.`);
+        } catch (e) {
+            console.error(e);
+            alert("Failed to log treatments.");
+        }
+    };
 
     const handleInfraImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -62,9 +153,12 @@ export const Operations: React.FC<Props> = ({
         }
     };
 
+    const [createExpense, setCreateExpense] = useState(false);
+
     const openAddFeed = () => {
         setEditingFeed(null);
-        setFeedForm({ name: '', quantity: 0, unitCost: 0, reorderLevel: 0 });
+        setFeedForm({ name: '', quantity: 0, unitCost: 0, reorderLevel: 0, unit: 'kg' });
+        setCreateExpense(false);
         setViewMode('FORM');
     };
 
@@ -77,6 +171,7 @@ export const Operations: React.FC<Props> = ({
     const openAddInfra = () => {
         setEditingInfra(null);
         setInfraForm({ name: '', assetTag: '', category: 'EQUIPMENT', status: 'OPERATIONAL', location: '', value: 0, purchaseDate: new Date().toISOString().split('T')[0], imageUrl: '' });
+        setCreateExpense(false);
         setViewMode('FORM');
     };
 
@@ -100,16 +195,38 @@ export const Operations: React.FC<Props> = ({
 
     const handleFeedSubmit = async () => {
         if (!feedForm.name || feedForm.quantity === undefined) return alert("Name and Quantity required");
+        if (!state.currentFarmId) return alert("Please select a farm first.");
+
         const item: FeedInventory = {
             id: editingFeed ? editingFeed.id : Math.random().toString(36).substr(2, 9),
-            name: feedForm.name,
+            farmId: state.currentFarmId,
+            name: feedForm.name!,
+            category: activeTab === 'MEDICINE' ? 'MEDICINE' : (activeTab === 'SUPPLIES' ? (feedForm.category || 'SUPPLY') : 'FEED'),
             quantity: Number(feedForm.quantity),
             unitCost: Number(feedForm.unitCost) || 0,
-            reorderLevel: Number(feedForm.reorderLevel) || 0
+            reorderLevel: Number(feedForm.reorderLevel) || 0,
+            unit: feedForm.unit || 'kg',
+            batchNumber: feedForm.batchNumber,
+            expiryDate: feedForm.expiryDate,
+            description: feedForm.description
         };
         try {
             if (editingFeed) await onUpdateFeed(item);
-            else await onAddFeed(item);
+            else {
+                await onAddFeed(item);
+                if (createExpense && item.unitCost && item.quantity) {
+                    await onAddExpense({
+                        farmId: state.currentFarmId,
+                        date: new Date().toISOString().split('T')[0],
+                        amount: item.unitCost * item.quantity,
+                        description: `Purchase of ${item.category}: ${item.name}`,
+                        category: (item.category === 'MEDICINE' ? 'Medical' : (item.category === 'FEED' ? 'Feed' : 'Supplies')),
+                        subcategory: item.category,
+                        status: 'COMPLETED',
+                        recurring: false
+                    });
+                }
+            }
             setViewMode('LIST');
         } catch (e) {
             console.error(e);
@@ -119,8 +236,11 @@ export const Operations: React.FC<Props> = ({
 
     const handleInfraSubmit = async () => {
         if (!infraForm.name || !infraForm.assetTag) return alert("Name and Asset Tag required");
+        if (!state.currentFarmId) return alert("Please select a farm first.");
+
         const item: Infrastructure = {
             id: editingInfra ? editingInfra.id : Math.random().toString(36).substr(2, 9),
+            farmId: state.currentFarmId,
             name: infraForm.name!,
             assetTag: infraForm.assetTag!,
             category: (infraForm.category as any) || 'EQUIPMENT',
@@ -128,11 +248,26 @@ export const Operations: React.FC<Props> = ({
             location: infraForm.location || 'Unknown',
             value: Number(infraForm.value) || 0,
             purchaseDate: infraForm.purchaseDate || new Date().toISOString().split('T')[0],
-            imageUrl: infraForm.imageUrl
+            imageUrl: infraForm.imageUrl,
+            lifespanYears: Number(infraForm.lifespanYears) || 0,
+            depreciationRate: Number(infraForm.depreciationRate) || 0,
+            notes: infraForm.notes
         };
         try {
             if (editingInfra) await onUpdateInfrastructure(item);
-            else await onAddInfrastructure(item);
+            else {
+                await onAddInfrastructure(item);
+                if (createExpense && item.value) {
+                    await onAddExpense({
+                        farmId: state.currentFarmId,
+                        date: item.purchaseDate,
+                        amount: item.value,
+                        description: `Purchase of Asset: ${item.name} (${item.assetTag})`,
+                        category: 'Equipment',
+                        recurring: false
+                    });
+                }
+            }
             setViewMode('LIST');
             setInfraForm({ name: '', assetTag: '', category: 'EQUIPMENT', status: 'OPERATIONAL', location: '', value: 0, purchaseDate: '', imageUrl: '' });
         } catch (e) {
@@ -141,14 +276,80 @@ export const Operations: React.FC<Props> = ({
         }
     };
 
+    const openService = (item: Infrastructure) => {
+        setServicingAsset(item);
+        setServiceForm({
+            date: new Date().toISOString().split('T')[0],
+            type: 'PREVENTIVE',
+            description: '',
+            cost: 0,
+            performedBy: '',
+            nextServiceDate: ''
+        });
+        setCreateExpense(true); // Default to logging expense for service
+        setViewMode('SERVICE');
+    };
+
+    const handleServiceSubmit = async () => {
+        if (!servicingAsset || !serviceForm.date) return alert("Service date required");
+
+        const record: MaintenanceRecord = {
+            id: Math.random().toString(36).substr(2, 9),
+            infrastructureId: servicingAsset.id,
+            date: serviceForm.date!,
+            type: (serviceForm.type as any) || 'PREVENTIVE',
+            description: serviceForm.description || 'Routine Maintenance',
+            cost: Number(serviceForm.cost) || 0,
+            performedBy: serviceForm.performedBy || 'Unknown',
+            nextServiceDate: serviceForm.nextServiceDate
+        };
+
+        const updatedAsset: Infrastructure = {
+            ...servicingAsset,
+            lastServiceDate: record.date,
+            nextServiceDue: record.nextServiceDate,
+            maintenanceLog: [...(servicingAsset.maintenanceLog || []), record],
+            status: 'OPERATIONAL' // Assume operational after service
+        };
+
+        try {
+            await onUpdateInfrastructure(updatedAsset);
+
+            if (createExpense && record.cost > 0) {
+                try {
+                    await onAddExpense({
+                        farmId: state.currentFarmId,
+                        date: record.date,
+                        amount: record.cost,
+                        description: `Service for ${updatedAsset.name}: ${record.description}`,
+                        category: 'Maintenance',
+                        recurring: false
+                    });
+                } catch (err) { console.error("Expense log failed", err); }
+            }
+
+            setViewMode('LIST');
+            setServicingAsset(null);
+        } catch (e) {
+            console.error(e);
+            alert("Failed to log service.");
+        }
+    };
+
     const handleDietSubmit = async () => {
-        if (!dietForm.name || !dietForm.description) return alert("Name and Plan Details required");
+        if (!dietForm.name || (!dietForm.items || dietForm.items.length === 0)) return alert("Name and at least one ingredient required");
+        if (!state.currentFarmId) return alert("Please select a farm first.");
+
         const plan: DietPlan = {
             id: editingDiet ? editingDiet.id : Math.random().toString(36).substr(2, 9),
+            farmId: state.currentFarmId,
             name: dietForm.name!,
-            scheduleType: (dietForm.scheduleType as any) || 'DAILY',
-            description: dietForm.description!,
-            assignedAnimalIds: dietForm.assignedAnimalIds || []
+            targetType: dietForm.targetType || 'CATEGORY',
+            targetId: dietForm.targetId,
+            targetName: dietForm.targetName,
+            status: dietForm.status || 'DRAFT',
+            startDate: dietForm.startDate || new Date().toISOString().split('T')[0],
+            items: dietForm.items || [],
         };
         try {
             if (editingDiet) await onUpdateDietPlan(plan);
@@ -157,6 +358,33 @@ export const Operations: React.FC<Props> = ({
         } catch (e) {
             console.error(e);
             alert("Failed to save diet plan. Is the backend running?");
+        }
+    };
+
+    const handleProtocolSubmit = async () => {
+        if (!protocolForm.name || (!protocolForm.items || protocolForm.items.length === 0)) return alert("Name and at least one medicine item required");
+        if (!state.currentFarmId) return alert("Please select a farm first.");
+
+        const protocol: TreatmentProtocol = {
+            id: editingProtocol ? editingProtocol.id : Math.random().toString(36).substr(2, 9),
+            farmId: state.currentFarmId,
+            name: protocolForm.name!,
+            targetType: protocolForm.targetType || 'CATEGORY',
+            targetId: protocolForm.targetId,
+            targetName: protocolForm.targetName,
+            status: protocolForm.status || 'DRAFT',
+            scheduleType: protocolForm.scheduleType || 'RECURRING',
+            frequency: protocolForm.frequency,
+            items: protocolForm.items || [],
+        };
+
+        try {
+            if (editingProtocol) await onUpdateTreatmentProtocol(protocol);
+            else await onAddTreatmentProtocol(protocol);
+            setViewMode('LIST');
+        } catch (e) {
+            console.error(e);
+            alert("Failed to save protocol.");
         }
     };
 
@@ -205,10 +433,16 @@ export const Operations: React.FC<Props> = ({
                         Medicine Cabinet
                     </button>
                     <button
+                        onClick={() => setActiveTab('SUPPLIES')}
+                        className={`pb-3 px-2 font-medium text-sm transition-colors border-b-2 whitespace-nowrap ${activeTab === 'SUPPLIES' ? 'border-emerald-500 text-emerald-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                    >
+                        Farm Supplies
+                    </button>
+                    <button
                         onClick={() => setActiveTab('INFRA')}
                         className={`pb-3 px-2 font-medium text-sm transition-colors border-b-2 whitespace-nowrap ${activeTab === 'INFRA' ? 'border-emerald-500 text-emerald-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
                     >
-                        Infrastructure & Assets
+                        Fixed Assets
                     </button>
                     <button
                         onClick={() => setActiveTab('DIET')}
@@ -217,6 +451,107 @@ export const Operations: React.FC<Props> = ({
                         Diet & Nutrition Plans
                     </button>
                 </div>
+            )}
+
+            {/* --- MEDICINE CONTENT --- */}
+            {activeTab === 'MEDICINE' && (
+                <>
+                    {viewMode === 'LIST' ? (
+                        <div className="space-y-6 animate-fade-in">
+                            {/* Section 1: Medicine Inventory */}
+                            <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                                <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-blue-50">
+                                    <h3 className="font-bold text-blue-800 flex items-center gap-2">
+                                        <Pill size={18} /> Medicine Stock
+                                    </h3>
+                                    <button onClick={openAddFeed} className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg flex items-center gap-2 shadow-sm transition-colors text-xs font-medium">
+                                        <Plus size={14} /> Add Medicine
+                                    </button>
+                                </div>
+                                <div className="overflow-x-auto">
+                                    <table className="min-w-full divide-y divide-gray-200">
+                                        <thead className="bg-gray-50">
+                                            <tr>
+                                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Item Name</th>
+                                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Stock</th>
+                                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Unit Cost</th>
+                                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="bg-white divide-y divide-gray-200">
+                                            {state.feed.filter(i => i.category === 'MEDICINE').map((item) => (
+                                                <tr key={item.id} className="hover:bg-blue-50/30">
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-800 flex items-center gap-2">
+                                                        <Pill size={16} className="text-blue-400" />
+                                                        {item.name}
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 font-bold">{item.quantity} {item.unit}</td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">PKR {item.unitCost}</td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                                        <div className="flex gap-2">
+                                                            <button onClick={() => openEditFeed(item)} className="text-blue-600 hover:text-blue-900 bg-blue-50 p-1.5 rounded"><Edit2 size={16} /></button>
+                                                            <button onClick={() => onDeleteFeed(item.id)} className="text-red-600 hover:text-red-900 bg-red-50 p-1.5 rounded"><Trash2 size={16} /></button>
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                            {state.feed.filter(i => i.category === 'MEDICINE').length === 0 && (
+                                                <tr><td colSpan={4} className="px-6 py-8 text-center text-gray-400 italic">No medicines in stock.</td></tr>
+                                            )}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+
+                            {/* Section 2: Treatment Protocols */}
+                            <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden mt-6">
+                                <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-teal-50">
+                                    <h3 className="font-bold text-teal-800 flex items-center gap-2">
+                                        <Stethoscope size={18} /> Treatment Protocols (SOPs)
+                                    </h3>
+                                    <button onClick={openAddProtocol} className="bg-teal-600 hover:bg-teal-700 text-white px-3 py-1.5 rounded-lg flex items-center gap-2 shadow-sm transition-colors text-xs font-medium">
+                                        <Plus size={14} /> Create Protocol
+                                    </button>
+                                </div>
+                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 p-4">
+                                    {state.treatmentProtocols && state.treatmentProtocols.map(protocol => (
+                                        <div key={protocol.id} className="bg-white border boundary-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow relative">
+                                            <div className="absolute top-4 right-4 flex gap-2">
+                                                <button onClick={() => { setEditingProtocol(protocol); setProtocolForm(protocol); setViewMode('PROTOCOL'); }} className="text-gray-400 hover:text-teal-600"><Edit2 size={14} /></button>
+                                                <button onClick={() => onDeleteTreatmentProtocol(protocol.id)} className="text-gray-400 hover:text-red-500"><Trash2 size={14} /></button>
+                                            </div>
+                                            <h4 className="font-bold text-gray-800 mb-1">{protocol.name}</h4>
+                                            <div className="flex gap-2 mb-3">
+                                                <span className="text-[10px] bg-teal-50 text-teal-700 px-2 py-0.5 rounded-full font-bold">{protocol.scheduleType}</span>
+                                                <span className="text-[10px] bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full font-bold uppercase">{protocol.targetType}</span>
+                                            </div>
+
+                                            <div className="space-y-1">
+                                                {protocol.items.map((item, idx) => (
+                                                    <div key={idx} className="flex justify-between text-xs text-gray-600 bg-gray-50 px-2 py-1 rounded">
+                                                        <span>{item.inventoryName}</span>
+                                                        <span className="font-bold">{item.dosage} {item.unit}</span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                            <div className="mt-3 pt-3 border-t border-gray-100 flex justify-between items-center">
+                                                <span className="text-xs text-gray-500">{protocol.targetName || protocol.targetId || 'All Animals'}</span>
+                                                <button onClick={() => handleApplyProtocol(protocol)} className="text-teal-600 text-xs font-bold hover:underline">Apply Treatment</button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                    {(!state.treatmentProtocols || state.treatmentProtocols.length === 0) && (
+                                        <div className="col-span-full text-center py-8 text-gray-400 italic">No standard treatment protocols defined.</div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    ) : (
+                        // If viewMode is FORM, it's handled by the specific FORM blocks below (Feed Form Reuse)
+                        // But if viewMode is PROTOCOL, it will be handled by a separate block
+                        null
+                    )}
+                </>
             )}
 
             {/* --- FEED CONTENT --- */}
@@ -325,6 +660,80 @@ export const Operations: React.FC<Props> = ({
                 </>
             )}
 
+            {/* --- SUPPLIES CONTENT --- */}
+            {activeTab === 'SUPPLIES' && (
+                <>
+                    {viewMode === 'LIST' ? (
+                        <div className="space-y-6 animate-fade-in">
+                            <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                                <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-amber-50">
+                                    <h3 className="font-bold text-amber-800 flex items-center gap-2">
+                                        <Warehouse size={18} /> Farm Supplies & Tools
+                                    </h3>
+                                    <button onClick={openAddFeed} className="bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded-lg flex items-center gap-2 shadow-sm transition-colors text-xs font-medium">
+                                        <Plus size={14} /> Add Supply
+                                    </button>
+                                </div>
+                                <div className="overflow-x-auto">
+                                    <table className="min-w-full divide-y divide-gray-200">
+                                        <thead className="bg-gray-50">
+                                            <tr>
+                                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Item Name</th>
+                                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Category</th>
+                                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Stock</th>
+                                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Unit Cost</th>
+                                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="bg-white divide-y divide-gray-200">
+                                            {state.feed.filter(i => ['SUPPLY', 'TOOL', 'EQUIPMENT', 'OTHER'].includes(i.category || '')).map((item) => (
+                                                <tr key={item.id} className="hover:bg-amber-50/30">
+                                                    <td className="px-6 py-4 whitespace-nowrap">
+                                                        <div className="flex items-center">
+                                                            <div>
+                                                                <div className="text-sm font-medium text-gray-900">{item.name}</div>
+                                                                <div className="text-xs text-gray-500">ID: {item.id.substring(0, 6)}</div>
+                                                            </div>
+                                                        </div>
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap">
+                                                        <span className="px-2 py-1 text-xs font-semibold rounded-full bg-amber-100 text-amber-800">
+                                                            {item.category}
+                                                        </span>
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap">
+                                                        <div className={`text-sm font-bold ${item.quantity <= item.reorderLevel ? 'text-red-600' : 'text-gray-900'}`}>
+                                                            {item.quantity} <span className="text-gray-500 font-normal text-xs">{item.unit}</span>
+                                                        </div>
+                                                        {item.quantity <= item.reorderLevel && (
+                                                            <div className="text-xs text-red-500 flex items-center gap-1 mt-1">
+                                                                <AlertCircle size={10} /> Low Stock
+                                                            </div>
+                                                        )}
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                                        PKR {item.unitCost.toLocaleString()}
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                                                        <div className="flex items-center gap-2">
+                                                            <button onClick={() => openEditFeed(item)} className="text-indigo-600 hover:text-indigo-900 bg-indigo-50 p-1.5 rounded"><Edit2 size={16} /></button>
+                                                            <button onClick={() => onDeleteFeed(item.id)} className="text-red-600 hover:text-red-900 bg-red-50 p-1.5 rounded"><Trash2 size={16} /></button>
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                            {state.feed.filter(i => ['SUPPLY', 'TOOL', 'EQUIPMENT', 'OTHER'].includes(i.category || '')).length === 0 && (
+                                                <tr><td colSpan={5} className="px-6 py-8 text-center text-gray-400 italic">No supplies or tools registered.</td></tr>
+                                            )}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    ) : null}
+                </>
+            )}
+
             {/* --- INFRASTRUCTURE CONTENT --- */}
             {activeTab === 'INFRA' && (
                 <>
@@ -357,7 +766,7 @@ export const Operations: React.FC<Props> = ({
                                                         <span className="bg-gray-800 text-white text-xs font-mono px-2 py-0.5 rounded flex items-center gap-1">
                                                             <Tag size={10} /> {infra.assetTag}
                                                         </span>
-                                                        <span className="text-xs text-gray-500 uppercase tracking-wide">{infra.category}</span>
+                                                        <span className="text-xs text-gray-500 uppercase tracking-wide">{infra.category === 'MACHINERY' ? 'Heavy Machinery' : infra.category}</span>
                                                     </div>
                                                 </div>
                                             </div>
@@ -375,7 +784,25 @@ export const Operations: React.FC<Props> = ({
                                                 <p className="text-xs text-gray-400">Value</p>
                                                 <p className="font-medium">PKR {infra.value.toLocaleString()}</p>
                                             </div>
+                                            {infra.purchaseDate && (
+                                                <div>
+                                                    <p className="text-xs text-gray-400">Purchased</p>
+                                                    <p className="font-medium">{infra.purchaseDate}</p>
+                                                </div>
+                                            )}
+                                            {infra.nextServiceDue && (
+                                                <div className="text-orange-600">
+                                                    <p className="text-xs opacity-75">Service Due</p>
+                                                    <p className="font-bold">{infra.nextServiceDue}</p>
+                                                </div>
+                                            )}
                                         </div>
+
+                                        {infra.notes && (
+                                            <div className="mt-2 text-xs text-gray-500 italic border-l-2 border-gray-200 pl-2">
+                                                "{infra.notes.length > 50 ? infra.notes.substring(0, 50) + '...' : infra.notes}"
+                                            </div>
+                                        )}
 
                                         <div className="mt-4 pt-3 flex justify-end gap-2 relative z-10">
                                             <button onClick={() => openEditInfra(infra)} className="text-emerald-600 hover:text-emerald-800 text-sm flex items-center gap-1">
@@ -440,7 +867,7 @@ export const Operations: React.FC<Props> = ({
                                             <option value="EQUIPMENT">Equipment</option>
                                             <option value="BUILDING">Building</option>
                                             <option value="PASTURE">Pasture/Land</option>
-                                            <option value="TOOL">Tool</option>
+                                            <option value="MACHINERY">Heavy Machinery</option>
                                         </select>
                                     </div>
                                 </div>
@@ -467,6 +894,22 @@ export const Operations: React.FC<Props> = ({
 
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                     <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Lifespan (Years)</label>
+                                        <input type="number" value={infraForm.lifespanYears} onChange={e => setInfraForm({ ...infraForm, lifespanYears: Number(e.target.value) })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Depreciation Rate (%)</label>
+                                        <input type="number" value={infraForm.depreciationRate} onChange={e => setInfraForm({ ...infraForm, depreciationRate: Number(e.target.value) })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" />
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Notes / Service History</label>
+                                    <textarea value={infraForm.notes || ''} onChange={e => setInfraForm({ ...infraForm, notes: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none h-24" placeholder="Enter maintenance notes or details..."></textarea>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div>
                                         <label className="block text-sm font-medium text-gray-700 mb-1">Value (PKR)</label>
                                         <input type="number" value={infraForm.value} onChange={e => setInfraForm({ ...infraForm, value: parseFloat(e.target.value) })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" />
                                     </div>
@@ -476,6 +919,21 @@ export const Operations: React.FC<Props> = ({
                                     </div>
                                 </div>
 
+                                {!editingInfra && (
+                                    <div className="flex items-center gap-2 mt-4 bg-gray-50 p-3 rounded-lg border border-gray-200">
+                                        <input
+                                            type="checkbox"
+                                            id="createInfraExpense"
+                                            checked={createExpense}
+                                            onChange={e => setCreateExpense(e.target.checked)}
+                                            className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500"
+                                        />
+                                        <label htmlFor="createInfraExpense" className="text-sm text-gray-700 font-medium cursor-pointer">
+                                            Log this asset purchase as an Expense automatically
+                                        </label>
+                                    </div>
+                                )}
+
                                 <div className="pt-4 flex justify-end gap-3">
                                     <button onClick={() => { setViewMode('LIST'); setEditingInfra(null); }} className="px-6 py-2 text-gray-500 hover:text-gray-700 font-medium">Cancel</button>
                                     <button onClick={handleInfraSubmit} className="px-6 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 font-medium shadow-sm">{editingInfra ? 'Update Asset' : 'Create Asset'}</button>
@@ -484,127 +942,453 @@ export const Operations: React.FC<Props> = ({
                         </div>
                     )}
                 </>
-            )}
+            )
+            }
 
-            {/* --- DIET PLAN CONTENT --- */}
-            {activeTab === 'DIET' && (
-                <>
-                    {viewMode === 'LIST' ? (
-                        <div className="space-y-4 animate-fade-in">
-                            <div className="flex justify-end">
-                                <button onClick={openAddDiet} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 shadow-sm transition-colors text-sm font-medium">
-                                    <Plus size={16} /> Create Plan
-                                </button>
+            {/* --- PROTOCOL FORM --- */}
+            {
+                viewMode === 'PROTOCOL' && (
+                    <div className="animate-fade-in max-w-4xl mx-auto">
+                        <div className="flex items-center gap-4 mb-6">
+                            <button onClick={() => { setViewMode('LIST'); setEditingProtocol(null); }} className="bg-white p-2 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">
+                                <ArrowLeft size={20} />
+                            </button>
+                            <h3 className="text-xl font-bold text-gray-800">{editingProtocol ? 'Edit Protocol' : 'Create Treatment Protocol'}</h3>
+                        </div>
+
+                        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-6">
+                            {/* STEP 1: BASIC INFO */}
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Protocol Name</label>
+                                    <input type="text" value={protocolForm.name} onChange={e => setProtocolForm({ ...protocolForm, name: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-teal-500 outline-none" placeholder="e.g. Annual Vaccination" />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Schedule Type</label>
+                                    <select value={protocolForm.scheduleType || 'RECURRING'} onChange={e => setProtocolForm({ ...protocolForm, scheduleType: e.target.value as any })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-teal-500 outline-none">
+                                        <option value="RECURRING">Recurring (Regular Schedule)</option>
+                                        <option value="ONE_OFF">One-off / As Needed</option>
+                                    </select>
+                                </div>
                             </div>
 
-                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                                {state.dietPlans.map(plan => (
-                                    <div key={plan.id} className="bg-white rounded-xl border border-gray-200 overflow-hidden hover:shadow-md transition-shadow">
-                                        <div className="p-6 border-b border-gray-100">
-                                            <div className="flex justify-between items-start mb-4">
-                                                <div className="flex items-center gap-3">
-                                                    <div className="bg-blue-50 p-2 rounded-lg text-blue-600">
-                                                        <Utensils size={20} />
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Target Type</label>
+                                    <select value={protocolForm.targetType || 'CATEGORY'} onChange={e => setProtocolForm({ ...protocolForm, targetType: e.target.value as any, targetId: '' })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-teal-500 outline-none">
+                                        <option value="CATEGORY">Category</option>
+                                        <option value="INDIVIDUAL">Individual Animal</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Select Target</label>
+                                    {protocolForm.targetType === 'CATEGORY' ? (
+                                        <select value={protocolForm.targetId || ''} onChange={e => setProtocolForm({ ...protocolForm, targetId: e.target.value, targetName: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-teal-500 outline-none">
+                                            <option value="">Select Category...</option>
+                                            {state.categories.map(c => <option key={c} value={c}>{c}</option>)}
+                                        </select>
+                                    ) : (
+                                        <select value={protocolForm.targetId || ''} onChange={e => {
+                                            const animal = state.livestock.find(l => l.id === e.target.value);
+                                            setProtocolForm({ ...protocolForm, targetId: e.target.value, targetName: animal?.tagId });
+                                        }} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-teal-500 outline-none">
+                                            <option value="">Select Animal...</option>
+                                            {state.livestock.map(l => <option key={l.id} value={l.id}>{l.tagId} ({l.name})</option>)}
+                                        </select>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* STEP 2: Medicines */}
+                            <div>
+                                <div className="flex justify-between items-center mb-2">
+                                    <label className="block text-sm font-medium text-gray-700">Medicines / Vaccines</label>
+                                    <button onClick={() => {
+                                        const items = protocolForm.items || [];
+                                        setProtocolForm({ ...protocolForm, items: [...items, { id: Math.random().toString(), inventoryId: '', check: false, inventoryName: '', dosage: 0, unit: 'ml' } as any] });
+                                    }} className="text-sm text-teal-600 font-medium hover:text-teal-800">+ Add Medicine</button>
+                                </div>
+                                <div className="space-y-3 bg-gray-50 p-4 rounded-xl border border-gray-200">
+                                    {(!protocolForm.items || protocolForm.items.length === 0) && <p className="text-sm text-gray-400 italic text-center">No medicines added.</p>}
+                                    {protocolForm.items?.map((item, idx) => (
+                                        <div key={idx} className="flex gap-3 items-end">
+                                            <div className="flex-1">
+                                                <label className="block text-xs text-gray-500 mb-1">Medicine</label>
+                                                <select value={item.inventoryId} onChange={e => {
+                                                    const inv = state.feed.find(f => f.id === e.target.value);
+                                                    const newItems = [...(protocolForm.items || [])];
+                                                    newItems[idx] = { ...item, inventoryId: e.target.value, inventoryName: inv?.name || '', unit: inv?.unit || 'ml' };
+                                                    setProtocolForm({ ...protocolForm, items: newItems });
+                                                }} className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-teal-500 outline-none">
+                                                    <option value="">Select Item...</option>
+                                                    {state.feed.filter(f => f.category === 'MEDICINE').map(f => (
+                                                        <option key={f.id} value={f.id}>{f.name} ({f.quantity} {f.unit})</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                            <div className="w-24">
+                                                <label className="block text-xs text-gray-500 mb-1">Dosage</label>
+                                                <input type="number" value={item.dosage} onChange={e => {
+                                                    const newItems = [...(protocolForm.items || [])];
+                                                    newItems[idx] = { ...item, dosage: parseFloat(e.target.value) };
+                                                    setProtocolForm({ ...protocolForm, items: newItems });
+                                                }} className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-teal-500 outline-none" />
+                                            </div>
+                                            <div className="w-20">
+                                                <label className="block text-xs text-gray-500 mb-1">Unit</label>
+                                                <input type="text" value={item.unit} readOnly className="w-full bg-gray-100 border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-gray-500" />
+                                            </div>
+                                            <button onClick={() => {
+                                                const newItems = (protocolForm.items || []).filter((_, i) => i !== idx);
+                                                setProtocolForm({ ...protocolForm, items: newItems });
+                                            }} className="text-red-500 hover:text-red-700 p-2"><Trash2 size={16} /></button>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+
+                            <div className="pt-4 flex justify-end gap-3">
+                                <button onClick={() => { setViewMode('LIST'); setEditingProtocol(null); }} className="px-6 py-2 text-gray-500 hover:text-gray-700 font-medium">Cancel</button>
+                                <button onClick={handleProtocolSubmit} className="px-6 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 font-medium shadow-sm">{editingProtocol ? 'Update Protocol' : 'Save Protocol'}</button>
+                            </div>
+                        </div>
+                    </div>
+                )
+            }
+
+            {/* --- FEED & MEDICINE FORM REUSE --- */}
+            {
+                ((activeTab === 'FEED' || activeTab === 'MEDICINE' || activeTab === 'SUPPLIES') && viewMode === 'FORM') && (
+                    <div className="animate-fade-in max-w-2xl mx-auto">
+                        <div className="flex items-center gap-4 mb-6">
+                            <button onClick={() => { setViewMode('LIST'); setEditingFeed(null); }} className="bg-white p-2 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">
+                                <ArrowLeft size={20} />
+                            </button>
+                            <h3 className="text-xl font-bold text-gray-800">
+                                {editingFeed ? 'Edit Item' : (activeTab === 'MEDICINE' ? 'Register New Medicine' : (activeTab === 'SUPPLIES' ? 'Register New Supply/Tool' : 'Register New Feed Item'))}
+                            </h3>
+                        </div>
+
+                        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-6">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Item Name *</label>
+                                <input type="text" value={feedForm.name} onChange={e => setFeedForm({ ...feedForm, name: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" placeholder={activeTab === 'MEDICINE' ? "e.g. Ivermectin 10ml" : (activeTab === 'SUPPLIES' ? "e.g. Shovel, Tags" : "e.g. Corn Silage")} />
+                            </div>
+
+                            {activeTab === 'SUPPLIES' && (
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Category Type</label>
+                                    <select value={feedForm.category || 'SUPPLY'} onChange={e => setFeedForm({ ...feedForm, category: e.target.value as any })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none">
+                                        <option value="SUPPLY">General Supply</option>
+                                        <option value="TOOL">Tool</option>
+                                        <option value="EQUIPMENT">Small Equipment</option>
+                                        <option value="OTHER">Other</option>
+                                    </select>
+                                </div>
+                            )}
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Quantity *</label>
+                                    <input type="number" value={feedForm.quantity} onChange={e => setFeedForm({ ...feedForm, quantity: parseFloat(e.target.value) })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Unit *</label>
+                                    <select value={feedForm.unit} onChange={e => setFeedForm({ ...feedForm, unit: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none">
+                                        {activeTab === 'MEDICINE' ? (
+                                            <>
+                                                <option value="ml">ml (Milliliters)</option>
+                                                <option value="dose">Dose</option>
+                                                <option value="tablet">Tablet</option>
+                                                <option value="bottle">Bottle</option>
+                                            </>
+                                        ) : activeTab === 'SUPPLIES' ? (
+                                            <>
+                                                <option value="pcs">Pieces</option>
+                                                <option value="box">Box</option>
+                                                <option value="pack">Pack</option>
+                                                <option value="set">Set</option>
+                                                <option value="kg">kg</option>
+                                                <option value="liter">Liter</option>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <option value="kg">kg (Kilograms)</option>
+                                                <option value="g">g (Grams)</option>
+                                                <option value="bale">Bale</option>
+                                                <option value="bag">Bag</option>
+                                            </>
+                                        )}
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Unit Cost (PKR)</label>
+                                    <input type="number" value={feedForm.unitCost} onChange={e => setFeedForm({ ...feedForm, unitCost: parseFloat(e.target.value) })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Reorder Level</label>
+                                    <input type="number" value={feedForm.reorderLevel} onChange={e => setFeedForm({ ...feedForm, reorderLevel: parseFloat(e.target.value) })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" />
+                                </div>
+                            </div>
+
+                            {activeTab === 'MEDICINE' && (
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 bg-blue-50 p-4 rounded-lg border border-blue-100">
+                                    <div>
+                                        <label className="block text-sm font-medium text-blue-800 mb-1">Batch Number</label>
+                                        <input type="text" value={feedForm.batchNumber || ''} onChange={e => setFeedForm({ ...feedForm, batchNumber: e.target.value })} className="w-full border border-blue-200 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Batch #" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-blue-800 mb-1">Expiry Date</label>
+                                        <input type="date" value={feedForm.expiryDate || ''} onChange={e => setFeedForm({ ...feedForm, expiryDate: e.target.value })} className="w-full border border-blue-200 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none" />
+                                    </div>
+                                </div>
+                            )}
+
+                            {!editingFeed && (
+                                <div className="flex items-center gap-2 mt-4 bg-gray-50 p-3 rounded-lg border border-gray-200">
+                                    <input
+                                        type="checkbox"
+                                        id="createExpense"
+                                        checked={createExpense}
+                                        onChange={e => setCreateExpense(e.target.checked)}
+                                        className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500"
+                                    />
+                                    <label htmlFor="createExpense" className="text-sm text-gray-700 font-medium cursor-pointer">
+                                        Log this purchase as an Expense automatically
+                                    </label>
+                                </div>
+                            )}
+
+                            <div className="pt-4 flex justify-end gap-3">
+                                <button onClick={() => { setViewMode('LIST'); setEditingFeed(null); }} className="px-6 py-2 text-gray-500 hover:text-gray-700 font-medium">Cancel</button>
+                                <button onClick={handleFeedSubmit} className="px-6 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 font-medium shadow-sm">{editingFeed ? 'Update Item' : 'Add Item'}</button>
+                            </div>
+                        </div>
+                    </div>
+                )
+            }
+
+            {/* --- DIET PLAN CONTENT --- */}
+            {
+                activeTab === 'DIET' && (
+                    <>
+                        {viewMode === 'LIST' ? (
+                            <div className="space-y-4 animate-fade-in">
+                                <div className="flex justify-between items-center bg-blue-50 p-4 rounded-lg border border-blue-200 mb-6">
+                                    <div>
+                                        <h4 className="font-bold text-blue-800">Daily Feed Log</h4>
+                                        <p className="text-xs text-blue-600">Click to process daily consumption for all active plans.</p>
+                                    </div>
+                                    <button onClick={onRunDailyProcessing} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 shadow-sm transition-colors text-sm font-medium">
+                                        <CalendarClock size={16} /> Process Today's Feed
+                                    </button>
+                                </div >
+
+                                <div className="flex justify-end">
+                                    <button onClick={openAddDiet} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 shadow-sm transition-colors text-sm font-medium">
+                                        <Plus size={16} /> Create Plan
+                                    </button>
+                                </div>
+
+                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                    {state.dietPlans.map(plan => (
+                                        <div key={plan.id} className="bg-white rounded-xl border border-gray-200 overflow-hidden hover:shadow-md transition-shadow">
+                                            <div className="p-6 border-b border-gray-100">
+                                                <div className="flex justify-between items-start mb-4">
+                                                    <div className="flex items-center gap-3">
+                                                        <div className="bg-blue-50 p-2 rounded-lg text-blue-600">
+                                                            <Utensils size={20} />
+                                                        </div>
+                                                        <div>
+                                                            <h3 className="font-bold text-gray-800 text-lg">{plan.name}</h3>
+                                                            <div className="flex gap-2 mt-1">
+                                                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${plan.status === 'ACTIVE' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
+                                                                    {plan.status}
+                                                                </span>
+                                                                <span className="text-[10px] bg-indigo-50 text-indigo-700 font-bold px-2 py-0.5 rounded-full uppercase">
+                                                                    {plan.targetType}: {plan.targetName || plan.targetId || 'N/A'}
+                                                                </span>
+                                                            </div>
+                                                        </div>
                                                     </div>
-                                                    <div>
-                                                        <h3 className="font-bold text-gray-800 text-lg">{plan.name}</h3>
-                                                        <span className="text-xs font-medium bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full uppercase flex items-center gap-1 w-fit mt-1">
-                                                            <CalendarClock size={10} /> {plan.scheduleType} SCHEDULE
-                                                        </span>
+                                                    <div className="flex gap-2">
+                                                        <button onClick={() => openEditDiet(plan)} className="text-gray-400 hover:text-emerald-600"><Edit2 size={16} /></button>
+                                                        <button onClick={() => { if (confirm('Delete this diet plan?')) onDeleteDietPlan(plan.id); }} className="text-gray-400 hover:text-red-600"><Trash2 size={16} /></button>
                                                     </div>
                                                 </div>
-                                                <div className="flex gap-2">
-                                                    <button onClick={() => openEditDiet(plan)} className="text-gray-400 hover:text-emerald-600"><Edit2 size={16} /></button>
-                                                    <button onClick={() => { if (confirm('Delete this diet plan?')) onDeleteDietPlan(plan.id); }} className="text-gray-400 hover:text-red-600"><Trash2 size={16} /></button>
+
+                                                <div className="space-y-2 mb-4">
+                                                    {plan.items.slice(0, 3).map((item, idx) => (
+                                                        <div key={idx} className="flex justify-between text-sm text-gray-600 bg-gray-50 px-3 py-1.5 rounded">
+                                                            <span>{item.inventoryName}</span>
+                                                            <span className="font-bold">{item.quantity} {item.unit}</span>
+                                                        </div>
+                                                    ))}
+                                                    {plan.items.length > 3 && <div className="text-xs text-center text-gray-400">+{plan.items.length - 3} more ingredients</div>}
+                                                </div>
+
+                                                <div className="flex items-center justify-between text-sm text-gray-500 pt-2 border-t border-gray-50">
+                                                    <span className="font-bold text-gray-700">Cost: PKR {plan.totalCostPerDay?.toLocaleString() || 0}/day</span>
+                                                    <span className="text-xs">{(plan.totalAnimals || 0)} Animals Assigned</span>
                                                 </div>
                                             </div>
+                                        </div>
+                                    ))}
+                                    {state.dietPlans.length === 0 && (
+                                        <div className="col-span-full p-8 bg-gray-50 rounded-xl border border-dashed border-gray-300 text-center">
+                                            <Utensils className="mx-auto text-gray-300 mb-2" size={48} />
+                                            <p className="text-gray-500">No diet plans created yet.</p>
+                                        </div>
+                                    )}
+                                </div>
+                            </div >
+                        ) : (
+                            <div className="animate-fade-in max-w-4xl mx-auto">
+                                <div className="flex items-center gap-4 mb-6">
+                                    <button onClick={() => setViewMode('LIST')} className="bg-white p-2 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">
+                                        <ArrowLeft size={20} />
+                                    </button>
+                                    <h3 className="text-xl font-bold text-gray-800">{editingDiet ? 'Edit Diet Plan' : 'Create Nutrition Plan'}</h3>
+                                </div>
 
-                                            <div className="bg-gray-50 rounded-lg p-4 text-sm text-gray-700 whitespace-pre-line leading-relaxed mb-4 h-32 overflow-y-auto custom-scrollbar">
-                                                {plan.description}
-                                            </div>
+                                <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-6">
+                                    {/* STEP 1: BASIC INFO */}
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Plan Name</label>
+                                            <input type="text" value={dietForm.name} onChange={e => setDietForm({ ...dietForm, name: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" placeholder="e.g. Winter Milking Ration" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
+                                            <select value={dietForm.status || 'DRAFT'} onChange={e => setDietForm({ ...dietForm, status: e.target.value as any })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none">
+                                                <option value="DRAFT">Draft</option>
+                                                <option value="ACTIVE">Active (Auto-Deduct)</option>
+                                                <option value="ARCHIVED">Archived</option>
+                                            </select>
+                                        </div>
+                                    </div>
 
-                                            <div className="flex items-center justify-between text-sm text-gray-500 pt-2 border-t border-gray-50">
-                                                <span className="flex items-center gap-1"><Beef size={14} /> {plan.assignedAnimalIds.length} Animals Assigned</span>
-                                                <button onClick={() => openEditDiet(plan)} className="text-emerald-600 font-medium text-xs hover:underline">Manage Assignments</button>
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Assign To</label>
+                                            <select value={dietForm.targetType || 'CATEGORY'} onChange={e => setDietForm({ ...dietForm, targetType: e.target.value as any, targetId: '' })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none">
+                                                <option value="CATEGORY">Category (e.g. Milking)</option>
+                                                <option value="GROUP">Group (Specific Set)</option>
+                                                <option value="INDIVIDUAL">Individual Animal</option>
+                                            </select>
+                                        </div>
+
+                                        <div className="md:col-span-2">
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Target Selection</label>
+                                            {dietForm.targetType === 'CATEGORY' ? (
+                                                <select value={dietForm.targetId || ''} onChange={e => setDietForm({ ...dietForm, targetId: e.target.value, targetName: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none">
+                                                    <option value="">Select Category...</option>
+                                                    {[{ id: 'MILKING', name: 'Milking Cows' }, { id: 'DRY', name: 'Dry Cows' }, { id: 'CALF', name: 'Calves' }, { id: 'BULL', name: 'Bulls' }].map(c => (
+                                                        <option key={c.id} value={c.name}>{c.name}</option>
+                                                    ))}
+                                                </select>
+                                            ) : dietForm.targetType === 'INDIVIDUAL' ? (
+                                                <select value={dietForm.targetId || ''} onChange={e => {
+                                                    const animal = state.livestock.find(l => l.id === e.target.value);
+                                                    setDietForm({ ...dietForm, targetId: e.target.value, targetName: animal?.tagId });
+                                                }} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none">
+                                                    <option value="">Select Animal...</option>
+                                                    {state.livestock.filter(l => l.status === 'ACTIVE').map(l => (
+                                                        <option key={l.id} value={l.id}>{l.tagId} ({l.breed})</option>
+                                                    ))}
+                                                </select>
+                                            ) : (
+                                                <input type="text" disabled placeholder="Group selection logic here..." className="w-full border border-gray-300 bg-gray-100 rounded-lg px-4 py-2 outline-none" />
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    {/* STEP 2: INGREDIENTS */}
+                                    <div>
+                                        <div className="flex justify-between items-center mb-2">
+                                            <label className="block text-sm font-medium text-gray-700">Ration Formulation (Daily per Head)</label>
+                                            <button
+                                                onClick={() => {
+                                                    const newItem = { id: Math.random().toString(36).substr(2, 9), inventoryId: '', inventoryName: '', quantity: 0, unit: 'kg' };
+                                                    setDietForm(prev => ({ ...prev, items: [...(prev.items || []), newItem] }));
+                                                }}
+                                                className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-800 px-3 py-1 rounded font-bold transition-colors"
+                                            >
+                                                + Add Ingredient
+                                            </button>
+                                        </div>
+
+                                        <div className="bg-gray-50 rounded-xl p-4 space-y-3 border border-gray-200">
+                                            {(dietForm.items || []).length === 0 && <p className="text-sm text-gray-400 italic text-center py-2">No ingredients added.</p>}
+
+                                            {dietForm.items?.map((item, index) => (
+                                                <div key={item.id} className="grid grid-cols-12 gap-2 items-center">
+                                                    <div className="col-span-5">
+                                                        <select
+                                                            value={item.inventoryId}
+                                                            onChange={e => {
+                                                                const inv = state.feed.find(f => f.id === e.target.value);
+                                                                const newItems = [...(dietForm.items || [])];
+                                                                newItems[index] = { ...item, inventoryId: e.target.value, inventoryName: inv?.name || '', unit: inv?.unit || 'kg', costPerUnit: inv?.unitCost };
+                                                                setDietForm({ ...dietForm, items: newItems });
+                                                            }}
+                                                            className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
+                                                        >
+                                                            <option value="">Select Feed...</option>
+                                                            {state.feed.filter(f => f.category !== 'MEDICINE').map(f => (
+                                                                <option key={f.id} value={f.id}>{f.name} (Stock: {f.quantity} {f.unit})</option>
+                                                            ))}
+                                                        </select>
+                                                    </div>
+                                                    <div className="col-span-3">
+                                                        <div className="relative">
+                                                            <input
+                                                                type="number"
+                                                                value={item.quantity}
+                                                                onChange={e => {
+                                                                    const newItems = [...(dietForm.items || [])];
+                                                                    newItems[index] = { ...item, quantity: parseFloat(e.target.value) };
+                                                                    setDietForm({ ...dietForm, items: newItems });
+                                                                }}
+                                                                className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
+                                                                placeholder="0.00"
+                                                            />
+                                                            <span className="absolute right-2 top-1.5 text-xs text-gray-400">{item.unit}</span>
+                                                        </div>
+                                                    </div>
+                                                    <div className="col-span-3 text-right text-xs text-gray-500">
+                                                        Est. Cost: <span className="font-bold text-emerald-600">{(item.quantity * (item.costPerUnit || 0)).toFixed(1)}</span>
+                                                    </div>
+                                                    <div className="col-span-1 text-right">
+                                                        <button onClick={() => setDietForm(prev => ({ ...prev, items: prev.items?.filter((_, i) => i !== index) }))} className="text-red-400 hover:text-red-600"><X size={16} /></button>
+                                                    </div>
+                                                </div>
+                                            ))}
+
+                                            {/* TOTALS */}
+                                            <div className="border-t border-gray-200 mt-2 pt-2 flex justify-between items-center bg-white p-2 rounded border-emerald-100">
+                                                <span className="text-sm font-bold text-gray-700">Total Ration Cost:</span>
+                                                <span className="text-lg font-black text-emerald-600">
+                                                    PKR {(dietForm.items?.reduce((sum, item) => sum + (item.quantity * (item.costPerUnit || 0)), 0) || 0).toLocaleString()} <span className="text-xs text-gray-400 font-medium">/ animal / day</span>
+                                                </span>
                                             </div>
                                         </div>
                                     </div>
-                                ))}
-                                {state.dietPlans.length === 0 && (
-                                    <div className="col-span-full p-8 bg-gray-50 rounded-xl border border-dashed border-gray-300 text-center">
-                                        <Utensils className="mx-auto text-gray-300 mb-2" size={48} />
-                                        <p className="text-gray-500">No diet plans created yet.</p>
+
+                                    <div className="pt-4 flex justify-end gap-3">
+                                        <button onClick={() => setViewMode('LIST')} className="px-6 py-2 text-gray-500 hover:text-gray-700 font-medium">Cancel</button>
+                                        <button onClick={handleDietSubmit} className="px-6 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 font-medium shadow-sm">Save Plan</button>
                                     </div>
-                                )}
-                            </div>
-                        </div>
-                    ) : (
-                        <div className="animate-fade-in max-w-4xl mx-auto">
-                            <div className="flex items-center gap-4 mb-6">
-                                <button onClick={() => setViewMode('LIST')} className="bg-white p-2 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">
-                                    <ArrowLeft size={20} />
-                                </button>
-                                <h3 className="text-xl font-bold text-gray-800">{editingDiet ? 'Edit Diet Plan' : 'Create Nutrition Plan'}</h3>
-                            </div>
-
-                            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-6">
-                                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                                    <div className="md:col-span-2">
-                                        <label className="block text-sm font-medium text-gray-700 mb-1">Plan Name</label>
-                                        <input type="text" value={dietForm.name} onChange={e => setDietForm({ ...dietForm, name: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" placeholder="e.g. High Protein Finisher" />
-                                    </div>
-                                    <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-1">Schedule Type</label>
-                                        <select value={dietForm.scheduleType} onChange={e => setDietForm({ ...dietForm, scheduleType: e.target.value as any })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none">
-                                            <option value="DAILY">Daily Routine</option>
-                                            <option value="WEEKLY">Weekly Plan</option>
-                                            <option value="MONTHLY">Monthly Target</option>
-                                        </select>
-                                    </div>
-                                </div>
-
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">Plan Details / Chart</label>
-                                    <textarea
-                                        value={dietForm.description}
-                                        onChange={e => setDietForm({ ...dietForm, description: e.target.value })}
-                                        className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none h-40 font-mono text-sm"
-                                        placeholder={`Time | Feed Type | Quantity\n----------------------------\n07:00 | Silage    | 5kg\n12:00 | Grazing   | Free\n18:00 | Hay Mix   | 3kg`}
-                                    ></textarea>
-                                    <p className="text-xs text-gray-400 mt-2">Enter the schedule, quantities, or chart details here.</p>
-                                </div>
-
-                                <div className="pt-4 border-t border-gray-100">
-                                    <h4 className="font-bold text-gray-800 mb-3 flex items-center gap-2"><Beef size={18} /> Assign Animals</h4>
-                                    <p className="text-sm text-gray-500 mb-4">Select which animals are following this diet plan.</p>
-
-                                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 max-h-60 overflow-y-auto bg-gray-50 p-4 rounded-lg border border-gray-200">
-                                        {state.livestock.filter(l => l.status === 'ACTIVE').map(animal => (
-                                            <label key={animal.id} className="flex items-center gap-3 p-2 bg-white border border-gray-100 rounded cursor-pointer hover:bg-emerald-50 transition-colors">
-                                                <input
-                                                    type="checkbox"
-                                                    checked={dietForm.assignedAnimalIds?.includes(animal.id) || false}
-                                                    onChange={() => toggleAnimalAssignment(animal.id)}
-                                                    className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500 border-gray-300"
-                                                />
-                                                <div>
-                                                    <div className="font-bold text-xs text-gray-800">{animal.tagId}</div>
-                                                    <div className="text-[10px] text-gray-500">{animal.breed} • {animal.category}</div>
-                                                </div>
-                                            </label>
-                                        ))}
-                                    </div>
-                                </div>
-
-                                <div className="pt-4 flex justify-end gap-3">
-                                    <button onClick={() => setViewMode('LIST')} className="px-6 py-2 text-gray-500 hover:text-gray-700 font-medium">Cancel</button>
-                                    <button onClick={handleDietSubmit} className="px-6 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 font-medium shadow-sm">Save Plan</button>
                                 </div>
                             </div>
-                        </div>
-                    )}
-                </>
-            )}
-        </div>
+                        )}
+                    </>
+
+                )
+            }
+        </div >
     );
 };

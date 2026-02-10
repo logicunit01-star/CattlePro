@@ -218,44 +218,40 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
 
     return (
         <div className="space-y-6 animate-fade-in">
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                <h2 className="text-2xl font-bold text-gray-800">Financial Management</h2>
-                <div className="bg-white border border-gray-200 rounded-lg p-3 shadow-sm flex gap-4">
-                    <div className="text-right">
-                        <p className="text-xs text-gray-500 uppercase font-bold">Revenue</p>
-                        <p className="text-sm font-bold text-green-600">PKR {totalSales.toLocaleString()}</p>
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-4">
+                <h2 className="text-3xl font-extrabold text-slate-800 tracking-tight font-display">Financial Management</h2>
+                <div className="flex gap-4 w-full md:w-auto">
+                    <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex-1 md:w-40 premium-card">
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Total Revenue</p>
+                        <p className="text-xl font-extrabold text-emerald-600">PKR {totalSales.toLocaleString()}</p>
                     </div>
-                    <div className="w-px bg-gray-200"></div>
-                    <div className="text-right">
-                        <p className="text-xs text-gray-500 uppercase font-bold">Expense</p>
-                        <p className="text-sm font-bold text-red-600">PKR {totalExpenses.toLocaleString()}</p>
+                    <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex-1 md:w-40 premium-card">
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Total Expenses</p>
+                        <p className="text-xl font-extrabold text-red-500">PKR {totalExpenses.toLocaleString()}</p>
                     </div>
-                    <div className="w-px bg-gray-200"></div>
-                    <div className="text-right">
-                        <p className="text-xs text-gray-500 uppercase font-bold">Net Profit</p>
-                        <p className={`text-sm font-bold ${(totalSales - totalExpenses) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                            PKR {(totalSales - totalExpenses).toLocaleString()}
-                        </p>
+                    <div className={`p-4 rounded-2xl shadow-lg flex-1 md:w-48 text-white ${(totalSales - totalExpenses) >= 0 ? 'bg-gradient-to-br from-emerald-500 to-teal-600 shadow-emerald-200' : 'bg-gradient-to-br from-red-500 to-pink-600 shadow-red-200'}`}>
+                        <p className="text-[10px] font-bold text-white/80 uppercase tracking-widest mb-1">Net Profit</p>
+                        <p className="text-2xl font-extrabold">PKR {(totalSales - totalExpenses).toLocaleString()}</p>
                     </div>
                 </div>
             </div>
 
             {/* Navigation Tabs */}
-            <div className="flex space-x-4 border-b border-gray-200">
+            <div className="flex bg-slate-100/50 p-1.5 rounded-xl gap-2 w-full md:w-fit mb-6">
                 <button
                     onClick={() => setActiveTab('EXPENSES')}
-                    className={`pb-3 px-4 text-sm font-medium transition-colors ${activeTab === 'EXPENSES'
-                        ? 'border-b-2 border-emerald-500 text-emerald-700'
-                        : 'text-gray-500 hover:text-gray-700'
+                    className={`flex-1 md:flex-none px-6 py-2.5 rounded-lg text-sm font-bold transition-all ${activeTab === 'EXPENSES'
+                        ? 'bg-white text-slate-800 shadow-sm ring-1 ring-slate-200'
+                        : 'text-slate-400 hover:text-slate-600 hover:bg-slate-200/50'
                         }`}
                 >
                     Expenses & Operations
                 </button>
                 <button
                     onClick={() => setActiveTab('SALES')}
-                    className={`pb-3 px-4 text-sm font-medium transition-colors ${activeTab === 'SALES'
-                        ? 'border-b-2 border-emerald-500 text-emerald-700'
-                        : 'text-gray-500 hover:text-gray-700'
+                    className={`flex-1 md:flex-none px-6 py-2.5 rounded-lg text-sm font-bold transition-all ${activeTab === 'SALES'
+                        ? 'bg-white text-slate-800 shadow-sm ring-1 ring-slate-200'
+                        : 'text-slate-400 hover:text-slate-600 hover:bg-slate-200/50'
                         }`}
                 >
                     Sales & Revenue
@@ -267,9 +263,9 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                     <div className="flex justify-end">
                         <button
                             onClick={() => setViewMode('ADD_EXPENSE')}
-                            className="flex items-center gap-2 text-sm font-medium text-white bg-emerald-600 px-4 py-2 rounded-lg hover:bg-emerald-700 transition-colors shadow-sm"
+                            className="flex items-center gap-2 text-sm font-bold text-white bg-gradient-to-r from-emerald-500 to-teal-600 px-5 py-2.5 rounded-xl hover:shadow-lg hover:-translate-y-0.5 transition-all shadow-emerald-200 shadow-md"
                         >
-                            <Plus size={16} /> Log Expense
+                            <Plus size={18} /> Log Expense
                         </button>
                     </div>
                     <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
@@ -319,9 +315,9 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                     <div className="flex justify-end">
                         <button
                             onClick={() => setViewMode('ADD_SALE')}
-                            className="flex items-center gap-2 text-sm font-medium text-white bg-emerald-600 px-4 py-2 rounded-lg hover:bg-emerald-700 transition-colors shadow-sm"
+                            className="flex items-center gap-2 text-sm font-bold text-white bg-gradient-to-r from-emerald-500 to-teal-600 px-5 py-2.5 rounded-xl hover:shadow-lg hover:-translate-y-0.5 transition-all shadow-emerald-200 shadow-md"
                         >
-                            <Plus size={16} /> Record Sale
+                            <Plus size={18} /> Record New Sale
                         </button>
                     </div>
                     <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">

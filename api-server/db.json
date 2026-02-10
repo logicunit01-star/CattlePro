@@ -1,6 +1,44 @@
 {
-  "livestock": [],
-  "expenses": [],
+  "livestock": [
+    {
+      "tagId": "be-1101",
+      "category": "Breeding",
+      "breed": "asdfad",
+      "gender": "MALE",
+      "weight": 122,
+      "dob": "",
+      "purchaseDate": "2026-02-10",
+      "purchasePrice": 12222,
+      "status": "ACTIVE",
+      "location": "aa",
+      "notes": "",
+      "imageUrl": "",
+      "medicalHistory": [],
+      "breedingHistory": [],
+      "weightHistory": [],
+      "milkProductionHistory": [],
+      "serviceDetails": {
+        "feedPlan": "BASIC",
+        "monthlyFee": 0,
+        "specialInstructions": ""
+      },
+      "id": "hcbs6u5na",
+      "species": "CATTLE",
+      "farmId": "farm-1"
+    }
+  ],
+  "expenses": [
+    {
+      "id": "purch_exp_hcbs6u5na",
+      "farmId": "farm-1",
+      "category": "PURCHASE",
+      "amount": 12222,
+      "date": "2026-02-10",
+      "description": "Purchase of Animal: be-1101 (asdfad)",
+      "relatedAnimalId": "hcbs6u5na",
+      "farmName": "Farm A - Lahore"
+    }
+  ],
   "sales": [],
   "feed": [],
   "infrastructure": [],

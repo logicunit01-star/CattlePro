@@ -1,5 +1,5 @@
 
-import { Livestock, MedicalRecord, Expense, Sale, FeedInventory, Infrastructure, DietPlan, InseminationRecord, WeightRecord, MilkRecord, Entity, LedgerRecord } from '../types';
+import { Livestock, MedicalRecord, Expense, Sale, FeedInventory, Infrastructure, DietPlan, InseminationRecord, WeightRecord, MilkRecord, Entity, LedgerRecord, ConsumptionLog, TreatmentProtocol, TreatmentLog } from '../types';
 
 const API_BASE_URL = 'http://localhost:3001/api';
 
@@ -223,6 +223,59 @@ export const backendService = {
     deleteDietPlan: async (id: string): Promise<void> => {
         const res = await fetch(`${API_BASE_URL}/operations/diet-plans/${id}`, { method: 'DELETE' });
         await handleDeleteResponse(res);
+    },
+
+    // Consumption Logs
+    getConsumptionLogs: async (): Promise<ConsumptionLog[]> => {
+        const res = await fetch(`${API_BASE_URL}/operations/consumption-logs`);
+        return handleResponse(res);
+    },
+    logConsumption: async (logs: ConsumptionLog[]): Promise<void> => {
+        const res = await fetch(`${API_BASE_URL}/operations/consumption-logs/batch`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(logs),
+        });
+        await handleResponse(res);
+    },
+
+    // Medicine Module
+    getTreatmentProtocols: async (): Promise<TreatmentProtocol[]> => {
+        const res = await fetch(`${API_BASE_URL}/operations/treatment-protocols`);
+        return handleResponse(res);
+    },
+    createTreatmentProtocol: async (data: TreatmentProtocol): Promise<TreatmentProtocol> => {
+        const res = await fetch(`${API_BASE_URL}/operations/treatment-protocols`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data),
+        });
+        return handleResponse(res);
+    },
+    updateTreatmentProtocol: async (id: string, data: TreatmentProtocol): Promise<TreatmentProtocol> => {
+        const res = await fetch(`${API_BASE_URL}/operations/treatment-protocols/${id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data),
+        });
+        return handleResponse(res);
+    },
+    deleteTreatmentProtocol: async (id: string): Promise<void> => {
+        const res = await fetch(`${API_BASE_URL}/operations/treatment-protocols/${id}`, { method: 'DELETE' });
+        await handleDeleteResponse(res);
+    },
+
+    getTreatmentLogs: async (): Promise<TreatmentLog[]> => {
+        const res = await fetch(`${API_BASE_URL}/operations/treatment-logs`);
+        return handleResponse(res);
+    },
+    logTreatment: async (logs: TreatmentLog[]): Promise<void> => {
+        const res = await fetch(`${API_BASE_URL}/operations/treatment-logs/batch`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(logs),
+        });
+        await handleResponse(res);
     },
 
     // Auth (Mock)
