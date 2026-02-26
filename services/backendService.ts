@@ -80,6 +80,10 @@ export const backendService = {
         const list = await backendService.getLivestock();
         return list.find(l => l.id === id) || null;
     },
+    getLivestockById: async (id: string): Promise<Livestock | null> => {
+        const list = await backendService.getLivestock();
+        return list.find(l => l.id === id) || null;
+    },
     createLivestock: async (data: Livestock): Promise<Livestock> => {
         const res = await fetch(`${API_BASE_URL}/livestock`, {
             method: 'POST',

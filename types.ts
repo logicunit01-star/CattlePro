@@ -270,7 +270,6 @@ export interface Expense {
 
 export interface Sale {
   id: string;
-  farmId?: string; // Backend may omit; frontend infers from soldAnimalIds when missing
   itemType: 'ANIMAL' | 'MILK' | 'MANURE' | 'OTHER';
 
   // Animal Sale Specifics

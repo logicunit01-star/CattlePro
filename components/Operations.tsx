@@ -1,9 +1,7 @@
 
-import React, { useState, useEffect } from 'react';
-import { AppState, FeedInventory, Infrastructure, DietPlan, TreatmentProtocol, TreatmentLog, TreatmentItem, MaintenanceRecord, ExpenseCategory } from '../types';
-import { Warehouse, Construction, AlertCircle, Plus, Trash2, Edit2, Tag, X, Save, CheckCircle, ArrowLeft, Utensils, CalendarClock, Beef, Upload, Image as ImageIcon, Stethoscope, Pill } from 'lucide-react';
-
-export type OperationsTab = 'FEED' | 'MEDICINE' | 'SUPPLIES' | 'INFRA' | 'DIET';
+import React, { useState } from 'react';
+import { AppState, FeedInventory, Infrastructure, DietPlan } from '../types';
+import { Warehouse, Construction, AlertCircle, Plus, Trash2, Edit2, Tag, X, Save, CheckCircle, ArrowLeft, Utensils, CalendarClock, Beef, Upload, Image as ImageIcon } from 'lucide-react';
 
 interface Props {
     state: AppState;
@@ -46,29 +44,8 @@ export const Operations: React.FC<Props> = ({
     onLogTreatment,
     onAddExpense
 }) => {
-    const [activeTab, setActiveTab] = useState<OperationsTab>(initialTab);
-
-    // Sync tab when parent (sidebar) sets initialTab
-    useEffect(() => {
-        setActiveTab(initialTab);
-    }, [initialTab]);
-
-    const setActiveTabAndNotify = (tab: OperationsTab) => {
-        setActiveTab(tab);
-        onTabChange?.(tab);
-    };
-    const [viewMode, setViewMode] = useState<'LIST' | 'FORM' | 'PROTOCOL' | 'SERVICE'>('LIST');
-
-    // --- SERVICE STATE ---
-    const [servicingAsset, setServicingAsset] = useState<Infrastructure | null>(null);
-    const [serviceForm, setServiceForm] = useState<Partial<MaintenanceRecord>>({
-        date: new Date().toISOString().split('T')[0],
-        type: 'PREVENTIVE',
-        description: '',
-        cost: 0,
-        performedBy: '',
-        nextServiceDate: ''
-    });
+    const [activeTab, setActiveTab] = useState<'FEED' | 'MEDICINE' | 'INFRA' | 'DIET'>('FEED');
+    const [viewMode, setViewMode] = useState<'LIST' | 'FORM'>('LIST');
 
     // --- FEED STATE ---
     const [editingFeed, setEditingFeed] = useState<FeedInventory | null>(null);
@@ -236,20 +213,7 @@ export const Operations: React.FC<Props> = ({
         };
         try {
             if (editingFeed) await onUpdateFeed(item);
-            else {
-                await onAddFeed(item);
-                if (createExpense && item.unitCost && item.quantity) {
-                    const expenseCategory = item.category === 'MEDICINE' ? ExpenseCategory.MEDICAL : (item.category === 'FEED' ? ExpenseCategory.FEED : ExpenseCategory.PURCHASE);
-                    await onAddExpense({
-                        id: Math.random().toString(36).substr(2, 9),
-                        farmId: state.currentFarmId!,
-                        date: new Date().toISOString().split('T')[0],
-                        amount: item.unitCost * item.quantity,
-                        description: `Purchase of ${item.category}: ${item.name}`,
-                        category: expenseCategory
-                    });
-                }
-            }
+            else await onAddFeed(item);
             setViewMode('LIST');
         } catch (e) {
             console.error(e);
@@ -278,19 +242,7 @@ export const Operations: React.FC<Props> = ({
         };
         try {
             if (editingInfra) await onUpdateInfrastructure(item);
-            else {
-                await onAddInfrastructure(item);
-                if (createExpense && item.value) {
-                    await onAddExpense({
-                        id: Math.random().toString(36).substr(2, 9),
-                        farmId: state.currentFarmId!,
-                        date: item.purchaseDate!,
-                        amount: item.value,
-                        description: `Purchase of Asset: ${item.name} (${item.assetTag})`,
-                        category: ExpenseCategory.INFRASTRUCTURE
-                    });
-                }
-            }
+            else await onAddInfrastructure(item);
             setViewMode('LIST');
             setInfraForm({ name: '', assetTag: '', category: 'EQUIPMENT', status: 'OPERATIONAL', location: '', value: 0, purchaseDate: '', imageUrl: '' });
         } catch (e) {
@@ -299,92 +251,15 @@ export const Operations: React.FC<Props> = ({
         }
     };
 
-    const openService = (item: Infrastructure) => {
-        setServicingAsset(item);
-        setServiceForm({
-            date: new Date().toISOString().split('T')[0],
-            type: 'PREVENTIVE',
-            description: '',
-            cost: 0,
-            performedBy: '',
-            nextServiceDate: ''
-        });
-        setCreateExpense(true); // Default to logging expense for service
-        setViewMode('SERVICE');
-    };
-
-    const handleServiceSubmit = async () => {
-        if (!servicingAsset || !serviceForm.date) return alert("Service date required");
-
-        const record: MaintenanceRecord = {
-            id: Math.random().toString(36).substr(2, 9),
-            infrastructureId: servicingAsset.id,
-            date: serviceForm.date!,
-            type: (serviceForm.type as any) || 'PREVENTIVE',
-            description: serviceForm.description || 'Routine Maintenance',
-            cost: Number(serviceForm.cost) || 0,
-            performedBy: serviceForm.performedBy || 'Unknown',
-            nextServiceDate: serviceForm.nextServiceDate
-        };
-
-        const updatedAsset: Infrastructure = {
-            ...servicingAsset,
-            lastServiceDate: record.date,
-            nextServiceDue: record.nextServiceDate,
-            maintenanceLog: [...(servicingAsset.maintenanceLog || []), record],
-            status: 'OPERATIONAL' // Assume operational after service
-        };
-
-        try {
-            await onUpdateInfrastructure(updatedAsset);
-
-            if (createExpense && record.cost > 0) {
-                try {
-                    await onAddExpense({
-                        id: Math.random().toString(36).substr(2, 9),
-                        farmId: state.currentFarmId!,
-                        date: record.date!,
-                        amount: record.cost,
-                        description: `Service for ${updatedAsset.name}: ${record.description}`,
-                        category: ExpenseCategory.MAINTENANCE
-                    });
-                } catch (err) { console.error("Expense log failed", err); }
-            }
-
-            setViewMode('LIST');
-            setServicingAsset(null);
-        } catch (e) {
-            console.error(e);
-            alert("Failed to log service.");
-        }
-    };
-
     const handleDietSubmit = async () => {
-        if (!dietForm.name || (!dietForm.items || dietForm.items.length === 0)) return alert("Name and at least one ingredient required");
-        if (!state.currentFarmId) return alert("Please select a farm first.");
-
-        const rawItems = dietForm.items || [];
-        const items = rawItems
-            .filter(i => i.inventoryId && (Number(i.quantity) || 0) > 0)
-            .map(i => ({
-                id: (i as any).id || Math.random().toString(36).substr(2, 9),
-                inventoryId: i.inventoryId,
-                inventoryName: i.inventoryName || state.feed.find(f => f.id === i.inventoryId)?.name || '',
-                quantity: Number(i.quantity) || 0,
-                unit: i.unit || 'kg',
-                costPerUnit: i.costPerUnit != null ? Number(i.costPerUnit) : undefined,
-            }));
-
+        if (!dietForm.name || !dietForm.description) return alert("Name and Plan Details required");
         const plan: DietPlan = {
             id: editingDiet ? editingDiet.id : Math.random().toString(36).substr(2, 9),
             farmId: state.currentFarmId,
             name: dietForm.name!,
-            targetType: dietForm.targetType || 'CATEGORY',
-            targetId: dietForm.targetId,
-            targetName: dietForm.targetName,
-            status: dietForm.status || 'DRAFT',
-            startDate: dietForm.startDate || new Date().toISOString().split('T')[0],
-            items,
+            scheduleType: (dietForm.scheduleType as any) || 'DAILY',
+            description: dietForm.description!,
+            assignedAnimalIds: dietForm.assignedAnimalIds || []
         };
         try {
             if (editingDiet) await onUpdateDietPlan(plan);
@@ -472,6 +347,12 @@ export const Operations: React.FC<Props> = ({
                         className={`pb-3 px-2 font-medium text-sm transition-colors border-b-2 whitespace-nowrap ${activeTab === 'MEDICINE' ? 'border-emerald-500 text-emerald-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
                     >
                         Medicine Cabinet
+                    </button>
+                    <button
+                        onClick={() => setActiveTab('SUPPLIES')}
+                        className={`pb-3 px-2 font-medium text-sm transition-colors border-b-2 whitespace-nowrap ${activeTab === 'SUPPLIES' ? 'border-emerald-500 text-emerald-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                    >
+                        Farm Supplies
                     </button>
                     <button
                         onClick={() => setActiveTabAndNotify('SUPPLIES')}
@@ -1261,15 +1142,9 @@ export const Operations: React.FC<Props> = ({
                                                     </div>
                                                 </div>
 
-                                                <div className="space-y-2 mb-4">
-                                                    {(plan.items || []).slice(0, 3).map((item, idx) => (
-                                                        <div key={idx} className="flex justify-between text-sm text-gray-600 bg-gray-50 px-3 py-1.5 rounded">
-                                                            <span>{item.inventoryName}</span>
-                                                            <span className="font-bold">{item.quantity} {item.unit}</span>
-                                                        </div>
-                                                    ))}
-                                                    {(plan.items || []).length > 3 && <div className="text-xs text-center text-gray-400">+{(plan.items || []).length - 3} more ingredients</div>}
-                                                </div>
+                                            <div className="bg-gray-50 rounded-lg p-4 text-sm text-gray-700 whitespace-pre-line leading-relaxed mb-4 h-32 overflow-y-auto custom-scrollbar">
+                                                {plan.description}
+                                            </div>
 
                                                 <div className="flex items-center justify-between text-sm text-gray-500 pt-2 border-t border-gray-50">
                                                     <span className="font-bold text-gray-700">Cost: PKR {plan.totalCostPerDay?.toLocaleString() || 0}/day</span>
@@ -1312,115 +1187,38 @@ export const Operations: React.FC<Props> = ({
                                         </div>
                                     </div>
 
-                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                                        <div>
-                                            <label className="block text-sm font-medium text-gray-700 mb-1">Assign To</label>
-                                            <select value={dietForm.targetType || 'CATEGORY'} onChange={e => setDietForm({ ...dietForm, targetType: e.target.value as any, targetId: '', targetName: '' })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none">
-                                                <option value="ALL">All Animals (Farm)</option>
-                                                <option value="CATEGORY">Category (e.g. Milking)</option>
-                                                <option value="INDIVIDUAL">Individual Animal</option>
-                                                <option value="GROUP">Group (Specific Set)</option>
-                                            </select>
-                                        </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Plan Details / Chart</label>
+                                    <textarea
+                                        value={dietForm.description}
+                                        onChange={e => setDietForm({ ...dietForm, description: e.target.value })}
+                                        className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none h-40 font-mono text-sm"
+                                        placeholder={`Time | Feed Type | Quantity\n----------------------------\n07:00 | Silage    | 5kg\n12:00 | Grazing   | Free\n18:00 | Hay Mix   | 3kg`}
+                                    ></textarea>
+                                    <p className="text-xs text-gray-400 mt-2">Enter the schedule, quantities, or chart details here.</p>
+                                </div>
 
-                                        <div className="md:col-span-2">
-                                            <label className="block text-sm font-medium text-gray-700 mb-1">Target Selection</label>
-                                            {dietForm.targetType === 'ALL' ? (
-                                                <p className="text-sm text-gray-500 py-2">All active animals on the selected farm will receive this ration when you run Process Today&apos;s Feed.</p>
-                                            ) : dietForm.targetType === 'CATEGORY' ? (
-                                                <select value={dietForm.targetId || ''} onChange={e => setDietForm({ ...dietForm, targetId: e.target.value, targetName: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none">
-                                                    <option value="">Select Category...</option>
-                                                    {[{ id: 'MILKING', name: 'Milking Cows' }, { id: 'DRY', name: 'Dry Cows' }, { id: 'CALF', name: 'Calves' }, { id: 'BULL', name: 'Bulls' }].map(c => (
-                                                        <option key={c.id} value={c.name}>{c.name}</option>
-                                                    ))}
-                                                </select>
-                                            ) : dietForm.targetType === 'INDIVIDUAL' ? (
-                                                <select value={dietForm.targetId || ''} onChange={e => {
-                                                    const animal = state.livestock.find(l => l.id === e.target.value);
-                                                    setDietForm({ ...dietForm, targetId: e.target.value, targetName: animal?.tagId });
-                                                }} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none">
-                                                    <option value="">Select Animal...</option>
-                                                    {(state.livestock.filter(l => l.status === 'ACTIVE' && (!state.currentFarmId || l.farmId === state.currentFarmId))).map(l => (
-                                                        <option key={l.id} value={l.id}>{l.tagId} ({l.breed})</option>
-                                                    ))}
-                                                </select>
-                                            ) : (
-                                                <input type="text" disabled placeholder="Group selection logic here..." className="w-full border border-gray-300 bg-gray-100 rounded-lg px-4 py-2 outline-none" />
-                                            )}
-                                        </div>
-                                    </div>
+                                <div className="pt-4 border-t border-gray-100">
+                                    <h4 className="font-bold text-gray-800 mb-3 flex items-center gap-2"><Beef size={18} /> Assign Animals</h4>
+                                    <p className="text-sm text-gray-500 mb-4">Select which animals are following this diet plan.</p>
 
-                                    {/* STEP 2: INGREDIENTS */}
-                                    <div>
-                                        <div className="flex justify-between items-center mb-2">
-                                            <label className="block text-sm font-medium text-gray-700">Ration Formulation (Daily per Head)</label>
-                                            <button
-                                                onClick={() => {
-                                                    const newItem = { id: Math.random().toString(36).substr(2, 9), inventoryId: '', inventoryName: '', quantity: 0, unit: 'kg' };
-                                                    setDietForm(prev => ({ ...prev, items: [...(prev.items || []), newItem] }));
-                                                }}
-                                                className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-800 px-3 py-1 rounded font-bold transition-colors"
-                                            >
-                                                + Add Ingredient
-                                            </button>
-                                        </div>
-
-                                        <div className="bg-gray-50 rounded-xl p-4 space-y-3 border border-gray-200">
-                                            {(dietForm.items || []).length === 0 && <p className="text-sm text-gray-400 italic text-center py-2">No ingredients added.</p>}
-
-                                            {dietForm.items?.map((item, index) => (
-                                                <div key={item.id} className="grid grid-cols-12 gap-2 items-center">
-                                                    <div className="col-span-5">
-                                                        <select
-                                                            value={item.inventoryId}
-                                                            onChange={e => {
-                                                                const inv = state.feed.find(f => f.id === e.target.value);
-                                                                const newItems = [...(dietForm.items || [])];
-                                                                newItems[index] = { ...item, inventoryId: e.target.value, inventoryName: inv?.name || '', unit: inv?.unit || 'kg', costPerUnit: inv?.unitCost };
-                                                                setDietForm({ ...dietForm, items: newItems });
-                                                            }}
-                                                            className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
-                                                        >
-                                                            <option value="">Select Feed...</option>
-                                                            {state.feed.filter(f => (f.category || 'FEED') === 'FEED').map(f => (
-                                                                <option key={f.id} value={f.id}>{f.name} (Stock: {f.quantity} {f.unit || 'kg'})</option>
-                                                            ))}
-                                                        </select>
-                                                    </div>
-                                                    <div className="col-span-3">
-                                                        <div className="relative">
-                                                            <input
-                                                                type="number"
-                                                                value={item.quantity}
-                                                                onChange={e => {
-                                                                    const newItems = [...(dietForm.items || [])];
-                                                                    newItems[index] = { ...item, quantity: parseFloat(e.target.value) };
-                                                                    setDietForm({ ...dietForm, items: newItems });
-                                                                }}
-                                                                className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
-                                                                placeholder="0.00"
-                                                            />
-                                                            <span className="absolute right-2 top-1.5 text-xs text-gray-400">{item.unit}</span>
-                                                        </div>
-                                                    </div>
-                                                    <div className="col-span-3 text-right text-xs text-gray-500">
-                                                        Est. Cost: <span className="font-bold text-emerald-600">{(item.quantity * (item.costPerUnit || 0)).toFixed(1)}</span>
-                                                    </div>
-                                                    <div className="col-span-1 text-right">
-                                                        <button onClick={() => setDietForm(prev => ({ ...prev, items: prev.items?.filter((_, i) => i !== index) }))} className="text-red-400 hover:text-red-600"><X size={16} /></button>
-                                                    </div>
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 max-h-60 overflow-y-auto bg-gray-50 p-4 rounded-lg border border-gray-200">
+                                        {state.livestock.filter(l => l.status === 'ACTIVE').map(animal => (
+                                            <label key={animal.id} className="flex items-center gap-3 p-2 bg-white border border-gray-100 rounded cursor-pointer hover:bg-emerald-50 transition-colors">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={dietForm.assignedAnimalIds?.includes(animal.id) || false}
+                                                    onChange={() => toggleAnimalAssignment(animal.id)}
+                                                    className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500 border-gray-300"
+                                                />
+                                                <div>
+                                                    <div className="font-bold text-xs text-gray-800">{animal.tagId}</div>
+                                                    <div className="text-[10px] text-gray-500">{animal.breed} • {animal.category}</div>
                                                 </div>
-                                            ))}
-
-                                            {/* TOTALS */}
-                                            <div className="border-t border-gray-200 mt-2 pt-2 flex justify-between items-center bg-white p-2 rounded border-emerald-100">
-                                                <span className="text-sm font-bold text-gray-700">Total Ration Cost:</span>
-                                                <span className="text-lg font-black text-emerald-600">
-                                                    PKR {(dietForm.items?.reduce((sum, item) => sum + (item.quantity * (item.costPerUnit || 0)), 0) || 0).toLocaleString()} <span className="text-xs text-gray-400 font-medium">/ animal / day</span>
-                                                </span>
-                                            </div>
-                                        </div>
+                                            </label>
+                                        ))}
                                     </div>
+                                </div>
 
                                     <div className="pt-4 flex justify-end gap-3">
                                         <button onClick={() => setViewMode('LIST')} className="px-6 py-2 text-gray-500 hover:text-gray-700 font-medium">Cancel</button>

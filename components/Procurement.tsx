@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import { AppState, Expense, FeedInventory, ExpenseCategory } from '../types';
-import { Calendar, DollarSign, Truck, ShoppingCart, User, AlertTriangle, CheckCircle, Clock, Search, Layers, Archive, Activity, RefreshCw, MinusCircle, Edit2, X, Save } from 'lucide-react';
+import { Calendar, DollarSign, Truck, ShoppingCart, User, AlertTriangle, CheckCircle, Clock, Search, Layers, Archive, Activity, RefreshCw } from 'lucide-react';
 
 interface Props {
     state: AppState;
