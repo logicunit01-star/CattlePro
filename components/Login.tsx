@@ -1,16 +1,22 @@
-import React, { useState } from 'react';
-import { Tractor, Mail, Lock, LogIn, AlertCircle } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import { Tractor, User, Lock, LogIn, AlertCircle } from 'lucide-react';
 import { backendService } from '../services/backendService';
+import { getTenant } from '../services/tenantContext';
 
 interface LoginProps {
   onLoginSuccess: (user: { name: string; email: string }, token: string) => void;
 }
 
 export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
-  const [email, setEmail] = useState('');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const tenant = useMemo(() => getTenant(), []);
+  const hasUrlParams = Boolean(
+    tenant.companyName?.trim() && tenant.instanceId?.trim() && tenant.appType?.trim()
+  );
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -18,24 +24,29 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
     setIsLoading(true);
 
     try {
-      // Get admin credentials from environment variables
-      const adminEmail = import.meta.env.VITE_ADMIN_EMAIL;
-      const adminPassword = import.meta.env.VITE_ADMIN_PASSWORD;
-
-      // Validate credentials
-      if (email !== adminEmail || password !== adminPassword) {
-        setError('Invalid email or password. Please try again.');
-        setIsLoading(false);
-        return;
+      if (hasUrlParams) {
+        const realm = tenant.companyName!.trim();
+        const clientId = `${tenant.appType!.trim()}-${tenant.instanceId!.trim()}`;
+        const result = await backendService.keycloakLogin(realm, username.trim(), password, clientId);
+        localStorage.setItem('authToken', result.token);
+        localStorage.setItem('user', JSON.stringify(result.user));
+        onLoginSuccess(result.user, result.token);
+      } else {
+        const adminEmail = import.meta.env.VITE_ADMIN_EMAIL;
+        const adminPassword = import.meta.env.VITE_ADMIN_PASSWORD;
+        if (username !== adminEmail || password !== adminPassword) {
+          setError('Invalid username or password. Please try again.');
+          setIsLoading(false);
+          return;
+        }
+        const result = await backendService.login(username, password);
+        localStorage.setItem('authToken', result.token);
+        localStorage.setItem('user', JSON.stringify(result.user));
+        onLoginSuccess(result.user, result.token);
       }
-
-      // If credentials match, proceed with login
-      const result = await backendService.login(email, password);
-      localStorage.setItem('authToken', result.token);
-      localStorage.setItem('user', JSON.stringify(result.user));
-      onLoginSuccess(result.user, result.token);
-    } catch (err: any) {
-      setError(err.message || 'Invalid email or password. Please try again.');
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Login failed. Please try again.';
+      setError(message);
     } finally {
       setIsLoading(false);
     }
@@ -55,24 +66,35 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
 
         {/* Login Card */}
         <div className="bg-white rounded-2xl shadow-xl p-8 border border-gray-100">
+          {hasUrlParams && (
+            <p className="text-sm text-gray-600 mb-4 text-center">
+              Signing in to <span className="font-medium text-gray-800">{tenant.companyName}</span>
+            </p>
+          )}
+          {!hasUrlParams && (
+            <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4">
+              Open the app using the link provided by your administrator (with company, instance and app parameters in the URL).
+            </p>
+          )}
           <form onSubmit={handleSubmit} className="space-y-6">
-            {/* Email Field */}
+            {/* Username Field */}
             <div>
-              <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-2">
-                Email Address
+              <label htmlFor="username" className="block text-sm font-medium text-gray-700 mb-2">
+                Username
               </label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <Mail className="h-5 w-5 text-gray-400" />
+                  <User className="h-5 w-5 text-gray-400" />
                 </div>
                 <input
-                  id="email"
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  id="username"
+                  type="text"
+                  autoComplete="username"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
                   required
                   className="block w-full pl-10 pr-3 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all"
-                  placeholder="you@example.com"
+                  placeholder={hasUrlParams ? 'Enter your username' : 'Username'}
                   disabled={isLoading}
                 />
               </div>
@@ -90,6 +112,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
                 <input
                   id="password"
                   type="password"
+                  autoComplete="current-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required
@@ -128,10 +151,10 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
             </button>
           </form>
 
-          {/* Admin Credentials Hint */}
+          {/* Hint */}
           <div className="mt-6 pt-6 border-t border-gray-200">
             <p className="text-xs text-center text-gray-500">
-              Admin credentials required to sign in
+              {hasUrlParams ? 'Sign in with your company credentials' : 'Use the link with company parameters to sign in'}
             </p>
           </div>
         </div>

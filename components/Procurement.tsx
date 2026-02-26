@@ -1,12 +1,12 @@
 
 import React, { useState } from 'react';
 import { AppState, Expense, FeedInventory, ExpenseCategory } from '../types';
-import { Calendar, DollarSign, Truck, ShoppingCart, User, AlertTriangle, CheckCircle, Clock, Search, Layers, Archive, Activity, RefreshCw } from 'lucide-react';
+import { Calendar, DollarSign, Truck, ShoppingCart, User, AlertTriangle, CheckCircle, Clock, Search, Layers, Archive, Activity, RefreshCw, MinusCircle, Edit2, X, Save } from 'lucide-react';
 
 interface Props {
     state: AppState;
-    onAddExpense: (e: Expense) => void;
-    onUpdateExpense: (e: Expense) => void;
+    onAddExpense: (e: Expense) => void | Promise<void>;
+    onUpdateExpense: (e: Expense) => void | Promise<void>;
     onAddFeed: (f: FeedInventory) => void;
     onUpdateInventory: (item: FeedInventory) => void;
     onDeleteFeed: (id: string) => void;
@@ -23,10 +23,10 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
         date: new Date().toISOString().split('T')[0],
         supplier: '',
         feedTypeId: '', // ID of the FeedInventory Master Item
-        feedCategory: 'GRASS', // For filtering: GRASS | TMR | WANDA
-        weight: 0,
+        feedCategory: 'GRASS' as 'GRASS' | 'TMR' | 'WANDA', // For filtering
+        weight: 0,       // Weight (kg) – used for GRASS only; for TMR/WANDA used with quantity
+        quantity: 0,     // Quantity (bags/bundles) – TMR & WANDA only
         rate: 0,
-        farmId: 'Main Farm',
         location: 'Feed Store',
         paymentStatus: 'PENDING'
     });
@@ -36,6 +36,9 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
         name: '', category: 'FEED', feedType: 'TMR', quantity: 0, unit: 'KG', unitCost: 0, reorderLevel: 100, location: 'Feed Store', defaultSupplier: ''
     });
     const [isAddingItem, setIsAddingItem] = useState(false);
+
+    // Edit procurement (expense) entry
+    const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
 
     // --- DERIVED DATA ---
     const feedItems = state.feed.filter(f => f.category === 'FEED');
@@ -51,38 +54,67 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
 
     // --- ACTIONS ---
 
-    const handleProcurementSubmit = () => {
-        if (!procurementForm.supplier || !procurementForm.weight || !procurementForm.rate || !procurementForm.feedTypeId) return alert("All fields required.");
+    const handleProcurementSubmit = async () => {
+        if (!state.currentFarmId) return alert("Please select a farm above to record procurement.");
+        if (!procurementForm.supplier || !procurementForm.rate || !procurementForm.feedTypeId) return alert("Required fields missing.");
+
+        const isGrass = procurementForm.feedCategory === 'GRASS';
+        const isTmrOrWanda = procurementForm.feedCategory === 'TMR' || procurementForm.feedCategory === 'WANDA';
+
+        if (isGrass && !procurementForm.weight) return alert("Weight (kg) is required for Grass.");
+        if (isTmrOrWanda && (!procurementForm.quantity || !procurementForm.weight)) return alert("Quantity and Weight are both required for TMR / WANDA.");
 
         const selectedItem = state.feed.find(f => f.id === procurementForm.feedTypeId);
         if (!selectedItem) return alert("Invalid Feed Item Selected");
 
         const totalCost = procurementForm.weight * procurementForm.rate;
+        const descGrass = `Purchase: ${selectedItem.name} (${procurementForm.weight} ${selectedItem.unit || 'kg'})`;
+        const descTmrWanda = `Purchase: ${selectedItem.name} (Qty: ${procurementForm.quantity}, Weight: ${procurementForm.weight} ${selectedItem.unit || 'kg'})`;
 
-        // 1. Create Expense
+        // 1. Create Expense (scoped to selected farm)
         const expense: Expense = {
             id: Math.random().toString(36).substr(2, 9),
+            farmId: state.currentFarmId,
             category: ExpenseCategory.FEED,
-            supplier: procurementForm.supplier,
             amount: totalCost,
             date: procurementForm.date,
-            description: `Purchase: ${selectedItem.name} (${procurementForm.weight} ${selectedItem.unit})`,
-            paymentStatus: procurementForm.paymentStatus as any,
-            farmId: procurementForm.farmId,
+            description: isGrass ? descGrass : descTmrWanda,
+            supplier: procurementForm.supplier,
+            paymentStatus: procurementForm.paymentStatus as 'PAID' | 'PENDING' | 'PARTIAL',
             location: procurementForm.location
         };
-        onAddExpense(expense);
+        try {
+            await onAddExpense(expense);
+        } catch (e) {
+            console.error(e);
+            alert("Failed to save expense. Please try again.");
+            return;
+        }
 
-        // 2. Update Inventory
+        // 2. Update Inventory (add weight in kg to stock)
         onUpdateInventory({
             ...selectedItem,
             quantity: selectedItem.quantity + procurementForm.weight,
-            unitCost: procurementForm.rate, // Update last known rate
-            defaultSupplier: procurementForm.supplier // Update default supplier to latest
+            unitCost: procurementForm.rate,
+            defaultSupplier: procurementForm.supplier
         });
 
         alert("Procurement Recorded Successfully!");
-        setProcurementForm({ ...procurementForm, weight: 0 }); // Reset weight only for rapid entry
+        setProcurementForm({ ...procurementForm, weight: 0, quantity: 0 });
+    };
+
+    const handleSaveEditExpense = async () => {
+        if (!editingExpense) return;
+        if (!editingExpense.amount || editingExpense.amount <= 0 || !editingExpense.description?.trim()) {
+            alert("Amount and Description are required.");
+            return;
+        }
+        try {
+            await onUpdateExpense(editingExpense);
+            setEditingExpense(null);
+        } catch (e) {
+            // Error already shown by parent
+        }
     };
 
     const handleAddItem = () => {
@@ -100,10 +132,16 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
 
     return (
         <div className="space-y-6 animate-fade-in pb-10">
+            {!state.currentFarmId && !state.currentLocationId && (
+                <div className="bg-amber-50 border border-amber-200 text-amber-800 px-4 py-3 rounded-xl flex items-center gap-2">
+                    <AlertTriangle size={20} />
+                    <span className="text-sm font-medium">Select a farm or city above to view and record procurement, inventory, and suppliers for that context.</span>
+                </div>
+            )}
             <div className="flex justify-between items-center">
                 <div>
                     <h2 className="text-2xl font-bold text-gray-800">Supply Chain & Inventory</h2>
-                    <p className="text-sm text-gray-500">Centralized Feed Procurement, Rations, and Supplier Management</p>
+                    <p className="text-sm text-gray-500">Centralized Feed Procurement, Rations, and Supplier Management — scoped to selected farm</p>
                 </div>
                 <div className="flex gap-2">
                     <div className="bg-white px-4 py-2 rounded-lg border border-gray-200 text-xs font-bold text-gray-500 shadow-sm">
@@ -180,7 +218,7 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                 {/* Feed Category Toggle */}
                                 <div className="flex bg-white rounded-lg p-1 border border-emerald-100 mb-4">
                                     {['GRASS', 'TMR', 'WANDA'].map(type => (
-                                        <button key={type} onClick={() => setProcurementForm({ ...procurementForm, feedCategory: type, feedTypeId: '' })} className={`flex-1 py-1.5 text-[10px] font-bold rounded transition-all ${procurementForm.feedCategory === type ? 'bg-emerald-500 text-white shadow-sm' : 'text-gray-500 hover:bg-gray-50'}`}>
+                                        <button key={type} onClick={() => setProcurementForm({ ...procurementForm, feedCategory: type as 'GRASS' | 'TMR' | 'WANDA', feedTypeId: '', quantity: 0 })} className={`flex-1 py-1.5 text-[10px] font-bold rounded transition-all ${procurementForm.feedCategory === type ? 'bg-emerald-500 text-white shadow-sm' : 'text-gray-500 hover:bg-gray-50'}`}>
                                             {type}
                                         </button>
                                     ))}
@@ -209,20 +247,51 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                     </div>
                                     <div>
                                         <label className="block text-xs font-bold text-emerald-700 uppercase mb-1">Supplier</label>
-                                        <input type="text" value={procurementForm.supplier} onChange={e => setProcurementForm({ ...procurementForm, supplier: e.target.value })} className="w-full border border-emerald-200 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500" />
+                                        <select
+                                            value={procurementForm.supplier}
+                                            onChange={e => setProcurementForm({ ...procurementForm, supplier: e.target.value })}
+                                            className="w-full border border-emerald-200 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
+                                        >
+                                            <option value="">Select Vendor...</option>
+                                            {state.entities.filter(e => e.type === 'VENDOR').map(v => (
+                                                <option key={v.id} value={v.id}>{v.name}</option>
+                                            ))}
+                                            <option value="CASH">Cash / Walk-in</option>
+                                        </select>
                                     </div>
                                 </div>
 
-                                <div className="grid grid-cols-2 gap-4">
-                                    <div>
-                                        <label className="block text-xs font-bold text-emerald-700 uppercase mb-1">Qty / Weight</label>
-                                        <input type="number" value={procurementForm.weight} onChange={e => setProcurementForm({ ...procurementForm, weight: parseFloat(e.target.value) })} className="w-full border border-emerald-200 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500" />
+                                {/* GRASS: Weight only. TMR & WANDA: Quantity + Weight */}
+                                {procurementForm.feedCategory === 'GRASS' && (
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-xs font-bold text-emerald-700 uppercase mb-1">Weight (kg)</label>
+                                            <input type="number" min={0} step={0.1} value={procurementForm.weight || ''} onChange={e => setProcurementForm({ ...procurementForm, weight: parseFloat(e.target.value) || 0 })} className="w-full border border-emerald-200 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500" placeholder="kg" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-bold text-emerald-700 uppercase mb-1">Rate (PKR/kg)</label>
+                                            <input type="number" min={0} value={procurementForm.rate || ''} onChange={e => setProcurementForm({ ...procurementForm, rate: parseFloat(e.target.value) || 0 })} className="w-full border border-emerald-200 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500" />
+                                        </div>
                                     </div>
-                                    <div>
-                                        <label className="block text-xs font-bold text-emerald-700 uppercase mb-1">Rate</label>
-                                        <input type="number" value={procurementForm.rate} onChange={e => setProcurementForm({ ...procurementForm, rate: parseFloat(e.target.value) })} className="w-full border border-emerald-200 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500" />
+                                )}
+                                {(procurementForm.feedCategory === 'TMR' || procurementForm.feedCategory === 'WANDA') && (
+                                    <div className="space-y-4">
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="block text-xs font-bold text-emerald-700 uppercase mb-1">Quantity (Bags/Bundles)</label>
+                                                <input type="number" min={0} value={procurementForm.quantity || ''} onChange={e => setProcurementForm({ ...procurementForm, quantity: parseFloat(e.target.value) || 0 })} className="w-full border border-emerald-200 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500" placeholder="No. of units" />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-bold text-emerald-700 uppercase mb-1">Weight (kg)</label>
+                                                <input type="number" min={0} step={0.1} value={procurementForm.weight || ''} onChange={e => setProcurementForm({ ...procurementForm, weight: parseFloat(e.target.value) || 0 })} className="w-full border border-emerald-200 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500" placeholder="Total kg" />
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-bold text-emerald-700 uppercase mb-1">Rate (PKR/kg)</label>
+                                            <input type="number" min={0} value={procurementForm.rate || ''} onChange={e => setProcurementForm({ ...procurementForm, rate: parseFloat(e.target.value) || 0 })} className="w-full border border-emerald-200 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500" />
+                                        </div>
                                     </div>
-                                </div>
+                                )}
 
                                 <div>
                                     <label className="block text-xs font-bold text-emerald-700 uppercase mb-1">Payment Status</label>
@@ -236,7 +305,7 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                 <div className="pt-4 border-t border-emerald-100">
                                     <div className="flex justify-between items-end mb-4">
                                         <span className="text-sm font-medium text-emerald-700">Total Payable</span>
-                                        <span className="text-2xl font-black text-emerald-800">PKR {(procurementForm.weight * procurementForm.rate).toLocaleString()}</span>
+                                        <span className="text-2xl font-black text-emerald-800">PKR {((procurementForm.weight || 0) * (procurementForm.rate || 0)).toLocaleString()}</span>
                                     </div>
                                     <button onClick={handleProcurementSubmit} className="w-full bg-emerald-600 text-white font-bold py-3 rounded-xl hover:bg-emerald-700 transition-shadow shadow-lg shadow-emerald-100">RECORD PROCUREMENT</button>
                                 </div>
@@ -250,6 +319,47 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                             <div className="p-4 border-b border-gray-100 bg-gray-50 flex justify-between items-center">
                                 <h3 className="font-bold text-gray-700">Procurement History</h3>
                             </div>
+
+                            {/* Inline edit form when editing */}
+                            {editingExpense && (
+                                <div className="p-4 bg-emerald-50 border-b border-emerald-100">
+                                    <div className="flex items-center justify-between mb-3">
+                                        <span className="text-sm font-bold text-emerald-800">Edit entry</span>
+                                        <button type="button" onClick={() => setEditingExpense(null)} className="text-gray-500 hover:text-gray-700 p-1"><X size={18} /></button>
+                                    </div>
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 items-end">
+                                        <div className="lg:col-span-2">
+                                            <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Date</label>
+                                            <input type="date" value={editingExpense.date} onChange={e => setEditingExpense({ ...editingExpense, date: e.target.value })} className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm" />
+                                        </div>
+                                        <div className="lg:col-span-4">
+                                            <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Description</label>
+                                            <input type="text" value={editingExpense.description} onChange={e => setEditingExpense({ ...editingExpense, description: e.target.value })} className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm" placeholder="Item / description" />
+                                        </div>
+                                        <div className="lg:col-span-2">
+                                            <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Supplier</label>
+                                            <input type="text" value={editingExpense.supplier ?? ''} onChange={e => setEditingExpense({ ...editingExpense, supplier: e.target.value })} className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm" />
+                                        </div>
+                                        <div className="lg:col-span-2">
+                                            <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Amount (PKR)</label>
+                                            <input type="number" min={0} value={editingExpense.amount} onChange={e => setEditingExpense({ ...editingExpense, amount: parseFloat(e.target.value) || 0 })} className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm" />
+                                        </div>
+                                        <div className="lg:col-span-2">
+                                            <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Payment</label>
+                                            <select value={editingExpense.paymentStatus ?? 'PENDING'} onChange={e => setEditingExpense({ ...editingExpense, paymentStatus: e.target.value as 'PAID' | 'PENDING' | 'PARTIAL' })} className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm bg-white">
+                                                <option value="PENDING">Pending</option>
+                                                <option value="PAID">Paid</option>
+                                                <option value="PARTIAL">Partial</option>
+                                            </select>
+                                        </div>
+                                        <div className="sm:col-span-2 lg:col-span-12 flex gap-2">
+                                            <button type="button" onClick={handleSaveEditExpense} className="bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-1.5 hover:bg-emerald-700"><Save size={14} /> Save</button>
+                                            <button type="button" onClick={() => setEditingExpense(null)} className="bg-gray-200 text-gray-700 px-4 py-2 rounded-lg text-sm font-bold hover:bg-gray-300">Cancel</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
                             <table className="min-w-full text-sm">
                                 <thead className="bg-gray-50">
                                     <tr>
@@ -258,17 +368,21 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                         <th className="px-4 py-2 text-left">Supplier</th>
                                         <th className="px-4 py-2 text-right">Amount</th>
                                         <th className="px-4 py-2 text-center">Payment</th>
+                                        <th className="px-4 py-2 text-right w-20">Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-gray-100">
-                                    {state.expenses.filter(e => e.category === 'FEED').slice(0, 10).map(e => (
-                                        <tr key={e.id} className="hover:bg-gray-50">
+                                    {state.expenses.filter(e => e.category === 'FEED').slice(0, 50).map(e => (
+                                        <tr key={e.id} className={`hover:bg-gray-50 ${editingExpense?.id === e.id ? 'bg-emerald-50' : ''}`}>
                                             <td className="px-4 py-3 text-gray-500">{e.date}</td>
                                             <td className="px-4 py-3 font-medium text-gray-800">{e.description}</td>
                                             <td className="px-4 py-3 text-gray-600">{e.supplier}</td>
                                             <td className="px-4 py-3 text-right font-bold">PKR {e.amount.toLocaleString()}</td>
                                             <td className="px-4 py-3 text-center">
-                                                <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${e.paymentStatus === 'PAID' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{e.paymentStatus || 'PENDING'}</span>
+                                                <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${e.paymentStatus === 'PAID' ? 'bg-emerald-100 text-emerald-700' : e.paymentStatus === 'PARTIAL' ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'}`}>{e.paymentStatus || 'PENDING'}</span>
+                                            </td>
+                                            <td className="px-4 py-3 text-right">
+                                                <button type="button" onClick={() => setEditingExpense({ ...e })} className="text-gray-400 hover:text-emerald-600 p-1.5 rounded-lg hover:bg-emerald-50 transition-colors" title="Edit"><Edit2 size={16} /></button>
                                             </td>
                                         </tr>
                                     ))}
@@ -344,6 +458,19 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                     </span>
                                     <span className="text-xs text-gray-400">@ PKR {item.unitCost}/{item.unit}</span>
                                 </div>
+                                <button
+                                    onClick={() => {
+                                        const qty = prompt(`Amount of ${item.name} consumed (in ${item.unit})?`);
+                                        if (qty && !isNaN(parseFloat(qty))) {
+                                            const consumed = parseFloat(qty);
+                                            onUpdateInventory({ ...item, quantity: item.quantity - consumed });
+                                            alert(`Recorded utilization of ${consumed} ${item.unit}`);
+                                        }
+                                    }}
+                                    className="w-full mb-3 bg-amber-50 text-amber-700 text-xs font-bold py-2 rounded-lg hover:bg-amber-100 flex items-center justify-center gap-2 border border-amber-200"
+                                >
+                                    <MinusCircle size={14} /> RECORD USAGE
+                                </button>
                                 <div className="pt-3 border-t border-gray-50 flex justify-between items-end">
                                     <div>
                                         <p className="text-[10px] uppercase font-bold text-gray-400">Inventory Value</p>

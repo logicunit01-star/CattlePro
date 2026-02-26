@@ -1,5 +1,5 @@
 
-import { Livestock, Expense, ExpenseCategory, FeedInventory, Infrastructure, Sale, DietPlan, Breeder, Customer, Invoice } from './types';
+import { Livestock, Expense, ExpenseCategory, FeedInventory, Infrastructure, Sale, DietPlan, Breeder, Entity, Invoice, Farm, Location } from './types';
 
 export const FIXED_CATEGORIES = ['Breeding', 'Meat', 'Dairy', 'Palai'];
 
@@ -20,6 +20,17 @@ export const COMMON_VACCINES = [
   'Pinkeye',
   'Anthrax',
   'Foot and Mouth Disease'
+];
+
+export const MOCK_LOCATIONS: Location[] = [
+  { id: 'loc-1', name: 'Lahore', type: 'CITY' },
+  { id: 'loc-2', name: 'Sahiwal', type: 'CITY' }
+];
+
+export const MOCK_FARMS: Farm[] = [
+  { id: 'farm-1', name: 'Farm A - Lahore', locationId: 'loc-1', type: 'DAIRY', currency: 'PKR', costCenterCode: 'CC-LHR-01' },
+  { id: 'farm-2', name: 'Farm B - Sahiwal', locationId: 'loc-2', type: 'MEAT', currency: 'PKR', costCenterCode: 'CC-SWL-01' },
+  { id: 'farm-3', name: 'Farm C - Sahiwal', locationId: 'loc-2', type: 'MIXED', currency: 'PKR', costCenterCode: 'CC-SWL-02' }
 ];
 
 export const MOCK_BREEDERS: Breeder[] = [
@@ -44,6 +55,7 @@ export const MOCK_BREEDERS: Breeder[] = [
 export const MOCK_LIVESTOCK: Livestock[] = [
   {
     id: '1',
+    farmId: 'farm-1',
     tagId: 'BR-001',
     species: 'CATTLE',
     ownership: 'OWNED',
@@ -95,6 +107,7 @@ export const MOCK_LIVESTOCK: Livestock[] = [
   },
   {
     id: '2',
+    farmId: 'farm-2',
     tagId: 'MT-105',
     species: 'CATTLE',
     category: 'Meat',
@@ -117,6 +130,7 @@ export const MOCK_LIVESTOCK: Livestock[] = [
   },
   {
     id: '3',
+    farmId: 'farm-1',
     tagId: 'DY-001',
     species: 'CATTLE',
     category: 'Dairy',
@@ -147,6 +161,7 @@ export const MOCK_LIVESTOCK: Livestock[] = [
   },
   {
     id: '9',
+    farmId: 'farm-1',
     tagId: 'GT-DY-01',
     species: 'GOAT',
     ownership: 'OWNED',
@@ -172,6 +187,7 @@ export const MOCK_LIVESTOCK: Livestock[] = [
   },
   {
     id: '10',
+    farmId: 'farm-1',
     tagId: 'BULL-001',
     species: 'CATTLE',
     category: 'Breeding',
@@ -192,6 +208,7 @@ export const MOCK_LIVESTOCK: Livestock[] = [
   },
   {
     id: '11',
+    farmId: 'farm-3',
     tagId: 'GT-BK-002',
     species: 'GOAT',
     category: 'Breeding',
@@ -211,6 +228,7 @@ export const MOCK_LIVESTOCK: Livestock[] = [
   },
   {
     id: '12',
+    farmId: 'farm-2',
     tagId: 'PALAI-BULL-001',
     species: 'CATTLE',
     category: 'Meat',
@@ -235,6 +253,7 @@ export const MOCK_LIVESTOCK: Livestock[] = [
   },
   {
     id: '13',
+    farmId: 'farm-1',
     tagId: 'DY-005',
     species: 'CATTLE',
     category: 'Dairy',
@@ -258,6 +277,7 @@ export const MOCK_LIVESTOCK: Livestock[] = [
   },
   {
     id: '14',
+    farmId: 'farm-1',
     tagId: 'CLF-101',
     species: 'CATTLE',
     category: 'Calf',
@@ -278,6 +298,7 @@ export const MOCK_LIVESTOCK: Livestock[] = [
   },
   {
     id: '15',
+    farmId: 'farm-3',
     tagId: 'GT-MT-05',
     species: 'GOAT',
     category: 'Meat',
@@ -297,6 +318,7 @@ export const MOCK_LIVESTOCK: Livestock[] = [
   },
   {
     id: '16',
+    farmId: 'farm-2',
     tagId: 'PALAI-GT-003',
     species: 'GOAT',
     category: 'Meat',
@@ -320,6 +342,7 @@ export const MOCK_LIVESTOCK: Livestock[] = [
   },
   {
     id: '17',
+    farmId: 'farm-1',
     tagId: 'BR-010',
     species: 'CATTLE',
     category: 'Breeding',
@@ -355,13 +378,14 @@ export const MOCK_LIVESTOCK: Livestock[] = [
 ];
 
 export const MOCK_EXPENSES: Expense[] = [
-  { id: 'e1', category: ExpenseCategory.FEED, amount: 15000, date: '2023-10-01', description: 'Bulk Hay Purchase' },
-  { id: 'e2', category: ExpenseCategory.LABOR, amount: 20000, date: '2023-10-05', description: 'Monthly Farm Hand Wages' },
+  { id: 'e1', farmId: 'farm-1', category: ExpenseCategory.FEED, amount: 15000, date: '2023-10-01', description: 'Bulk Hay Purchase' },
+  { id: 'e2', farmId: 'farm-1', category: ExpenseCategory.LABOR, amount: 20000, date: '2023-10-05', description: 'Monthly Farm Hand Wages' },
 ];
 
 export const MOCK_SALES: Sale[] = [
   {
     id: 's1',
+    farmId: 'farm-1',
     itemType: 'ANIMAL',
     soldAnimalIds: ['old_1'],
     saleType: 'SINGLE_ANIMAL',
@@ -377,13 +401,14 @@ export const MOCK_SALES: Sale[] = [
 ];
 
 export const MOCK_FEED: FeedInventory[] = [
-  { id: 'f1', name: 'Alfalfa Hay', quantity: 5000, unitCost: 30, reorderLevel: 1000 },
-  { id: 'f2', name: 'Corn Silage', quantity: 2000, unitCost: 15, reorderLevel: 500 },
+  { id: 'f1', farmId: 'farm-1', name: 'Alfalfa Hay', quantity: 5000, unitCost: 30, reorderLevel: 1000 },
+  { id: 'f2', farmId: 'farm-2', name: 'Corn Silage', quantity: 2000, unitCost: 15, reorderLevel: 500 },
 ];
 
 export const MOCK_INFRASTRUCTURE: Infrastructure[] = [
   {
     id: 'i1',
+    farmId: 'farm-1',
     name: 'John Deere 5050',
     assetTag: 'TRAC-01',
     category: 'VEHICLE',
@@ -397,21 +422,31 @@ export const MOCK_INFRASTRUCTURE: Infrastructure[] = [
 export const MOCK_DIET_PLANS: DietPlan[] = [
   {
     id: 'dp1',
-    name: 'Meat Fattening Stage 1',
-    scheduleType: 'DAILY',
-    description: 'Morning: 3kg Corn Silage + 1kg Grain Mix\nNoon: Free Grazing\nEvening: 2kg Alfalfa Hay + Minerals',
-    assignedAnimalIds: ['2']
+    farmId: 'farm-1',
+    name: 'Standard Dairy Ration',
+    targetType: 'CATEGORY',
+    targetId: 'Milking Cows',
+    targetName: 'Milking Cows',
+    status: 'ACTIVE',
+    startDate: '2023-11-01',
+    items: [
+      { id: 'item-1', inventoryId: 'f1', inventoryName: 'Alfalfa Hay', quantity: 15, unit: 'kg', costPerUnit: 30 },
+    ],
+    totalAnimals: 15,
+    costPerAnimalPerDay: 450,
+    totalCostPerDay: 6750
   }
 ];
 
-export const MOCK_CUSTOMERS: Customer[] = [
-  { id: 'CUST-001', name: 'Ali Khan', contact: '0300-1234567', status: 'ACTIVE', address: 'Lahore Cantt' },
-  { id: 'CUST-002', name: 'Usman Farm', contact: '0321-9876543', status: 'ACTIVE', address: 'Multan Road' },
+export const MOCK_CUSTOMERS: Entity[] = [
+  { id: 'CUST-001', type: 'CUSTOMER', name: 'Ali Khan', contact: '0300-1234567', status: 'ACTIVE', address: 'Lahore Cantt', openingBalance: 0, currentBalance: 0 },
+  { id: 'CUST-002', type: 'CUSTOMER', name: 'Usman Farm', contact: '0321-9876543', status: 'ACTIVE', address: 'Multan Road', openingBalance: 0, currentBalance: 0 },
 ];
 
 export const MOCK_INVOICES: Invoice[] = [
   {
     id: 'INV-1001',
+    farmId: 'farm-2',
     customerId: 'CUST-001',
     customerName: 'Ali Khan',
     createdDate: '2023-11-01',

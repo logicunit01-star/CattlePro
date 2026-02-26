@@ -1,8 +1,9 @@
 
 import React, { useState } from 'react';
-import { Livestock, LivestockSpecies, LivestockStatus, MedicalRecord, MedicalRecordType, InseminationRecord, WeightRecord, ServiceDetails, MilkRecord, Breeder, BirthRecord } from '../types';
+import { Livestock, LivestockSpecies, LivestockStatus, MedicalRecord, MedicalRecordType, InseminationRecord, WeightRecord, ServiceDetails, MilkRecord, Breeder, BirthRecord, FeedInventory, Sale, Entity } from '../types';
 import { COMMON_VACCINES, FEED_PLANS } from '../constants';
-import { Search, Plus, Tag, Scale, Settings, ArrowLeft, Save, Calendar, MapPin, Eye, Stethoscope, Dna, User, Phone, ScrollText, LineChart, Image as ImageIcon, Upload, Edit2, Milk, Droplets, Beef, Sprout, FileText, CheckCircle2, Baby, Info, Trash2, Clock, ChevronRight } from 'lucide-react';
+import { uploadImage } from '../services/uploadService';
+import { Search, Plus, Tag, Scale, Settings, ArrowLeft, Save, Calendar, MapPin, Eye, Stethoscope, Dna, User, Phone, ScrollText, LineChart, Image as ImageIcon, Upload, Edit2, Milk, Droplets, Beef, Sprout, FileText, CheckCircle2, Baby, Info, Trash2, Clock, ChevronRight, DollarSign, Skull } from 'lucide-react';
 import { LineChart as RechartsLine, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
 
 interface Props {
@@ -10,19 +11,23 @@ interface Props {
     breeders: Breeder[];
     species: LivestockSpecies;
     categories: string[];
+    entities?: Entity[];
     onAddLivestock: (c: Livestock) => void;
     onUpdateLivestock: (c: Livestock) => void;
     onDeleteLivestock: (id: string) => void | Promise<void>;
     onAddMedicalRecord: (animalId: string, record: MedicalRecord) => void;
     onAddBreedingRecord: (animalId: string, record: InseminationRecord) => void;
     onAddWeightRecord: (animalId: string, record: WeightRecord) => void;
+
     onAddMilkRecord: (animalId: string, record: MilkRecord) => void;
     onUpdateBreedingRecord: (animalId: string, record: InseminationRecord) => void;
+    inventory: FeedInventory[];
+    onAddSale: (sale: Sale) => Promise<void>;
 }
 
 type ViewMode = 'LIST' | 'ANIMAL_FORM' | 'DETAILS';
 
-export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species, categories, onAddLivestock, onUpdateLivestock, onDeleteLivestock, onAddMedicalRecord, onAddBreedingRecord, onAddWeightRecord, onAddMilkRecord, onUpdateBreedingRecord }) => {
+export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species, categories, entities = [], onAddLivestock, onUpdateLivestock, onDeleteLivestock, onAddMedicalRecord, onAddBreedingRecord, onAddWeightRecord, onAddMilkRecord, onUpdateBreedingRecord, inventory, onAddSale }) => {
     const T = {
         animal: species === 'CATTLE' ? 'Animal' : 'Goat',
         sire: species === 'CATTLE' ? 'Bull' : 'Buck',
@@ -30,9 +35,26 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
         birth: species === 'CATTLE' ? 'Calving' : 'Kidding',
         gestationDays: species === 'CATTLE' ? 283 : 150,
         offspringTag: species === 'CATTLE' ? 'CLF' : 'KID',
-        tagPlaceholder: species === 'CATTLE' ? 'EX: BR-101' : 'EX: GT-001',
+        tagPlaceholder: species === 'CATTLE' ? 'EX:BR-101' : 'EX:GT-001',
         breedPlaceholder: species === 'CATTLE' ? 'e.g. Angus, Holstein, Sahiwal' : 'e.g. Saanen, Beetal, Kamori, Dera Din Panah',
         locationPlaceholder: species === 'CATTLE' ? 'Barn A' : 'Goat Shed A',
+    };
+
+    /** Generate next Tag ID for this species: EX:BR-xxx (cattle) or EX:GT-xxx (goat). Optionally consider currentTagId when computing next (e.g. for Regenerate). */
+    const generateNextTagId = (currentTagId?: string): string => {
+        const prefix = species === 'CATTLE' ? 'EX:BR-' : 'EX:GT-';
+        const re = species === 'CATTLE' ? /^EX:BR-(\d+)$/i : /^EX:GT-(\d+)$/i;
+        let max = 0;
+        livestock.forEach((l) => {
+            if (l.species !== species) return;
+            const m = (l.tagId || '').trim().match(re);
+            if (m) max = Math.max(max, parseInt(m[1], 10));
+        });
+        if (currentTagId) {
+            const m = (currentTagId || '').trim().match(re);
+            if (m) max = Math.max(max, parseInt(m[1], 10));
+        }
+        return `${prefix}${max + 1}`;
     };
 
     const [currentView, setCurrentView] = useState<ViewMode>('LIST');
@@ -53,6 +75,15 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
     const [isAddingMilk, setIsAddingMilk] = useState(false);
     const [isBatchMode, setIsBatchMode] = useState(false);
     const [selectedBatchIds, setSelectedBatchIds] = useState<string[]>([]);
+    const [isSelling, setIsSelling] = useState(false);
+    const [saleForm, setSaleForm] = useState<Partial<Sale>>({
+        date: new Date().toISOString().split('T')[0],
+        pricePerAnimal: 0,
+        buyer: '',
+        paymentStatus: 'PAID',
+        paymentMethod: 'CASH',
+        amountReceived: 0
+    });
 
     // Form States
     const [animalForm, setAnimalForm] = useState<Omit<Partial<Livestock>, 'serviceDetails'> & { serviceDetails?: Partial<ServiceDetails> }>({
@@ -79,16 +110,19 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
     const [isPregnantEntry, setIsPregnantEntry] = useState(false);
     const [pregnantDate, setPregnantDate] = useState(new Date().toISOString().split('T')[0]);
     const [isAddingCalfEntry, setIsAddingCalfEntry] = useState(false);
-    const [calfDetails, setCalfDetails] = useState({ gender: 'FEMALE', weight: 15, ageMonths: 1, name: '' });
+    type CalfEntry = { gender: 'MALE' | 'FEMALE'; weight: number; ageMonths: number; name: string };
+    const [calfList, setCalfList] = useState<CalfEntry[]>([{ gender: 'FEMALE', weight: 15, ageMonths: 1, name: '' }]);
 
     const handleOpenAdd = () => {
+        setImageUploadError(null);
+        const nextTagId = generateNextTagId();
         setAnimalForm({
-            tagId: '', category: categories[0], breed: '', gender: 'MALE', weight: 0, dob: '', purchaseDate: '', purchasePrice: 0, status: 'ACTIVE', location: '', notes: '', imageUrl: '', medicalHistory: [], breedingHistory: [], weightHistory: [], milkProductionHistory: [],
+            tagId: nextTagId, category: categories[0], breed: '', gender: 'MALE', weight: 0, dob: '', purchaseDate: '', purchasePrice: 0, status: 'ACTIVE', location: '', notes: '', imageUrl: '', medicalHistory: [], breedingHistory: [], weightHistory: [], milkProductionHistory: [],
             serviceDetails: { feedPlan: 'BASIC', monthlyFee: 0, specialInstructions: '' }
         });
         setIsPregnantEntry(false);
         setIsAddingCalfEntry(false);
-        setCalfDetails({ gender: 'FEMALE', weight: 15, ageMonths: 1, name: '' });
+        setCalfList([{ gender: 'FEMALE', weight: 15, ageMonths: 1, name: '' }]);
         setIsEditing(false);
         setCurrentView('ANIMAL_FORM');
     };
@@ -257,33 +291,57 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
 
     const handleSaveHealth = () => {
         if (!selectedAnimal || !newHealthRecord.medicineName) return;
+
+        // Inventory Validation
+        const item = inventory.find(i => i.name === newHealthRecord.medicineName);
+        if (item && item.quantity <= 0) {
+            if (!confirm(`Warning: Stock for ${item.name} is empty (${item.quantity}). Proceed and record negative stock?`)) return;
+        }
+
         onAddMedicalRecord(selectedAnimal.id, {
             id: Math.random().toString(36).substr(2, 9),
             date: newHealthRecord.date!,
             time: newHealthRecord.time!,
             type: newHealthRecord.type!,
-            medicineName: newHealthRecord.medicineName!,
-            doctorName: newHealthRecord.doctorName!,
-            cost: Number(newHealthRecord.cost),
-            notes: newHealthRecord.notes!,
-            nextDueDate: newHealthRecord.nextDueDate,
-            imageUrl: newHealthRecord.imageUrl
+            medicineName: newHealthRecord.medicineName ?? '',
+            doctorName: newHealthRecord.doctorName ?? '',
+            cost: Number(newHealthRecord.cost) || 0,
+            notes: newHealthRecord.notes ?? '',
+            nextDueDate: (newHealthRecord.nextDueDate && newHealthRecord.nextDueDate.trim() !== '') ? newHealthRecord.nextDueDate : undefined,
+            imageUrl: newHealthRecord.imageUrl ?? ''
         });
         setIsAddingHealthRecord(false);
         setNewHealthRecord({ type: 'VACCINATION', date: new Date().toISOString().split('T')[0], medicineName: '', doctorName: '', cost: 0 });
     };
 
-    const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>, target: 'ANIMAL' | 'HEALTH' | 'BREEDING') => {
+    const [imageUploading, setImageUploading] = useState(false);
+    const [imageUploadError, setImageUploadError] = useState<string | null>(null);
+
+    const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, target: 'ANIMAL' | 'HEALTH' | 'BREEDING') => {
         const file = e.target.files?.[0];
-        if (file) {
-            const reader = new FileReader();
-            reader.onloadend = () => {
-                if (target === 'ANIMAL') setAnimalForm({ ...animalForm, imageUrl: reader.result as string });
-                if (target === 'HEALTH') setNewHealthRecord({ ...newHealthRecord, imageUrl: reader.result as string });
-                if (target === 'BREEDING') setNewBreedingRecord({ ...newBreedingRecord, imageUrl: reader.result as string });
-            };
-            reader.readAsDataURL(file);
+        if (!file) return;
+        e.target.value = '';
+
+        if (target === 'ANIMAL') {
+            setImageUploadError(null);
+            setImageUploading(true);
+            try {
+                const url = await uploadImage(file);
+                setAnimalForm(prev => ({ ...prev, imageUrl: url }));
+            } catch (err) {
+                setImageUploadError(err instanceof Error ? err.message : 'Image upload failed');
+            } finally {
+                setImageUploading(false);
+            }
+            return;
         }
+
+        const reader = new FileReader();
+        reader.onloadend = () => {
+            if (target === 'HEALTH') setNewHealthRecord(prev => ({ ...prev, imageUrl: reader.result as string }));
+            if (target === 'BREEDING') setNewBreedingRecord(prev => ({ ...prev, imageUrl: reader.result as string }));
+        };
+        reader.readAsDataURL(file);
     };
 
     const updateBirthGenders = (idx: number, gender: 'MALE' | 'FEMALE') => {
@@ -297,6 +355,94 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
         newWeights[idx] = weight;
         setBirthForm({ ...birthForm, weights: newWeights });
     };
+
+    const renderSalesModal = () => (
+        isSelling && (
+            <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+                <div className="bg-white rounded-3xl p-8 max-w-lg w-full shadow-2xl animate-fade-in">
+                    <h3 className="text-2xl font-black text-gray-800 mb-6 flex items-center gap-2"><DollarSign size={28} className="text-emerald-600" /> Sell Animals</h3>
+                    <div className="space-y-4">
+                        <div>
+                            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Selected Animals</label>
+                            <div className="p-3 bg-gray-50 rounded-lg text-sm font-medium text-gray-700">
+                                {selectedBatchIds.length > 0 ? `${selectedBatchIds.length} Animals Selected` : selectedAnimal ? `${selectedAnimal.tagId} (${selectedAnimal.breed})` : 'No Selection'}
+                            </div>
+                        </div>
+                        <div>
+                            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Buyer (Customer)</label>
+                            <select
+                                className="w-full p-3 border border-gray-200 rounded-xl outline-none focus:border-emerald-500"
+                                value={saleForm.buyer}
+                                onChange={e => setSaleForm({ ...saleForm, buyer: e.target.value })}
+                            >
+                                <option value="">Select Customer...</option>
+                                <option value="Walk-In">Walk-In / Unknown</option>
+                                {entities?.filter(e => e.type === 'CUSTOMER' || e.type === 'PALAI_CLIENT').map(c => (
+                                    <option key={c.id} value={c.name}>{c.name}</option>
+                                ))}
+                            </select>
+                        </div>
+                        <div>
+                            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Total Sale Amount (PKR)</label>
+                            <input type="number" className="w-full p-3 border border-gray-200 rounded-xl outline-none focus:border-emerald-500 font-bold text-lg" value={saleForm.amount} onChange={e => setSaleForm({ ...saleForm, amount: parseFloat(e.target.value) })} />
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Date</label>
+                                <input type="date" className="w-full p-3 border border-gray-200 rounded-xl outline-none" value={saleForm.date} onChange={e => setSaleForm({ ...saleForm, date: e.target.value })} />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Payment Status</label>
+                                <select className="w-full p-3 border border-gray-200 rounded-xl outline-none" value={saleForm.paymentStatus} onChange={e => setSaleForm({ ...saleForm, paymentStatus: e.target.value as any })}>
+                                    <option value="PAID">Paid</option>
+                                    <option value="PENDING">Pending</option>
+                                    <option value="PARTIAL">Partial</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div>
+                            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Notes</label>
+                            <input type="text" className="w-full p-3 border border-gray-200 rounded-xl outline-none" value={saleForm.notes} onChange={e => setSaleForm({ ...saleForm, notes: e.target.value })} />
+                        </div>
+                    </div>
+                    <div className="flex justify-end gap-4 mt-8">
+                        <button onClick={() => setIsSelling(false)} className="px-6 py-3 rounded-xl font-bold text-gray-500 hover:bg-gray-50 transition-all">CANCEL</button>
+                        <button onClick={async () => {
+                            if (!saleForm.buyer || !saleForm.amount) return alert("Please fill Buyer and Amount");
+                            const idsToSell = selectedBatchIds.length > 0 ? selectedBatchIds : selectedAnimal ? [selectedAnimal.id] : [];
+
+                            const sale: Sale = {
+                                id: Math.random().toString(36).substr(2, 9),
+                                itemType: 'ANIMAL',
+                                soldAnimalIds: idsToSell,
+                                saleType: idsToSell.length > 1 ? 'BULK_ANIMALS' : 'SINGLE_ANIMAL',
+                                amount: saleForm.amount || 0,
+                                amountReceived: saleForm.paymentStatus === 'PAID' ? (saleForm.amount || 0) : (saleForm.amountReceived || 0),
+                                paymentStatus: saleForm.paymentStatus || 'PAID',
+                                paymentMethod: 'CASH',
+                                date: saleForm.date || new Date().toISOString().split('T')[0],
+                                buyer: saleForm.buyer,
+                                description: saleForm.notes || `Sale of ${idsToSell.length} animals`,
+                                quantity: idsToSell.length
+                            };
+
+                            await onAddSale(sale);
+
+                            // Update status of sold animals
+                            idsToSell.forEach(id => {
+                                const animal = livestock.find(l => l.id === id);
+                                if (animal) onUpdateLivestock({ ...animal, status: 'SOLD' });
+                            });
+
+                            setIsSelling(false);
+                            setSelectedBatchIds([]);
+                            if (selectedAnimal) setCurrentView('LIST');
+                        }} className="bg-emerald-600 text-white px-8 py-3 rounded-xl font-bold shadow-xl shadow-emerald-100 hover:bg-emerald-700 transition-all">CONFIRM SALE</button>
+                    </div>
+                </div>
+            </div>
+        )
+    );
 
     if (currentView === 'ANIMAL_FORM') {
         return (
@@ -312,17 +458,28 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                         <div className="space-y-6">
                             <h4 className="text-sm font-bold text-emerald-600 uppercase tracking-widest border-b border-emerald-50 pb-2">Profile & Identification</h4>
                             <div className="flex items-center gap-6">
-                                <div className="w-40 h-40 bg-gray-50 rounded-2xl border-2 border-dashed border-gray-300 flex items-center justify-center overflow-hidden relative group cursor-pointer hover:border-emerald-400 transition-all">
-                                    {animalForm.imageUrl ? <img src={animalForm.imageUrl} className="w-full h-full object-cover" /> : getPlaceholderVisual(animalForm.category || 'Meat')}
-                                    <input type="file" accept="image/*" className="absolute inset-0 opacity-0 cursor-pointer" onChange={(e) => handleImageUpload(e, 'ANIMAL')} />
-                                    <div className="absolute inset-0 bg-black bg-opacity-40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                                        <Upload className="text-white" size={32} />
+                                <div className="space-y-1">
+                                    <div className="w-40 h-40 bg-gray-50 rounded-2xl border-2 border-dashed border-gray-300 flex items-center justify-center overflow-hidden relative group cursor-pointer hover:border-emerald-400 transition-all">
+                                        {imageUploading && (
+                                            <div className="absolute inset-0 bg-black/50 flex items-center justify-center z-10">
+                                                <div className="w-8 h-8 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                            </div>
+                                        )}
+                                        {animalForm.imageUrl ? <img src={animalForm.imageUrl} className="w-full h-full object-cover" alt="" /> : getPlaceholderVisual(animalForm.category || 'Meat')}
+                                        <input type="file" accept="image/*" className="absolute inset-0 opacity-0 cursor-pointer" disabled={imageUploading} onChange={(e) => handleImageUpload(e, 'ANIMAL')} />
+                                        <div className="absolute inset-0 bg-black bg-opacity-40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                                            <Upload className="text-white" size={32} />
+                                        </div>
                                     </div>
+                                    {imageUploadError && <p className="text-xs text-red-600">{imageUploadError}</p>}
                                 </div>
                                 <div className="flex-1 space-y-4">
                                     <div>
                                         <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Tag ID *</label>
-                                        <input type="text" value={animalForm.tagId} onChange={e => setAnimalForm({ ...animalForm, tagId: e.target.value })} className="w-full border-b-2 border-gray-100 focus:border-emerald-500 py-2 outline-none font-bold text-lg" placeholder={T.tagPlaceholder} />
+                                        <div className="flex gap-2 items-center">
+                                            <input type="text" value={animalForm.tagId} onChange={e => setAnimalForm({ ...animalForm, tagId: e.target.value })} className="flex-1 border-b-2 border-gray-100 focus:border-emerald-500 py-2 outline-none font-bold text-lg" placeholder={T.tagPlaceholder} />
+                                            <button type="button" onClick={() => setAnimalForm(prev => ({ ...prev, tagId: generateNextTagId(prev.tagId) }))} className="text-xs font-bold text-emerald-600 hover:text-emerald-700 whitespace-nowrap" title="Generate next Tag ID">New</button>
+                                        </div>
                                     </div>
                                     <div>
                                         <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Category</label>
@@ -374,6 +531,31 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                             </div>
                         </div>
 
+                        {/* Palai Specific Options */}
+                        {animalForm.category === 'Palai' && (
+                            <div className="col-span-1 md:col-span-2 bg-blue-50 rounded-2xl p-6 border border-blue-100">
+                                <h4 className="text-sm font-bold text-blue-800 uppercase tracking-widest mb-4 flex items-center gap-2"><User size={16} /> Palai Contract Details</h4>
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                    <div>
+                                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Rate Per Month (PKR)</label>
+                                        <input type="number" value={animalForm.palaiProfile?.ratePerMonth || 0} onChange={e => setAnimalForm({ ...animalForm, palaiProfile: { ...animalForm.palaiProfile, ratePerMonth: parseFloat(e.target.value), startDate: animalForm.palaiProfile?.startDate || new Date().toISOString().split('T')[0] } })} className="w-full bg-white border border-blue-200 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Feed Plan</label>
+                                        <select value={animalForm.palaiProfile?.feedPlan || 'BASIC'} onChange={e => setAnimalForm({ ...animalForm, palaiProfile: { ...animalForm.palaiProfile, feedPlan: e.target.value as any, startDate: animalForm.palaiProfile?.startDate || new Date().toISOString().split('T')[0] } })} className="w-full bg-white border border-blue-200 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500">
+                                            <option value="BASIC">Basic</option>
+                                            <option value="PREMIUM">Premium</option>
+                                            <option value="CUSTOM">Custom</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Start Date</label>
+                                        <input type="date" value={animalForm.palaiProfile?.startDate || new Date().toISOString().split('T')[0]} onChange={e => setAnimalForm({ ...animalForm, palaiProfile: { ...animalForm.palaiProfile, startDate: e.target.value } })} className="w-full bg-white border border-blue-200 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500" />
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
                         {/* Female Specific Options */}
                         {animalForm.gender === 'FEMALE' && (
                             <div className="col-span-1 md:col-span-2 bg-emerald-50 rounded-2xl p-6 border border-emerald-100">
@@ -394,28 +576,49 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
 
                                     <div className="space-y-3">
                                         <label className="flex items-center gap-3 cursor-pointer">
-                                            <input type="checkbox" checked={isAddingCalfEntry} onChange={e => setIsAddingCalfEntry(e.target.checked)} className="w-5 h-5 text-emerald-600 rounded focus:ring-emerald-500 border-gray-300" />
-                                            <span className="font-bold text-gray-700">Add {T.offspring} with Mother?</span>
+                                            <input type="checkbox" checked={isAddingCalfEntry} onChange={e => {
+                                                const checked = e.target.checked;
+                                                setIsAddingCalfEntry(checked);
+                                                if (checked && calfList.length === 0) setCalfList([{ gender: 'FEMALE', weight: 15, ageMonths: 1, name: '' }]);
+                                            }} className="w-5 h-5 text-emerald-600 rounded focus:ring-emerald-500 border-gray-300" />
+                                            <span className="font-bold text-gray-700">Add {T.offspring}(s) with Mother?</span>
                                         </label>
                                         {isAddingCalfEntry && (
-                                            <div className="pl-8 space-y-3 animate-fade-in">
-                                                <div className="grid grid-cols-2 gap-3">
-                                                    <div>
-                                                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Gender</label>
-                                                        <select value={calfDetails.gender} onChange={e => setCalfDetails({ ...calfDetails, gender: e.target.value })} className="w-full bg-white border border-emerald-200 rounded-lg px-2 py-2 outline-none text-sm">
-                                                            <option value="MALE">Male</option>
-                                                            <option value="FEMALE">Female</option>
-                                                        </select>
+                                            <div className="pl-8 space-y-4 animate-fade-in">
+                                                {calfList.map((entry, idx) => (
+                                                    <div key={idx} className="bg-white border border-emerald-100 rounded-xl p-4 space-y-3">
+                                                        <div className="flex justify-between items-center mb-2">
+                                                            <span className="text-xs font-bold text-emerald-700 uppercase">{T.offspring} {idx + 1}</span>
+                                                            {calfList.length > 1 && (
+                                                                <button type="button" onClick={() => setCalfList(prev => prev.filter((_, i) => i !== idx))} className="text-red-500 hover:text-red-700 text-xs font-bold">Remove</button>
+                                                            )}
+                                                        </div>
+                                                        <div className="grid grid-cols-2 gap-3">
+                                                            <div>
+                                                                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Gender</label>
+                                                                <select value={entry.gender} onChange={e => setCalfList(prev => prev.map((c, i) => i === idx ? { ...c, gender: e.target.value as 'MALE' | 'FEMALE' } : c))} className="w-full bg-white border border-emerald-200 rounded-lg px-2 py-2 outline-none text-sm">
+                                                                    <option value="MALE">Male</option>
+                                                                    <option value="FEMALE">Female</option>
+                                                                </select>
+                                                            </div>
+                                                            <div>
+                                                                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Age (Months)</label>
+                                                                <input type="number" value={entry.ageMonths} onChange={e => setCalfList(prev => prev.map((c, i) => i === idx ? { ...c, ageMonths: parseFloat(e.target.value) || 0 } : c))} className="w-full bg-white border border-emerald-200 rounded-lg px-2 py-2 outline-none text-sm" />
+                                                            </div>
+                                                            <div>
+                                                                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Weight (kg)</label>
+                                                                <input type="number" value={entry.weight} onChange={e => setCalfList(prev => prev.map((c, i) => i === idx ? { ...c, weight: parseFloat(e.target.value) || 0 } : c))} className="w-full bg-white border border-emerald-200 rounded-lg px-2 py-2 outline-none text-sm" />
+                                                            </div>
+                                                            <div>
+                                                                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Name/Tag (Optional)</label>
+                                                                <input type="text" value={entry.name} onChange={e => setCalfList(prev => prev.map((c, i) => i === idx ? { ...c, name: e.target.value } : c))} placeholder={`Auto: ${animalForm.tagId}-${T.offspringTag}-${idx + 1}`} className="w-full bg-white border border-emerald-200 rounded-lg px-3 py-2 outline-none text-sm" />
+                                                            </div>
+                                                        </div>
                                                     </div>
-                                                    <div>
-                                                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Age (Months)</label>
-                                                        <input type="number" value={calfDetails.ageMonths} onChange={e => setCalfDetails({ ...calfDetails, ageMonths: parseFloat(e.target.value) })} className="w-full bg-white border border-emerald-200 rounded-lg px-2 py-2 outline-none text-sm" />
-                                                    </div>
-                                                </div>
-                                                <div>
-                                                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">{T.offspring} Name/Tag (Optional)</label>
-                                                    <input type="text" value={calfDetails.name} onChange={e => setCalfDetails({ ...calfDetails, name: e.target.value })} placeholder={`Auto: ${animalForm.tagId}-${T.offspringTag}-1`} className="w-full bg-white border border-emerald-200 rounded-lg px-3 py-2 outline-none text-sm" />
-                                                </div>
+                                                ))}
+                                                <button type="button" onClick={() => setCalfList(prev => [...prev, { gender: 'FEMALE', weight: 15, ageMonths: 1, name: '' }])} className="text-emerald-600 hover:text-emerald-700 font-bold text-sm flex items-center gap-2">
+                                                    <Plus size={16} /> Add another {T.offspring}
+                                                </button>
                                             </div>
                                         )}
                                     </div>
@@ -425,60 +628,83 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                     </div>
                     <div className="mt-12 flex justify-end gap-6">
                         <button onClick={() => setCurrentView('LIST')} className="font-bold text-gray-400 hover:text-gray-600">CANCEL</button>
-                        <button onClick={() => {
+                        <button onClick={async () => {
                             if (!animalForm.tagId) return alert("Tag ID Required");
 
-                            // 1. Save Mother
                             const motherId = isEditing ? selectedAnimal!.id : Math.random().toString(36).substr(2, 9);
                             const finalMother = { ...animalForm, id: motherId, species } as Livestock;
-                            isEditing ? onUpdateLivestock(finalMother) : onAddLivestock(finalMother);
 
-                            // 2. Add Pregnancy Record if checked (only for new mothers usually, or edits)
+                            // 1. Save mother first (must complete before adding breeding record or calves)
+                            try {
+                                if (isEditing) {
+                                    await onUpdateLivestock(finalMother);
+                                } else {
+                                    await onAddLivestock(finalMother);
+                                }
+                            } catch (e) {
+                                alert("Failed to save animal. Please try again.");
+                                return;
+                            }
+
+                            // 2. Add pregnancy record if "Mark as Pregnant?" checked (female only)
                             if (isPregnantEntry && animalForm.gender === 'FEMALE') {
+                                const expectedBirth = new Date(new Date(pregnantDate).getTime() + (T.gestationDays * 24 * 60 * 60 * 1000)).toISOString().split('T')[0];
                                 const breedingRec: InseminationRecord = {
                                     id: Math.random().toString(36).substr(2, 9),
                                     date: pregnantDate,
+                                    conceiveDate: pregnantDate,
                                     sireId: 'Unknown',
                                     sireBreed: 'Unknown',
                                     breederId: 'Self',
                                     strawBatchId: '',
                                     technician: 'Self',
                                     status: 'CONFIRMED',
-                                    expectedBirthDate: new Date(new Date(pregnantDate).getTime() + (T.gestationDays * 24 * 60 * 60 * 1000)).toISOString().split('T')[0],
+                                    expectedBirthDate: expectedBirth,
                                     cost: 0
                                 };
-                                onAddBreedingRecord(motherId, breedingRec);
+                                try {
+                                    await onAddBreedingRecord(motherId, breedingRec);
+                                } catch (e) {
+                                    console.warn("Pregnancy record could not be saved:", e);
+                                }
                             }
 
-                            // 3. Add Calf if checked
-                            if (isAddingCalfEntry && animalForm.gender === 'FEMALE') {
-                                const calfDob = new Date();
-                                calfDob.setMonth(calfDob.getMonth() - calfDetails.ageMonths);
-
-                                const calf: Livestock = {
-                                    id: Math.random().toString(36).substr(2, 9),
-                                    tagId: calfDetails.name || `${animalForm.tagId}-${T.offspringTag}-1`,
-                                    species: species,
-                                    category: 'Calf', // Generic
-                                    breed: animalForm.breed,
-                                    gender: calfDetails.gender as any,
-                                    weight: calfDetails.weight,
-                                    dob: calfDob.toISOString().split('T')[0],
-                                    status: 'ACTIVE',
-                                    damId: motherId,
-                                    location: animalForm.location,
-                                    purchaseDate: animalForm.purchaseDate,
-                                    purchasePrice: 0,
-                                    notes: `Auto-added with mother ${animalForm.tagId}`,
-                                    medicalHistory: [], breedingHistory: [], weightHistory: [], milkProductionHistory: []
-                                };
-                                onAddLivestock(calf);
+                            // 3. Add calves if "Add Calf(s) with Mother?" checked
+                            if (isAddingCalfEntry && animalForm.gender === 'FEMALE' && calfList.length > 0) {
+                                for (let i = 0; i < calfList.length; i++) {
+                                    const entry = calfList[i];
+                                    const calfDob = new Date();
+                                    calfDob.setMonth(calfDob.getMonth() - entry.ageMonths);
+                                    const calf: Livestock = {
+                                        id: Math.random().toString(36).substr(2, 9),
+                                        tagId: entry.name.trim() || `${animalForm.tagId}-${T.offspringTag}-${i + 1}`,
+                                        species: species,
+                                        category: 'Calf',
+                                        breed: animalForm.breed,
+                                        gender: entry.gender as any,
+                                        weight: entry.weight,
+                                        dob: calfDob.toISOString().split('T')[0],
+                                        status: 'ACTIVE',
+                                        damId: motherId,
+                                        location: animalForm.location,
+                                        purchaseDate: animalForm.purchaseDate,
+                                        purchasePrice: 0,
+                                        notes: `Auto-added with mother ${animalForm.tagId}`,
+                                        medicalHistory: [], breedingHistory: [], weightHistory: [], milkProductionHistory: []
+                                    };
+                                    try {
+                                        await onAddLivestock(calf);
+                                    } catch (e) {
+                                        console.warn("Calf could not be saved:", e);
+                                    }
+                                }
                             }
 
                             setCurrentView('LIST');
                         }} className="bg-emerald-600 text-white px-10 py-3 rounded-xl font-bold shadow-lg shadow-emerald-100 hover:bg-emerald-700 transition-all">SAVE RECORD</button>
                     </div>
                 </div>
+                {renderSalesModal()}
             </div>
         );
     }
@@ -494,24 +720,66 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                         <button onClick={() => { setCurrentView('LIST'); setSelectedAnimalId(null); }} className="bg-white p-3 rounded-xl border border-gray-200 text-gray-400 hover:text-gray-800 shadow-sm transition-all">
                             <ArrowLeft size={24} />
                         </button>
-                        <div className="w-24 h-24 rounded-2xl overflow-hidden border-2 border-white shadow-xl">
-                            {selectedAnimal.imageUrl ? <img src={selectedAnimal.imageUrl} className="w-full h-full object-cover" /> : getPlaceholderVisual(selectedAnimal.category)}
+                        <div className="w-24 h-24 rounded-2xl overflow-hidden border-2 border-white shadow-lg relative group">
+                            {selectedAnimal.imageUrl ? <img src={selectedAnimal.imageUrl} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" /> : getPlaceholderVisual(selectedAnimal.category)}
                         </div>
                         <div>
                             <div className="flex items-center gap-3 mb-1">
-                                <h2 className="text-3xl font-black text-gray-800 tracking-tighter">{selectedAnimal.tagId}</h2>
-                                <span className={`px-4 py-1 rounded-full text-[10px] font-black uppercase ${getStatusColor(selectedAnimal.status)}`}>{selectedAnimal.status}</span>
+                                <h2 className="text-4xl font-extrabold text-slate-800 tracking-tight font-display">{selectedAnimal.tagId}</h2>
+                                <span className={`px-3 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider ${getStatusColor(selectedAnimal.status)}`}>{selectedAnimal.status}</span>
                             </div>
-                            <p className="text-gray-500 font-medium">{selectedAnimal.breed} • {selectedAnimal.category} {species.toLowerCase()}</p>
+                            <p className="text-slate-500 font-medium text-sm flex items-center gap-2">{selectedAnimal.breed} <span className="w-1 h-1 rounded-full bg-slate-300"></span> {selectedAnimal.category} {species.toLowerCase()}</p>
                         </div>
                     </div>
                     <div className="flex items-center gap-3">
-                        <button onClick={() => { setAnimalForm({ ...selectedAnimal }); setIsEditing(true); setCurrentView('ANIMAL_FORM'); }} className="bg-white px-6 py-2.5 rounded-xl border border-gray-200 font-bold text-gray-600 hover:bg-gray-50 transition-all flex items-center gap-2">
+                        <button
+                            onClick={() => {
+                                setSaleForm({ ...saleForm, pricePerAnimal: 0, buyer: '', notes: `Sale of ${selectedAnimal.tagId}` });
+                                setIsSelling(true);
+                            }}
+                            disabled={selectedAnimal.status === 'SOLD'}
+                            className="bg-emerald-600 text-white px-6 py-2.5 rounded-xl font-bold shadow-lg shadow-emerald-100 hover:bg-emerald-700 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-emerald-600"
+                        >
+                            <Tag size={18} /> SELL
+                        </button>
+                        <button onClick={() => {
+                            setAnimalForm({ ...selectedAnimal });
+                            setIsEditing(true);
+                            setIsAddingCalfEntry(false);
+                            setCalfList([{ gender: 'FEMALE', weight: 15, ageMonths: 1, name: '' }]);
+                            setIsPregnantEntry(false);
+                            setPregnantDate(new Date().toISOString().split('T')[0]);
+                            setCurrentView('ANIMAL_FORM');
+                        }} className="bg-white px-6 py-2.5 rounded-xl border border-gray-200 font-bold text-gray-600 hover:bg-gray-50 transition-all flex items-center gap-2">
                             <Edit2 size={18} /> EDIT PROFILE
                         </button>
                         <button
                             onClick={async () => {
-                                if (!confirm(`Remove ${selectedAnimal.tagId} from records? This cannot be undone.`)) return;
+                                const confirmDeceased = confirm(`Mark ${selectedAnimal.tagId} as DECEASED? This will archive the animal.`);
+                                if (!confirmDeceased) return;
+
+                                const date = prompt("Date of Death (YYYY-MM-DD)", new Date().toISOString().split('T')[0]);
+                                const cause = prompt("Cause of Death / Notes");
+
+                                if (date && cause) {
+                                    const updated = {
+                                        ...selectedAnimal,
+                                        status: 'DECEASED' as LivestockStatus,
+                                        notes: `${selectedAnimal.notes || ''} [DECEASED: ${date} - ${cause}]`
+                                    };
+                                    await onUpdateLivestock(updated);
+                                    alert("Animal marked as deceased.");
+                                    setSelectedAnimalId(null);
+                                    setCurrentView('LIST');
+                                }
+                            }}
+                            className="bg-gray-100 px-6 py-2.5 rounded-xl border border-gray-200 font-bold text-gray-600 hover:bg-gray-200 transition-all flex items-center gap-2"
+                        >
+                            <Skull size={18} /> DECEASED
+                        </button>
+                        <button
+                            onClick={async () => {
+                                if (!confirm(`Permanently Delete ${selectedAnimal.tagId}? This cannot be undone.`)) return;
                                 await onDeleteLivestock(selectedAnimal.id);
                                 setCurrentView('LIST');
                                 setSelectedAnimalId(null);
@@ -523,16 +791,16 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                     </div>
                 </div>
 
-                <div className="flex bg-white rounded-2xl p-1.5 shadow-sm border border-gray-200 overflow-x-auto no-scrollbar">
+                <div className="flex bg-white/50 backdrop-blur-sm rounded-xl p-1.5 shadow-sm border border-slate-200/60 overflow-x-auto no-scrollbar gap-2">
                     {[
-                        { id: 'INFO', label: 'OVERVIEW', icon: Info },
-                        { id: 'MEDICAL', label: 'HEALTH LOG', icon: Stethoscope },
-                        { id: 'WEIGHT', label: 'WEIGHT HISTORY', icon: Scale },
-                        { id: 'BREEDING', label: 'REPRODUCTION', icon: Dna, hide: selectedAnimal.gender !== 'FEMALE' },
-                        { id: 'PRODUCTION', label: 'MILK RECORDS', icon: Droplets, hide: selectedAnimal.category !== 'Dairy' }
+                        { id: 'INFO', label: 'Overview', icon: Info },
+                        { id: 'MEDICAL', label: 'Medical', icon: Stethoscope },
+                        { id: 'WEIGHT', label: 'Weight', icon: Scale },
+                        { id: 'BREEDING', label: 'Breeding', icon: Dna, hide: selectedAnimal.gender !== 'FEMALE' },
+                        { id: 'PRODUCTION', label: 'Production', icon: Droplets, hide: selectedAnimal.category !== 'Dairy' }
                     ].filter(t => !t.hide).map(tab => (
-                        <button key={tab.id} onClick={() => setDetailTab(tab.id as any)} className={`flex-1 flex items-center justify-center gap-2 px-6 py-3 rounded-xl text-xs font-black transition-all whitespace-nowrap ${detailTab === tab.id ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-100' : 'text-gray-400 hover:bg-gray-50 hover:text-gray-600'}`}>
-                            <tab.icon size={16} /> {tab.label}
+                        <button key={tab.id} onClick={() => setDetailTab(tab.id as any)} className={`flex-1 flex items-center justify-center gap-2 px-6 py-2.5 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${detailTab === tab.id ? 'bg-white text-emerald-700 shadow-md ring-1 ring-slate-100' : 'text-slate-400 hover:bg-white/50 hover:text-slate-600'}`}>
+                            <tab.icon size={16} className={detailTab === tab.id ? 'text-emerald-500' : ''} /> {tab.label}
                         </button>
                     ))}
                 </div>
@@ -573,6 +841,35 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                                             </div>
                                         </div>
                                     </div>
+                                    {selectedAnimal.gender === 'FEMALE' && (() => {
+                                        const offspringList = livestock.filter(l => l.damId === selectedAnimal.id);
+                                        if (offspringList.length === 0) return null;
+                                        return (
+                                            <div className="bg-gray-50 rounded-3xl p-8 border border-gray-100 mt-6">
+                                                <h5 className="font-black text-gray-800 mb-4 flex items-center gap-2"><Baby size={18} className="text-emerald-600" /> Offspring ({T.offspring}s) — {offspringList.length}</h5>
+                                                <div className="flex flex-wrap gap-4">
+                                                    {offspringList.map(calf => (
+                                                        <button
+                                                            key={calf.id}
+                                                            type="button"
+                                                            onClick={() => { setSelectedAnimalId(calf.id); setDetailTab('INFO'); }}
+                                                            className={`flex items-center gap-3 rounded-xl px-4 py-3 border text-left min-w-[180px] transition-all ${calf.status === 'SOLD' ? 'bg-gray-50 border-gray-200 hover:border-gray-300' : 'bg-white border-gray-200 hover:border-emerald-300 hover:shadow-md'}`}
+                                                        >
+                                                            <div className="w-12 h-12 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
+                                                                {calf.imageUrl ? <img src={calf.imageUrl} className="w-full h-full object-cover" alt="" /> : getPlaceholderVisual(calf.category)}
+                                                            </div>
+                                                            <div className="flex-1 min-w-0">
+                                                                <p className="font-bold text-gray-800">{calf.tagId}</p>
+                                                                <p className="text-xs text-gray-500">{calf.breed} · {calf.gender}{calf.status === 'SOLD' ? ' · SOLD' : ''}</p>
+                                                            </div>
+                                                            {calf.status === 'SOLD' && <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 uppercase">Sold</span>}
+                                                            <ChevronRight size={16} className="text-gray-300 flex-shrink-0" />
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        );
+                                    })()}
                                 </div>
                                 <div className="space-y-6">
                                     <div className="bg-white border border-gray-100 rounded-3xl p-6 shadow-sm">
@@ -605,8 +902,26 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                             {isAddingHealthRecord && (
                                 <div className="mb-12 bg-emerald-50 border border-emerald-100 rounded-3xl p-8 animate-slide-up">
                                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                                        <div><label className="block text-[10px] font-black text-emerald-600 uppercase mb-1">Type</label><select className="w-full p-2 rounded-lg border border-emerald-200" value={newHealthRecord.type} onChange={e => setNewHealthRecord({ ...newHealthRecord, type: e.target.value as any })}><option value="VACCINATION">Vaccination</option><option value="TREATMENT">Treatment</option><option value="CHECKUP">General Checkup</option><option value="INJURY">Injury Care</option><option value="HEAT">Heat Detection</option><option value="OTHER">Other</option></select></div>
-                                        <div><label className="block text-[10px] font-black text-emerald-600 uppercase mb-1">Medicine/Treatment</label><input type="text" className="w-full p-2 rounded-lg border border-emerald-200" value={newHealthRecord.medicineName} onChange={e => setNewHealthRecord({ ...newHealthRecord, medicineName: e.target.value })} placeholder="Penicillin, Vaccine X..." /></div>
+                                        <div>
+                                            <label className="block text-[10px] font-black text-emerald-600 uppercase mb-1">Type</label>
+                                            <select className="w-full p-2 rounded-lg border border-emerald-200" value={newHealthRecord.type} onChange={e => setNewHealthRecord({ ...newHealthRecord, type: e.target.value as any })}><option value="VACCINATION">Vaccination</option><option value="TREATMENT">Treatment</option><option value="CHECKUP">General Checkup</option><option value="INJURY">Injury Care</option><option value="HEAT">Heat Detection</option><option value="OTHER">Other</option></select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-[10px] font-black text-emerald-600 uppercase mb-1">Medicine/Treatment</label>
+                                            <select className="w-full p-2 rounded-lg border border-emerald-200" value={newHealthRecord.medicineName} onChange={e => {
+                                                const selectedItem = inventory.find(i => i.name === e.target.value);
+                                                setNewHealthRecord({ ...newHealthRecord, medicineName: e.target.value, cost: selectedItem ? selectedItem.unitCost : 0 });
+                                            }}>
+                                                <option value="">Select Medicine</option>
+                                                {inventory.filter(i => i.category === 'MEDICINE' && i.quantity > 0).map(i => (
+                                                    <option key={i.id} value={i.name}>{i.name} (Stock: {i.quantity})</option>
+                                                ))}
+                                                <option value="Other">Other / Manual Entry</option>
+                                            </select>
+                                            {newHealthRecord.medicineName === 'Other' && (
+                                                <input type="text" className="w-full p-2 rounded-lg border border-emerald-200 mt-2" placeholder="Enter Medicine Name" onChange={e => setNewHealthRecord({ ...newHealthRecord, medicineName: e.target.value })} />
+                                            )}
+                                        </div>
                                         <div><label className="block text-[10px] font-black text-emerald-600 uppercase mb-1">Doctor Name</label><input type="text" className="w-full p-2 rounded-lg border border-emerald-200" value={newHealthRecord.doctorName} onChange={e => setNewHealthRecord({ ...newHealthRecord, doctorName: e.target.value })} /></div>
                                         <div><label className="block text-[10px] font-black text-emerald-600 uppercase mb-1">Cost (PKR)</label><input type="number" className="w-full p-2 rounded-lg border border-emerald-200" value={newHealthRecord.cost} onChange={e => setNewHealthRecord({ ...newHealthRecord, cost: parseFloat(e.target.value) })} /></div>
                                         <div><label className="block text-[10px] font-black text-emerald-600 uppercase mb-1">Date</label><input type="date" className="w-full p-2 rounded-lg border border-emerald-200" value={newHealthRecord.date} onChange={e => setNewHealthRecord({ ...newHealthRecord, date: e.target.value })} /></div>
@@ -642,7 +957,7 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                                             {rec.notes && <p className="text-xs text-gray-500 bg-gray-50 p-2 rounded-lg mt-3 italic">"{rec.notes}"</p>}
                                         </div>
                                         <div className="flex flex-col items-end justify-center">
-                                            <p className="text-lg font-black text-gray-800">PKR {rec.cost.toLocaleString()}</p>
+                                            <p className="text-lg font-black text-gray-800">PKR {(rec.cost ?? 0).toLocaleString()}</p>
                                             {rec.nextDueDate && <p className="text-[10px] font-bold text-red-500 uppercase flex items-center gap-1 mt-1"><Clock size={10} /> Next Due: {rec.nextDueDate}</p>}
                                         </div>
                                     </div>
@@ -851,7 +1166,9 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                             )}
                         </div>
                     )}
+
                 </div>
+                {renderSalesModal()}
             </div>
         );
     }
@@ -860,23 +1177,23 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
         <div className="space-y-6 animate-fade-in">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                 <div>
-                    <h2 className="text-3xl font-black text-gray-800 tracking-tighter">{species === 'CATTLE' ? 'Cattle Herd' : 'Goat Flock'} Manager</h2>
-                    <p className="text-sm text-gray-500 font-medium">Inventory & Lifecycle Monitoring System</p>
+                    <h2 className="text-3xl font-extrabold text-slate-800 tracking-tight font-display">{species === 'CATTLE' ? 'Cattle Herd' : 'Goat Flock'} Manager</h2>
+                    <p className="text-sm text-slate-500 font-medium">Inventory & Lifecycle Monitoring System</p>
                 </div>
-                <button onClick={handleOpenAdd} className={`${species === 'GOAT' ? 'bg-amber-600 shadow-amber-100 hover:bg-amber-700' : 'bg-emerald-600 shadow-emerald-100 hover:bg-emerald-700'} text-white px-6 py-3 rounded-2xl flex items-center gap-2 shadow-xl font-bold transition-all`}><Plus size={20} /> REGISTER {T.animal.toUpperCase()}</button>
+                <button onClick={handleOpenAdd} className={`${species === 'GOAT' ? 'bg-gradient-to-r from-amber-500 to-orange-600 shadow-amber-200' : 'bg-gradient-to-r from-emerald-500 to-teal-600 shadow-emerald-200'} text-white px-6 py-3 rounded-2xl flex items-center gap-2 shadow-lg hover:shadow-xl hover:-translate-y-0.5 font-bold transition-all`}><Plus size={20} /> REGISTER {T.animal.toUpperCase()}</button>
             </div>
 
-            <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-6 flex flex-col md:flex-row gap-6 justify-between items-center">
-                <div className="flex bg-gray-100 p-1.5 rounded-2xl overflow-x-auto no-scrollbar max-w-full">
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-4 flex flex-col md:flex-row gap-4 justify-between items-center premium-card">
+                <div className="flex bg-slate-50 p-1.5 rounded-xl overflow-x-auto no-scrollbar max-w-full border border-slate-100">
                     {categories.map((cat) => (
-                        <button key={cat} onClick={() => setActiveCategoryTab(cat)} className={`px-6 py-2.5 rounded-xl text-xs font-black transition-all whitespace-nowrap flex items-center gap-2 ${activeCategoryTab === cat ? `bg-white shadow-sm ${species === 'GOAT' ? 'text-amber-700' : 'text-emerald-700'}` : 'text-gray-500 hover:text-gray-900'}`}>
+                        <button key={cat} onClick={() => setActiveCategoryTab(cat)} className={`px-5 py-2 rounded-lg text-xs font-bold transition-all whitespace-nowrap flex items-center gap-2 ${activeCategoryTab === cat ? `bg-white shadow-sm ring-1 ring-slate-200 ${species === 'GOAT' ? 'text-amber-700' : 'text-emerald-700'}` : 'text-slate-400 hover:text-slate-700'}`}>
                             {getCategoryIcon(cat, 16)} {cat.toUpperCase()}
                         </button>
                     ))}
                 </div>
-                <div className="relative w-full md:max-w-xs">
-                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-                    <input type="text" placeholder="Search Tag or Breed..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-12 pr-4 py-3 bg-gray-50 border-none rounded-2xl focus:ring-2 focus:ring-emerald-500 outline-none font-medium text-sm" />
+                <div className="relative w-full md:max-w-xs group">
+                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-emerald-500 transition-colors" size={18} />
+                    <input type="text" placeholder="Search Tag or Breed..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-transparent rounded-xl focus:bg-white focus:border-emerald-200 focus:ring-4 focus:ring-emerald-50 outline-none font-medium text-sm transition-all" />
                 </div>
             </div>
 
@@ -898,6 +1215,23 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                                 setIsBatchMode(false);
                             }
                         }} className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg font-bold text-xs flex items-center gap-2 transition-all"><Stethoscope size={16} /> VACCINATE</button>
+
+                        <button onClick={() => {
+                            const newLocation = prompt("Enter New Location / Barn Name:");
+                            if (newLocation) {
+                                selectedBatchIds.forEach(id => {
+                                    const animal = livestock.find(l => l.id === id);
+                                    if (animal) onUpdateLivestock({ ...animal, location: newLocation });
+                                });
+                                alert("Animals Moved Successfully");
+                                setSelectedBatchIds([]);
+                                setIsBatchMode(false);
+                            }
+                        }} className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg font-bold text-xs flex items-center gap-2 transition-all"><MapPin size={16} /> BULK MOVE</button>
+
+                        <button onClick={() => {
+                            setIsSelling(true);
+                        }} className="bg-amber-600 hover:bg-amber-500 text-white px-4 py-2 rounded-lg font-bold text-xs flex items-center gap-2 transition-all"><DollarSign size={16} /> BULK SELL</button>
                     </div>
                     <button onClick={() => { setSelectedBatchIds([]); setIsBatchMode(false); }} className="text-gray-400 hover:text-white font-bold text-xs">CANCEL SELECTION</button>
                 </div>
@@ -915,16 +1249,16 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                         } else {
                             setSelectedAnimalId(animal.id); setCurrentView('DETAILS'); setDetailTab('INFO');
                         }
-                    }} className={`bg-white rounded-3xl border overflow-hidden hover:shadow-2xl hover:-translate-y-1 transition-all cursor-pointer group relative ${isBatchMode && selectedBatchIds.includes(animal.id) ? 'border-4 border-emerald-500 bg-emerald-50 ring-4 ring-emerald-100' : 'border-gray-100'}`}>
-                        <div className="p-6">
-                            <div className="flex justify-between items-start mb-6">
+                    }} className={`bg-white rounded-2xl border overflow-hidden premium-card cursor-pointer group relative transition-all duration-300 ${isBatchMode && selectedBatchIds.includes(animal.id) ? 'border-2 border-emerald-500 bg-emerald-50/50' : 'border-slate-100 hover:border-emerald-200'}`}>
+                        <div className="p-5">
+                            <div className="flex justify-between items-start mb-5">
                                 <div className="flex items-center gap-4">
-                                    <div className="w-16 h-16 rounded-2xl overflow-hidden border-2 border-white shadow-lg bg-gray-50">
+                                    <div className="w-14 h-14 rounded-xl overflow-hidden border border-slate-100 shadow-sm bg-slate-50 group-hover:scale-105 transition-transform duration-300">
                                         {animal.imageUrl ? <img src={animal.imageUrl} className="w-full h-full object-cover" /> : getPlaceholderVisual(animal.category)}
                                     </div>
                                     <div>
-                                        <h3 className="font-black text-gray-800 text-xl tracking-tight">{animal.tagId}</h3>
-                                        <p className="text-xs font-bold text-gray-400 uppercase">{animal.breed}</p>
+                                        <h3 className="font-extrabold text-slate-800 text-lg tracking-tight font-display group-hover:text-emerald-700 transition-colors">{animal.tagId}</h3>
+                                        <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">{animal.breed}</p>
                                     </div>
                                 </div>
                                 <div className="flex items-center gap-2">
@@ -934,23 +1268,23 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                                             if (!confirm(`Remove ${animal.tagId} from records?`)) return;
                                             onDeleteLivestock(animal.id);
                                         }}
-                                        className="p-1.5 rounded-lg text-gray-400 hover:bg-red-50 hover:text-red-600 transition-colors"
+                                        className="p-1.5 rounded-lg text-slate-300 hover:bg-red-50 hover:text-red-600 transition-colors opacity-0 group-hover:opacity-100"
                                         title="Delete"
                                     >
                                         <Trash2 size={16} />
                                     </button>
-                                    <span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest ${getStatusColor(animal.status)} shadow-sm`}>{animal.status}</span>
+                                    <span className={`px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider ${getStatusColor(animal.status)}`}>{animal.status}</span>
                                 </div>
                             </div>
-                            <div className="grid grid-cols-2 gap-y-4 text-xs">
-                                <div className={`flex items-center gap-2 font-black text-gray-600 uppercase tracking-tighter`}><Scale size={16} className={species === 'GOAT' ? 'text-amber-500' : 'text-emerald-500'} /> {animal.weight} KG</div>
-                                <div className={`flex items-center gap-2 font-black text-gray-600 uppercase tracking-tighter`}><Calendar size={16} className={species === 'GOAT' ? 'text-amber-500' : 'text-emerald-500'} /> {animal.dob}</div>
-                                {animal.damId && <div className="col-span-2 flex items-center gap-2 font-black text-pink-600 uppercase tracking-tighter"><Baby size={16} /> Mother: {livestock.find(l => l.id === animal.damId)?.tagId || 'Unknown'}</div>}
+                            <div className="grid grid-cols-2 gap-y-3 gap-x-4 text-xs">
+                                <div className={`flex items-center gap-2 font-bold text-slate-600`}><Scale size={14} className={species === 'GOAT' ? 'text-amber-500' : 'text-emerald-500'} /> {animal.weight} KG</div>
+                                <div className={`flex items-center gap-2 font-bold text-slate-600`}><Calendar size={14} className={species === 'GOAT' ? 'text-amber-500' : 'text-emerald-500'} /> {getAgeDisplay(animal.dob)}</div>
+                                {animal.damId && <div className="col-span-2 flex items-center gap-2 font-bold text-slate-400"><Baby size={14} /> <span className="text-slate-500">Dam: {livestock.find(l => l.id === animal.damId)?.tagId || 'Unknown'}</span></div>}
                             </div>
                         </div>
-                        <div className={`bg-gray-50 px-6 py-4 border-t border-gray-100 flex justify-between items-center transition-colors ${species === 'GOAT' ? 'group-hover:bg-amber-600' : 'group-hover:bg-emerald-600'}`}>
-                            <span className="text-[10px] font-black text-gray-400 tracking-widest group-hover:text-white uppercase">Open Records</span>
-                            <ChevronRight size={18} className="text-gray-300 group-hover:text-white" />
+                        <div className={`bg-slate-50/50 px-5 py-3 border-t border-slate-100 flex justify-between items-center transition-colors ${species === 'GOAT' ? 'group-hover:bg-amber-50' : 'group-hover:bg-emerald-50'}`}>
+                            <span className={`text-[10px] font-bold text-slate-400 tracking-widest uppercase transition-colors ${species === 'GOAT' ? 'group-hover:text-amber-700' : 'group-hover:text-emerald-700'}`}>View Profile</span>
+                            <ChevronRight size={16} className={`text-slate-300 transition-colors ${species === 'GOAT' ? 'group-hover:text-amber-600' : 'group-hover:text-emerald-600'} group-hover:translate-x-1 duration-300`} />
                         </div>
                     </div>
                 ))}
@@ -962,6 +1296,16 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                     </div>
                 )}
             </div>
+
+            {renderSalesModal()}
+
+            {/* Mobile FAB */}
+            <button
+                onClick={handleOpenAdd}
+                className="fixed bottom-6 right-6 w-14 h-14 bg-emerald-600 text-white rounded-full shadow-2xl flex items-center justify-center md:hidden z-50 hover:scale-110 transition-transform"
+            >
+                <Plus size={28} />
+            </button>
         </div>
     );
 };
