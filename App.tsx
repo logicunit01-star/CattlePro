@@ -10,9 +10,10 @@ import { Procurement } from './components/Procurement';
 import { Reports } from './components/Reports';
 import { GeminiAdvisor } from './components/GeminiAdvisor';
 import { Login } from './components/Login';
+import { EntityManager } from './components/EntityManager';
 import { MOCK_LIVESTOCK, MOCK_EXPENSES, MOCK_FEED, MOCK_SALES, FIXED_CATEGORIES, MOCK_INFRASTRUCTURE, MOCK_DIET_PLANS, MOCK_BREEDERS, MOCK_CUSTOMERS, MOCK_INVOICES } from './constants';
-import { AppState, Livestock, MedicalRecord, Expense, ExpenseCategory, FeedInventory, Infrastructure, InseminationRecord, Sale, WeightRecord, DietPlan, MilkRecord, Breeder } from './types';
-import { Truck, Home, LogOut, FileText, BadgeDollarSign, Activity, Stethoscope, Grab, BrainCircuit, Droplets, LineChart, Settings, Menu, X, ArrowLeft, ArrowRight, Bell, Search, PlusCircle, Filter, ChevronDown, User, DollarSign, LayoutDashboard, Beef, ClipboardList, Tractor } from 'lucide-react';
+import { AppState, Livestock, LivestockStatus, MedicalRecord, Expense, ExpenseCategory, FeedInventory, Infrastructure, InseminationRecord, Sale, WeightRecord, DietPlan, MilkRecord, Breeder, Entity, LedgerRecord, Farm, TreatmentLog, Location } from './types';
+import { Truck, Home, LogOut, FileText, BadgeDollarSign, Activity, Stethoscope, Grab, BrainCircuit, Droplets, LineChart, Settings, Menu, X, ArrowLeft, ArrowRight, Bell, Search, PlusCircle, Filter, ChevronDown, User, DollarSign, LayoutDashboard, Beef, ClipboardList, Tractor, Users, MapPin, Building2 } from 'lucide-react';
 
 import { backendService } from './services/backendService';
 import { setTenant as setTenantContext, getTenantFromUrl, getPersistedSales, setPersistedSales, getPersistedLivestockStatus, setPersistedLivestockStatus } from './services/tenantContext';
@@ -92,6 +93,10 @@ const App: React.FC = () => {
   const [authToken, setAuthToken] = useState<string | null>(null);
 
   const [state, setState] = useState<AppState>({
+    farms: [],
+    locations: [],
+    currentLocationId: null,
+    currentFarmId: null,
     livestock: [],
     expenses: [],
     sales: [],
@@ -110,7 +115,8 @@ const App: React.FC = () => {
     treatmentLogs: []
   });
 
-  const [activeView, setActiveView] = useState<'DASHBOARD' | 'CATTLE_MANAGER' | 'GOAT_MANAGER' | 'PALAI' | 'SALES' | 'FINANCE' | 'OPERATIONS' | 'PROCUREMENT' | 'REPORTS' | 'AI'>('DASHBOARD');
+  const [activeView, setActiveView] = useState<'DASHBOARD' | 'CATTLE_MANAGER' | 'GOAT_MANAGER' | 'PALAI' | 'SALES' | 'FINANCE' | 'OPERATIONS' | 'PROCUREMENT' | 'REPORTS' | 'AI' | 'ENTITIES'>('DASHBOARD');
+  const [operationsTab, setOperationsTab] = useState<'FEED' | 'MEDICINE' | 'SUPPLIES' | 'INFRA' | 'DIET'>('FEED');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isLivestockMenuOpen, setIsLivestockMenuOpen] = useState(true);
   const [isOperationsMenuOpen, setIsOperationsMenuOpen] = useState(true);
@@ -154,19 +160,75 @@ const App: React.FC = () => {
     const fetchData = async () => {
       try {
         setIsLoading(true);
-        const [livestock, expenses, sales, feed, infra, dietPlans] = await Promise.all([
+        const companyName = reduxTenant.companyName;
+        if (companyName?.trim()) {
+          await backendService.ensureTenantSetup(companyName).catch(() => {});
+        }
+        const [locations, farms, apiLivestock, expenses, apiSales, feed, infra, dietPlans, entities, ledger, consumptionLogs, treatmentProtocols, treatmentLogs] = await Promise.all([
+          backendService.getLocations().catch(() => []),
+          backendService.getFarms().catch(() => []),
           backendService.getLivestock(),
           backendService.getExpenses(),
           backendService.getSales().catch((e) => { console.warn("getSales failed, using persisted:", e); return []; }),
           backendService.getFeed(),
           backendService.getInfrastructure(),
-          backendService.getDietPlans()
+          backendService.getDietPlans(),
+          backendService.getEntities(),
+          backendService.getLedger(),
+          backendService.getConsumptionLogs(),
+          backendService.getTreatmentProtocols(),
+          backendService.getTreatmentLogs()
         ]);
 
-        setState(prev => ({
-          ...prev,
-          livestock, expenses, sales, feed, infrastructure: infra, dietPlans
+        const salesFromApi = Array.isArray(apiSales) ? apiSales : [];
+        // Enrich sales missing farmId: backend may not return it, so infer from first sold animal's farmId
+        const livestockById = new Map(apiLivestock.map(l => [l.id, l]));
+        const enrichedApiSales: Sale[] = salesFromApi.map((s: Sale) => {
+          if (s.farmId) return s;
+          const firstAnimalId = s.soldAnimalIds?.[0];
+          const animal = firstAnimalId ? livestockById.get(firstAnimalId) : null;
+          const inferredFarmId = animal?.farmId;
+          return { ...s, farmId: inferredFarmId ?? (s as any).farmId };
+        });
+        const persisted = getPersistedSales() as Sale[];
+        const mergedSales: Sale[] = [...enrichedApiSales];
+        if (persisted?.length) {
+          persisted.forEach(p => {
+            if (p && typeof p === 'object' && (p as Sale).id && !mergedSales.some(m => m.id === (p as Sale).id)) {
+              mergedSales.push(p as Sale);
+            }
+          });
+        }
+
+        const statusOverrides = getPersistedLivestockStatus();
+        const livestock = apiLivestock.map(l => ({
+          ...l,
+          status: (statusOverrides[l.id] as LivestockStatus) || l.status
         }));
+
+        setState(prev => {
+          const next = {
+            ...prev,
+            locations,
+            farms,
+            livestock,
+            expenses,
+            sales: mergedSales,
+            feed,
+            infrastructure: infra,
+            dietPlans,
+            entities,
+            ledger,
+            consumptionLogs,
+            treatmentProtocols,
+            treatmentLogs
+          };
+          if (prev.currentFarmId == null && farms.length > 0) {
+            (next as AppState).currentFarmId = farms[0].id;
+          }
+          return next;
+        });
+        setPersistedSales(mergedSales);
       } catch (err: any) {
         console.error("Failed to load data, falling back to mocks", err);
         setState(prev => ({
@@ -197,6 +259,183 @@ const App: React.FC = () => {
     setUser(null);
     setAuthToken(null);
     setIsAuthenticated(false);
+  };
+
+  const handleCreateLocation = async (name: string, type: 'CITY' | 'REGION') => {
+    try {
+      const loc = await backendService.createLocation({
+        id: `loc-${Date.now()}`,
+        name: name.trim(),
+        type
+      });
+      setState(prev => ({ ...prev, locations: [...prev.locations, loc] }));
+      setShowAddCityModal(false);
+    } catch (e: any) {
+      alert(e?.message || 'Failed to create city.');
+    }
+  };
+
+  const handleCreateFarm = async (data: { name: string; locationId: string; type: 'DAIRY' | 'MEAT' | 'MIXED'; currency: string; costCenterCode: string }) => {
+    try {
+      const farm = await backendService.createFarm({
+        id: `farm-${Date.now()}`,
+        name: data.name.trim(),
+        locationId: data.locationId,
+        type: data.type,
+        currency: data.currency || 'PKR',
+        costCenterCode: data.costCenterCode || `CC-${Date.now()}`
+      });
+      setState(prev => ({ ...prev, farms: [...prev.farms, farm], currentFarmId: prev.currentFarmId || farm.id }));
+      setShowAddFarmModal(false);
+    } catch (e: any) {
+      alert(e?.message || 'Failed to create farm.');
+    }
+  };
+
+  // --- DIET & NUTRITION ENGINE ---
+  const processDailyConsumption = async () => {
+    try {
+      const today = new Date().toISOString().split('T')[0];
+      const activePlans = state.dietPlans.filter(p => p.status === 'ACTIVE');
+      if (activePlans.length === 0) return alert("No active diet plans found.");
+
+      let totalCost = 0;
+      const newLogs: any[] = [];
+      const invUpdates = new Map<string, FeedInventory>();
+      const modifiedFeedIds = new Set<string>();
+
+      // Create a fast lookup for inventory
+      state.feed.forEach(f => invUpdates.set(f.id, { ...f }));
+
+      for (const plan of activePlans) {
+        const planItems = plan.items || [];
+        if (planItems.length === 0) continue;
+
+        // 1. Find Target Animals
+        let animals: Livestock[] = [];
+        if (plan.targetType === 'CATEGORY') {
+          const categoryMatch = (l: Livestock) =>
+            l.farmId === plan.farmId &&
+            l.status === 'ACTIVE' &&
+            (l.category === plan.targetId || l.category === plan.targetName || (plan.targetName && l.category?.toLowerCase() === plan.targetName.toLowerCase()));
+          animals = state.livestock.filter(categoryMatch);
+        } else if (plan.targetType === 'INDIVIDUAL' && plan.targetId) {
+          const one = state.livestock.find(l => l.id === plan.targetId && l.status === 'ACTIVE');
+          if (one) animals = [one];
+        } else if (plan.targetType === 'ALL' || !plan.targetType) {
+          animals = state.livestock.filter(l => l.farmId === plan.farmId && l.status === 'ACTIVE');
+        }
+
+        if (animals.length === 0) continue;
+
+        // 2. Calculate Consumption per Plan
+        for (const item of planItems) {
+          const qty = Number(item.quantity) || 0;
+          const totalQty = qty * animals.length;
+          const invItem = invUpdates.get(item.inventoryId);
+
+          if (invItem) {
+            invItem.quantity = Math.max(0, invItem.quantity - totalQty);
+            invUpdates.set(invItem.id, invItem);
+            modifiedFeedIds.add(invItem.id);
+
+            const cost = totalQty * (invItem.unitCost || 0);
+            newLogs.push({
+              id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+              farmId: plan.farmId,
+              dietPlanId: plan.id,
+              date: today,
+              itemId: item.inventoryId,
+              quantityUsed: Number(totalQty),
+              cost: Number(cost),
+              unit: item.unit || 'kg'
+            });
+            totalCost += cost;
+          }
+        }
+      }
+
+      if (newLogs.length === 0) return alert("No consumption to process today (No animals matched or no plans with ingredients).");
+
+      // 3. Commit: consumption logs first, then only modified feed, then expense
+      await backendService.logConsumption(newLogs);
+      for (const id of modifiedFeedIds) {
+        const inv = invUpdates.get(id);
+        if (inv) await backendService.updateFeed(id, inv);
+      }
+      const expense: Expense = {
+        id: `exp-feed-${Date.now()}`,
+        farmId: state.currentFarmId || activePlans[0].farmId,
+        category: ExpenseCategory.FEED,
+        amount: totalCost,
+        date: today,
+        description: `Daily Auto-Feed Consumption (${newLogs.length} items)`,
+        supplier: 'Internal Inventory'
+      };
+      await backendService.createExpense(expense);
+
+      setState(prev => ({
+        ...prev,
+        feed: Array.from(invUpdates.values()),
+        expenses: [...prev.expenses, expense],
+        consumptionLogs: [...(prev.consumptionLogs || []), ...newLogs]
+      }));
+
+      alert(`Processed daily feed for ${activePlans.length} plan(s). Total cost: ${totalCost.toLocaleString()}`);
+    } catch (e: any) {
+      console.error('Process daily consumption error:', e);
+      const msg = e?.message || e?.response?.data?.message || String(e);
+      alert(`Failed to process daily consumption: ${msg}`);
+    }
+  };
+
+  const handleLogTreatment = async (logs: TreatmentLog[]) => {
+    if (logs.length === 0) return;
+    try {
+      let totalCost = 0;
+      const invUpdates = new Map<string, FeedInventory>();
+      state.feed.forEach(f => invUpdates.set(f.id, { ...f }));
+
+      for (const log of logs) {
+        const invItem = invUpdates.get(log.itemId);
+        if (invItem) {
+          invItem.quantity = Math.max(0, invItem.quantity - log.quantityUsed);
+          invUpdates.set(invItem.id, invItem);
+          totalCost += (log.cost || 0);
+        }
+      }
+
+      // Create Expense
+      const expense: Expense = {
+        id: `exp-med-${Date.now()}`,
+        farmId: logs[0].farmId,
+        category: ExpenseCategory.MEDICAL,
+        amount: totalCost,
+        date: logs[0].date,
+        description: `Treatment Application: ${logs.length} entries`,
+        supplier: 'Internal Medicine Cabinet'
+      };
+
+      // Commit
+      for (const inv of Array.from(invUpdates.values())) {
+        const original = state.feed.find(f => f.id === inv.id);
+        if (original && original.quantity !== inv.quantity) {
+          await backendService.updateFeed(inv.id, inv);
+        }
+      }
+      await backendService.logTreatment(logs);
+      if (totalCost > 0) await backendService.createExpense(expense);
+
+      setState(prev => ({
+        ...prev,
+        feed: prev.feed.map(f => invUpdates.get(f.id) || f),
+        treatmentLogs: [...prev.treatmentLogs, ...logs],
+        expenses: totalCost > 0 ? [...prev.expenses, expense] : prev.expenses
+      }));
+    } catch (e) {
+      console.error(e);
+      alert("Failed to log treatments.");
+    }
   };
 
   const addLivestock = async (newAnimal: Livestock) => {
@@ -231,50 +470,53 @@ const App: React.FC = () => {
     } catch (e) { alert("Failed to save livestock"); }
   };
 
-  const updateLivestock = (updatedAnimal: Livestock) => {
-    // For now, optimistically update or implement update endpoint if needed.
-    // Assuming update isn't strictly required by user request yet, but we update local state.
-    setState(prev => ({
-      ...prev,
-      livestock: prev.livestock.map(l => l.id === updatedAnimal.id ? updatedAnimal : l)
-    }));
+  const updateLivestock = async (updatedAnimal: Livestock) => {
+    try {
+      const saved = await backendService.updateLivestock(updatedAnimal.id, updatedAnimal);
+      setState(prev => ({
+        ...prev,
+        livestock: prev.livestock.map(l => l.id === saved.id ? saved : l)
+      }));
+      setPersistedLivestockStatus({ [saved.id]: saved.status });
+    } catch (e) {
+      setState(prev => ({
+        ...prev,
+        livestock: prev.livestock.map(l => l.id === updatedAnimal.id ? { ...l, status: updatedAnimal.status } : l)
+      }));
+      setPersistedLivestockStatus({ [updatedAnimal.id]: updatedAnimal.status });
+      console.warn("Livestock update saved locally; backend sync failed:", e);
+    }
   };
 
   const addMedicalRecord = async (animalId: string, record: MedicalRecord) => {
     try {
-      const savedRecord = await backendService.addMedicalRecord(animalId, record);
-      // Backend should ideally return the updated Livestock or we re-fetch.
-      // For simplicity/performance, we update local state assuming success.
-      // Also creating the expense automatically on backend is NOT done by this call unless logic exists in Controller.
-      // *Correction*: The backend *does* implicitly save it. But the expense logic (if any) is now server-side or needs separate call.
-      // Given the previous frontend logic created an expense manually, we should probably let the backend handle business logic or manually create expense here too if backend is "dumb".
+      const animal = state.livestock.find(l => l.id === animalId);
+      if (!animal) throw new Error("Animal not found");
+      await backendService.addMedicalRecord(animalId, record);
 
-      // Re-fetching livestock to get updated history
-      const updatedLivestockList = await backendService.getLivestock();
-
-      // If cost > 0, we also need to add an expense if the backend doesn't do it automatically.
-      // My Backend Service implementation for `addMedicalRecord` just saves the record.
-      // So we should add the expense here too to match previous behavior.
       if (record.cost > 0) {
+        const targetFarmId = state.currentFarmId || animal.farmId;
+        if (!targetFarmId) { alert("Warning: Expense recorded but no Farm ID could be associated."); }
         const expense: Expense = {
-          id: `med_exp_${savedRecord.id}`, // Temporary ID, backend will assign real one
+          id: `med_${Date.now()}`,
+          farmId: targetFarmId || 'UNKNOWN_FARM',
           category: record.type === 'VACCINATION' ? ExpenseCategory.VACCINE : ExpenseCategory.MEDICAL,
           amount: record.cost,
           date: record.date,
-          description: `${record.type}: ${record.medicineName}`,
-          relatedAnimalId: animalId
+          description: `${record.type}: ${record.medicineName} (${animal.tagId})`,
+          relatedAnimalId: animalId,
+          farmName: state.farms.find(f => f.id === targetFarmId)?.name
         };
-        const savedExpense = await backendService.createExpense(expense);
-        setState(prev => ({ ...prev, expenses: [...prev.expenses, savedExpense] }));
+        await backendService.createExpense(expense);
       }
 
-      setState(prev => ({ ...prev, livestock: updatedLivestockList }));
-    } catch (e) { alert("Failed to add medical record"); }
+      const [updatedLivestock, expenses] = await Promise.all([
+        backendService.getLivestock(),
+        record.cost > 0 ? backendService.getExpenses() : Promise.resolve(state.expenses)
+      ]);
+      setState(prev => ({ ...prev, livestock: updatedLivestock, expenses }));
+    } catch (e) { alert("Failed to add medical record: " + (e instanceof Error ? e.message : String(e))); }
   };
-
-  // ... (Other handlers like addBreedingRecord would follow similar pattern. 
-  // For brevity in this turn, I will implement them as stubs or direct state updates if not critical, 
-  // but better to implement fully).
 
   const addBreedingRecord = async (animalId: string, record: InseminationRecord) => {
     try {
@@ -302,11 +544,15 @@ const App: React.FC = () => {
     } catch (e) { alert("Failed to add breeding record"); }
   };
 
-  const updateBreedingRecord = (animalId: string, updatedRec: InseminationRecord) => {
-    // TODO: Implement update endpoint if needed. For now, we rely on add for new records.
-    // If we need to update status (e.g. confirm pregnancy), we need a specific endpoint or generic update.
-    // Given time constraints, logging errors if user tries to update existing.
-    console.warn("Update breeding record not fully implemented on backend yet");
+  const updateBreedingRecord = async (animalId: string, updatedRec: InseminationRecord) => {
+    try {
+      await backendService.updateBreedingRecord(animalId, updatedRec);
+      const updatedLivestock = await backendService.getLivestock();
+      setState(prev => ({ ...prev, livestock: updatedLivestock }));
+    } catch (e) {
+      console.error(e);
+      alert('Failed to update breeding record. Please try again.');
+    }
   };
 
   const addWeightRecord = async (animalId: string, record: WeightRecord) => {
@@ -331,6 +577,121 @@ const App: React.FC = () => {
       setState(prev => ({ ...prev, livestock: prev.livestock.filter(l => l.id !== id) }));
     } catch (e) { alert("Failed to delete animal."); }
   };
+
+  const handleCreateExpense = async (exp: Expense) => {
+    if (!state.currentFarmId) { alert("Please select a farm to record expenses."); throw new Error("No farm selected"); }
+    const expenseWithContext = { ...exp, farmId: state.currentFarmId, farmName: state.farms.find(f => f.id === state.currentFarmId)?.name };
+    try {
+      await backendService.createExpense(expenseWithContext);
+      // Re-fetch affected modules to ensure UI is in sync with Backend Ledger Logic
+      const [expenses, entities, ledger] = await Promise.all([
+        backendService.getExpenses(),
+        backendService.getEntities(),
+        backendService.getLedger()
+      ]);
+      setState(prev => ({ ...prev, expenses, entities, ledger }));
+    } catch (e) {
+      alert("Failed to save expense");
+      throw e;
+    }
+  };
+
+
+  const handleCreateSale = async (sale: Sale & { animalId?: string }) => {
+    let targetFarmId = state.currentFarmId;
+
+    if (!targetFarmId && sale.soldAnimalIds && sale.soldAnimalIds.length > 0) {
+      const firstAnimal = state.livestock.find(l => l.id === sale.soldAnimalIds![0]);
+      if (firstAnimal) targetFarmId = firstAnimal.farmId;
+    }
+    if (!targetFarmId && (sale as any).animalId) {
+      const animal = state.livestock.find(l => l.id === (sale as any).animalId);
+      if (animal) targetFarmId = animal.farmId;
+    }
+
+    if (!targetFarmId) { alert("Please select a farm to record sales."); return; }
+
+    const saleWithContext: Sale = {
+      ...sale,
+      farmId: targetFarmId,
+      paymentStatus: sale.paymentStatus ?? 'PAID',
+      amountReceived: sale.amountReceived ?? sale.amount,
+      soldAnimalIds: sale.soldAnimalIds ?? ((sale as any).animalId ? [(sale as any).animalId] : undefined)
+    };
+
+    // Add to state immediately so the grid shows it (works even if API fails or is offline)
+    const saleToShow: Sale = { ...saleWithContext, id: saleWithContext.id };
+    const newSalesAfterAdd = [...state.sales, saleToShow];
+    setState(prev => ({ ...prev, sales: newSalesAfterAdd }));
+    setPersistedSales(newSalesAfterAdd);
+
+    try {
+      const saved = await backendService.createSale(saleWithContext);
+      const [salesFromApi, entities, ledger] = await Promise.all([
+        backendService.getSales().catch(() => []),
+        backendService.getEntities(),
+        backendService.getLedger()
+      ]);
+      const salesToSet = Array.isArray(salesFromApi) && salesFromApi.length > 0
+        ? salesFromApi
+        : newSalesAfterAdd.slice(0, -1).concat({ ...saved, farmId: saved.farmId || targetFarmId });
+      setState(prev => ({
+        ...prev,
+        sales: salesToSet,
+        entities,
+        ledger
+      }));
+      setPersistedSales(salesToSet);
+    } catch (e) {
+      // Sale already in state and persisted; keep it visible after refresh.
+      console.warn("Sale saved locally; backend sync failed:", e);
+    }
+  };
+
+  /* Financial Helpers */
+  const handleAddPayment = async (payment: { entityId: string, amount: number, date: string, notes?: string }) => {
+    try {
+      await backendService.createPayment(payment);
+      const [entities, ledger] = await Promise.all([
+        backendService.getEntities(),
+        backendService.getLedger()
+      ]);
+      setState(prev => ({ ...prev, entities, ledger }));
+    } catch (e) { alert("Failed to record payment"); }
+  };
+
+  const addEntity = async (entity: Entity) => {
+    try {
+      const entityWithFarm = { ...entity, farmId: entity.farmId || state.currentFarmId || undefined };
+      const saved = await backendService.createEntity(entityWithFarm);
+      setState(prev => ({ ...prev, entities: [...prev.entities, saved] }));
+    } catch (e: any) {
+      alert(e?.message || 'Failed to add entity.');
+    }
+  };
+
+  const updateEntity = async (entity: Entity) => {
+    try {
+      const updated = await backendService.updateEntity(entity.id, entity);
+      setState(prev => ({ ...prev, entities: prev.entities.map(e => e.id === entity.id ? updated : e) }));
+    } catch (e: any) {
+      alert(e?.message || 'Failed to update entity.');
+    }
+  };
+
+  const deleteEntity = async (id: string) => {
+    try {
+      await backendService.deleteEntity(id);
+      setState(prev => ({ ...prev, entities: prev.entities.filter(e => e.id !== id) }));
+    } catch (e: any) {
+      alert(e?.message || 'Failed to delete entity.');
+    }
+  };
+
+
+  const NavLabel = ({ children }: { children: React.ReactNode }) => (
+    <div className="px-4 py-2 mt-2 mb-1 text-[10px] font-extrabold text-slate-400/80 uppercase tracking-widest font-heading">{children}</div>
+  );
 
   const NavItem = ({ view, icon: Icon, label, onClick }: { view?: typeof activeView, icon: any, label: string, onClick?: () => void }) => (
     <button onClick={() => { if (onClick) onClick(); else if (view) { setActiveView(view); setIsSidebarOpen(false); } }} className={`w-full flex items-center gap-3 px-4 py-3 mx-1 rounded-xl transition-all duration-200 group ${view && activeView === view ? 'bg-emerald-50 text-emerald-700 shadow-sm' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'}`}>
@@ -373,14 +734,40 @@ const App: React.FC = () => {
                 </div>
               )}
             </div>
-            <NavItem view="OPERATIONS" icon={ClipboardList} label="Operations & Feed" />
-            <NavItem view="PROCUREMENT" icon={Truck} label="Procurement & Stores" />
-            <NavItem view="FINANCE" icon={BadgeDollarSign} label="Finance" />
-            <NavItem view="REPORTS" icon={FileText} label="Reports & Analytics" />
-            <NavItem view="PALAI" icon={User} label="Palai / 3rd Party" />
-            <NavItem view="SALES" icon={DollarSign} label="Sales & Revenue" />
-            <div className={`mt-4 mb-2 text-xs font-bold text-gray-400 px-4 uppercase tracking-wider ${!isSidebarOpen && 'hidden'}`}>
-              Farm Operations
+
+            <div className="pt-4">
+              <NavLabel>Operations</NavLabel>
+              <button onClick={() => { setActiveView('OPERATIONS'); setIsOperationsMenuOpen(!isOperationsMenuOpen); }} className={`w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all duration-200 group ${activeView === 'OPERATIONS' ? 'text-emerald-700 bg-emerald-50/50' : 'text-slate-600 hover:text-emerald-700 hover:bg-emerald-50/50'}`}>
+                <div className="flex items-center gap-3">
+                  <ClipboardList size={20} className="group-hover:scale-110 transition-transform duration-200" />
+                  <span className="font-semibold text-sm">Operations & Feed</span>
+                </div>
+                <ChevronDown size={14} className={`transition-transform duration-300 ${isOperationsMenuOpen ? 'rotate-180' : ''}`} />
+              </button>
+              {isOperationsMenuOpen && (
+                <div className="mt-1 ml-4 pl-4 border-l-2 border-emerald-100 space-y-1 animate-slide-up">
+                  <button onClick={() => { setActiveView('OPERATIONS'); setOperationsTab('FEED'); setIsSidebarOpen(false); }} className={`w-full text-left px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${activeView === 'OPERATIONS' && operationsTab === 'FEED' ? 'text-emerald-700 bg-emerald-50 translate-x-1' : 'text-slate-500 hover:text-emerald-600 hover:bg-emerald-50/30'}`}>Feed Stock</button>
+                  <button onClick={() => { setActiveView('OPERATIONS'); setOperationsTab('MEDICINE'); setIsSidebarOpen(false); }} className={`w-full text-left px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${activeView === 'OPERATIONS' && operationsTab === 'MEDICINE' ? 'text-emerald-700 bg-emerald-50 translate-x-1' : 'text-slate-500 hover:text-emerald-600 hover:bg-emerald-50/30'}`}>Medicine Cabinet</button>
+                  <button onClick={() => { setActiveView('OPERATIONS'); setOperationsTab('SUPPLIES'); setIsSidebarOpen(false); }} className={`w-full text-left px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${activeView === 'OPERATIONS' && operationsTab === 'SUPPLIES' ? 'text-emerald-700 bg-emerald-50 translate-x-1' : 'text-slate-500 hover:text-emerald-600 hover:bg-emerald-50/30'}`}>Farm Supplies</button>
+                  <button onClick={() => { setActiveView('OPERATIONS'); setOperationsTab('INFRA'); setIsSidebarOpen(false); }} className={`w-full text-left px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${activeView === 'OPERATIONS' && operationsTab === 'INFRA' ? 'text-emerald-700 bg-emerald-50 translate-x-1' : 'text-slate-500 hover:text-emerald-600 hover:bg-emerald-50/30'}`}>Fixed Assets</button>
+                  <button onClick={() => { setActiveView('OPERATIONS'); setOperationsTab('DIET'); setIsSidebarOpen(false); }} className={`w-full text-left px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${activeView === 'OPERATIONS' && operationsTab === 'DIET' ? 'text-emerald-700 bg-emerald-50 translate-x-1' : 'text-slate-500 hover:text-emerald-600 hover:bg-emerald-50/30'}`}>Diets</button>
+                </div>
+              )}
+              <NavItem view="PROCUREMENT" icon={Truck} label="Procurement & Stores" />
+            </div>
+
+            <div className="pt-4">
+              <NavLabel>Financials</NavLabel>
+              <NavItem view="FINANCE" icon={BadgeDollarSign} label="Finance & Accounts" />
+              <NavItem view="SALES" icon={DollarSign} label="Sales & Revenue" />
+              <NavItem view="ENTITIES" icon={Users} label="Entity Registry" />
+            </div>
+
+            <div className="pt-4">
+              <NavLabel>Analytics</NavLabel>
+              <NavItem view="REPORTS" icon={FileText} label="Reports" />
+              <NavItem view="PALAI" icon={User} label="Palai Partnering" />
+              <NavItem view="AI" icon={BrainCircuit} label="Gemini Advisor" />
             </div>
 
             <div className="pt-8 mt-4 border-t border-gray-100 pb-6">
@@ -411,8 +798,56 @@ const App: React.FC = () => {
         <header className="bg-white border-b border-gray-200 p-4 flex items-center justify-between sticky top-0 z-30 shadow-sm">
           <div className="flex items-center gap-2 lg:hidden">
             <div className="bg-emerald-600 text-white p-1.5 rounded-md"><Tractor size={20} /></div>
-            <span className="font-bold text-gray-800">CattleOps Pro</span>
+            <span className="font-bold text-gray-800">CattleOps</span>
           </div>
+
+          {/* CONTEXT SELECTORS (CENTER) */}
+          <div className="hidden md:flex items-center gap-2">
+            {/* LOCATION SELECTOR */}
+            <div className="flex items-center gap-2 bg-slate-100 p-1.5 rounded-lg border border-slate-200">
+              <div className="bg-white p-1.5 rounded shadow-sm text-sky-600"><MapPin size={18} /></div>
+              <div className="relative group">
+                <select
+                  value={state.currentLocationId || ''}
+                  onChange={(e) => setState(prev => ({ ...prev, currentLocationId: e.target.value || null, currentFarmId: null }))}
+                  className="bg-transparent font-bold text-slate-700 text-sm focus:outline-none cursor-pointer pr-6 appearance-none min-w-[120px]"
+                >
+                  <option value="">All Cities</option>
+                  {state.locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                </select>
+                <ChevronDown size={14} className="absolute right-0 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+              </div>
+              <button type="button" onClick={() => setShowAddCityModal(true)} className="p-1.5 rounded bg-sky-100 text-sky-600 hover:bg-sky-200" title="Add City"><PlusCircle size={18} /></button>
+            </div>
+
+            {/* FARM SELECTOR */}
+            <div className="flex items-center gap-2 bg-slate-100 p-1.5 rounded-lg border border-slate-200">
+              <div className="bg-white p-1.5 rounded shadow-sm text-emerald-600"><Building2 size={18} /></div>
+              <div className="relative group">
+                <select
+                  value={state.currentFarmId || ''}
+                  onChange={(e) => setState(prev => ({ ...prev, currentFarmId: e.target.value || null }))}
+                  className="bg-transparent font-bold text-slate-700 text-sm focus:outline-none cursor-pointer pr-6 appearance-none min-w-[150px]"
+                >
+                  <option value="">{state.currentLocationId ? 'All Farms in City' : 'All Farms (Global)'}</option>
+                  {state.farms.filter(f => !state.currentLocationId || f.locationId === state.currentLocationId).map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+                </select>
+                <ChevronDown size={14} className="absolute right-0 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+              </div>
+              <button type="button" onClick={() => setShowAddFarmModal(true)} className="p-1.5 rounded bg-emerald-100 text-emerald-600 hover:bg-emerald-200" title="Add Farm"><PlusCircle size={18} /></button>
+              {state.currentFarmId && <div className="text-[10px] font-bold bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded uppercase tracking-wider">{state.farms.find(f => f.id === state.currentFarmId)?.type}</div>}
+            </div>
+          </div>
+
+          {/* Add City Modal */}
+          {showAddCityModal && (
+            <AddCityModal onClose={() => setShowAddCityModal(false)} onSubmit={handleCreateLocation} />
+          )}
+          {/* Add Farm Modal */}
+          {showAddFarmModal && (
+            <AddFarmModal locations={state.locations} onClose={() => setShowAddFarmModal(false)} onSubmit={handleCreateFarm} />
+          )}
+
           <div className="hidden lg:flex items-center gap-4 ml-auto">
 
             <div className="flex items-center gap-2 text-gray-600">
@@ -433,10 +868,30 @@ const App: React.FC = () => {
 
         <main className="flex-1 overflow-y-auto p-4 md:p-8">
           <div className="max-w-7xl mx-auto">
-            {activeView === 'DASHBOARD' && <Dashboard state={state} />}
+            {activeView === 'DASHBOARD' && (
+              <Dashboard
+                isGlobalView={!state.currentFarmId && !state.currentLocationId}
+                onNavigate={(view, options) => {
+                  setActiveView(view);
+                  if (options?.operationsTab) setOperationsTab(options.operationsTab);
+                  setIsSidebarOpen(false);
+                }}
+                state={{
+                  ...state,
+                  livestock: state.currentFarmId ? state.livestock.filter(l => l.farmId === state.currentFarmId) : (state.currentLocationId ? state.livestock.filter(l => state.farms.find(f => f.id === l.farmId)?.locationId === state.currentLocationId) : state.livestock),
+                  expenses: state.currentFarmId ? state.expenses.filter(e => e.farmId === state.currentFarmId) : (state.currentLocationId ? state.expenses.filter(e => state.farms.find(f => f.id === e.farmId)?.locationId === state.currentLocationId) : state.expenses),
+                  sales: state.currentFarmId ? state.sales.filter(s => s.farmId === state.currentFarmId) : (state.currentLocationId ? state.sales.filter(s => s.farmId && state.farms.find(f => f.id === s.farmId)?.locationId === state.currentLocationId) : state.sales),
+                  feed: state.currentFarmId ? state.feed.filter(f => f.farmId === state.currentFarmId) : (state.currentLocationId ? state.feed.filter(f => state.farms.find(farm => farm.id === f.farmId)?.locationId === state.currentLocationId) : state.feed),
+                  dietPlans: state.currentFarmId ? state.dietPlans.filter(d => d.farmId === state.currentFarmId) : (state.currentLocationId ? state.dietPlans.filter(d => state.farms.find(farm => farm.id === d.farmId)?.locationId === state.currentLocationId) : state.dietPlans),
+                }}
+              />
+            )}
             {activeView === 'CATTLE_MANAGER' && (
               <LivestockManager
-                key="cattle-manager" livestock={state.livestock} breeders={state.breeders} species="CATTLE" categories={FIXED_CATEGORIES}
+                key="cattle-manager"
+                livestock={state.currentFarmId ? state.livestock.filter(l => l.farmId === state.currentFarmId) : (state.currentLocationId ? state.livestock.filter(l => state.farms.find(f => f.id === l.farmId)?.locationId === state.currentLocationId) : [])}
+                breeders={state.breeders} species="CATTLE" categories={FIXED_CATEGORIES}
+                entities={state.entities}
                 onAddLivestock={addLivestock} onUpdateLivestock={updateLivestock} onDeleteLivestock={deleteLivestock}
                 onAddMedicalRecord={addMedicalRecord} onAddBreedingRecord={addBreedingRecord} onAddWeightRecord={addWeightRecord} onAddMilkRecord={addMilkRecord}
                 onUpdateBreedingRecord={updateBreedingRecord}
@@ -445,41 +900,54 @@ const App: React.FC = () => {
             )}
             {activeView === 'GOAT_MANAGER' && (
               <LivestockManager
-                key="goat-manager" livestock={state.livestock} breeders={state.breeders} species="GOAT" categories={FIXED_CATEGORIES}
+                key="goat-manager"
+                livestock={state.currentFarmId ? state.livestock.filter(l => l.farmId === state.currentFarmId) : (state.currentLocationId ? state.livestock.filter(l => state.farms.find(f => f.id === l.farmId)?.locationId === state.currentLocationId) : [])}
+                breeders={state.breeders} species="GOAT" categories={FIXED_CATEGORIES}
+                entities={state.entities}
                 onAddLivestock={addLivestock} onUpdateLivestock={updateLivestock} onDeleteLivestock={deleteLivestock}
                 onAddMedicalRecord={addMedicalRecord} onAddBreedingRecord={addBreedingRecord} onAddWeightRecord={addWeightRecord} onAddMilkRecord={addMilkRecord}
-                onUpdateBreedingRecord={async (id, rec) => { /* TODO */ }}
+                onUpdateBreedingRecord={updateBreedingRecord}
+                inventory={state.feed} onAddSale={handleCreateSale}
               />
             )}
             {activeView === 'PALAI' && (
               <PalaiManager
-                state={state}
-                onUpdateLivestock={async (animal) => {
-                  // Mock update local state as backendService.updateLivestock might be missing
-                  setState(p => ({ ...p, livestock: p.livestock.map(l => l.id === animal.id ? animal : l) }));
+                state={{
+                  ...state,
+                  livestock: state.currentFarmId ? state.livestock.filter(l => l.farmId === state.currentFarmId) : (state.currentLocationId ? state.livestock.filter(l => state.farms.find(f => f.id === l.farmId)?.locationId === state.currentLocationId) : []),
+                  customers: (state.currentFarmId ? state.entities.filter(e => e.farmId === state.currentFarmId) : (state.currentLocationId ? state.entities.filter(e => state.farms.find(f => f.id === e.farmId)?.locationId === state.currentLocationId) : [])).filter(e => e.type === 'CUSTOMER' || e.type === 'PALAI_CLIENT'),
+                  invoices: state.currentFarmId ? state.invoices.filter(i => i.farmId === state.currentFarmId) : (state.currentLocationId ? state.invoices.filter(i => state.farms.find(f => f.id === i.farmId)?.locationId === state.currentLocationId) : []),
                 }}
-                onAddExpense={async (exp) => { await backendService.createExpense(exp); setState(p => ({ ...p, expenses: [...p.expenses, exp] })); }}
+                onUpdateLivestock={updateLivestock}
+                onAddExpense={handleCreateExpense}
               />
             )}
             {activeView === 'SALES' && (
               <SalesManager
-                state={state}
-                onAddSale={async (sale) => { await backendService.createSale(sale); setState(p => ({ ...p, sales: [...p.sales, sale] })); }}
-                onUpdateLivestock={async (animal) => {
-                  // TODO: Implement backendService.updateLivestock
-                  // Mocking the behavior locally for now
-                  setState(p => ({ ...p, livestock: p.livestock.map(l => l.id === animal.id ? animal : l) }));
+                state={{
+                  ...state,
+                  sales: state.currentFarmId ? state.sales.filter(s => s.farmId === state.currentFarmId) : (state.currentLocationId ? state.sales.filter(s => s.farmId && state.farms.find(f => f.id === s.farmId)?.locationId === state.currentLocationId) : state.sales),
+                  livestock: state.currentFarmId ? state.livestock.filter(l => l.farmId === state.currentFarmId) : (state.currentLocationId ? state.livestock.filter(l => state.farms.find(f => f.id === l.farmId)?.locationId === state.currentLocationId) : []),
                 }}
-                onDeleteSale={async (id) => { await backendService.deleteSale(id); setState(p => ({ ...p, sales: p.sales.filter(s => s.id !== id) })); }}
+                currentFarmId={state.currentFarmId}
+                currentLocationId={state.currentLocationId}
+                onAddSale={handleCreateSale}
+                onUpdateLivestock={updateLivestock}
+                onDeleteSale={async (id) => { try { await backendService.deleteSale(id); } catch (_) {} setState(p => { const nextSales = p.sales.filter(s => s.id !== id); setPersistedSales(nextSales); return { ...p, sales: nextSales }; }); }}
               />
             )}
             {activeView === 'FINANCE' && (
               <Financials
-                expenses={state.expenses}
-                sales={state.sales}
-                livestockList={state.livestock}
-                onAddExpense={async (exp) => { await backendService.createExpense(exp); setState(p => ({ ...p, expenses: [...p.expenses, exp] })); }}
-                onAddSale={async (sl) => { await backendService.createSale(sl); setState(p => ({ ...p, sales: [...p.sales, sl] })); }}
+                expenses={state.currentFarmId ? state.expenses.filter(e => e.farmId === state.currentFarmId) : (state.currentLocationId ? state.expenses.filter(e => state.farms.find(f => f.id === e.farmId)?.locationId === state.currentLocationId) : [])}
+                sales={state.currentFarmId ? state.sales.filter(s => s.farmId === state.currentFarmId) : (state.currentLocationId ? state.sales.filter(s => s.farmId && state.farms.find(f => f.id === s.farmId)?.locationId === state.currentLocationId) : state.sales)}
+                livestockList={state.currentFarmId ? state.livestock.filter(l => l.farmId === state.currentFarmId) : (state.currentLocationId ? state.livestock.filter(l => state.farms.find(f => f.id === l.farmId)?.locationId === state.currentLocationId) : [])}
+                entities={state.entities}
+                farms={state.farms}
+                locations={state.locations}
+                currentFarmId={state.currentFarmId}
+                currentLocationId={state.currentLocationId}
+                onAddExpense={handleCreateExpense}
+                onAddSale={handleCreateSale}
                 onDeleteExpense={async (id) => { await backendService.deleteExpense(id); setState(p => ({ ...p, expenses: p.expenses.filter(e => e.id !== id) })); }}
                 onDeleteSale={async (id) => { try { await backendService.deleteSale(id); } catch (_) {} setState(p => { const nextSales = p.sales.filter(s => s.id !== id); setPersistedSales(nextSales); return { ...p, sales: nextSales }; }); }}
                 onDeleteLivestock={async (id) => { await backendService.deleteLivestock(id); setState(p => ({ ...p, livestock: p.livestock.filter(l => l.id !== id) })); }}
@@ -487,8 +955,23 @@ const App: React.FC = () => {
             )}
             {activeView === 'OPERATIONS' && (
               <Operations
-                state={state}
-                onAddFeed={async (f) => { const saved = await backendService.createFeed(f); setState(p => ({ ...p, feed: [...p.feed, saved] })); }}
+                initialTab={operationsTab}
+                onTabChange={setOperationsTab}
+                onAddExpense={handleCreateExpense}
+                state={{
+                  ...state,
+                  feed: state.currentFarmId ? state.feed.filter(f => f.farmId === state.currentFarmId) : (state.currentLocationId ? state.feed.filter(f => state.farms.find(farm => farm.id === f.farmId)?.locationId === state.currentLocationId) : []),
+                  infrastructure: state.currentFarmId ? state.infrastructure.filter(i => i.farmId === state.currentFarmId) : (state.currentLocationId ? state.infrastructure.filter(i => state.farms.find(farm => farm.id === i.farmId)?.locationId === state.currentLocationId) : []),
+                  dietPlans: state.currentFarmId ? state.dietPlans.filter(d => d.farmId === state.currentFarmId) : (state.currentLocationId ? state.dietPlans.filter(d => state.farms.find(farm => farm.id === d.farmId)?.locationId === state.currentLocationId) : []),
+                  livestock: state.currentFarmId ? state.livestock.filter(l => l.farmId === state.currentFarmId) : (state.currentLocationId ? state.livestock.filter(l => state.farms.find(f => f.id === l.farmId)?.locationId === state.currentLocationId) : []),
+                  treatmentProtocols: state.currentFarmId ? state.treatmentProtocols.filter(t => t.farmId === state.currentFarmId) : (state.currentLocationId ? state.treatmentProtocols.filter(t => state.farms.find(f => f.id === t.farmId)?.locationId === state.currentLocationId) : []),
+                }}
+                onAddFeed={async (f) => {
+                  if (!state.currentFarmId) { alert("Select farm"); return; }
+                  const itemWithFarm = { ...f, farmId: state.currentFarmId }; // Ensure farmId is set
+                  const saved = await backendService.createFeed(itemWithFarm);
+                  setState(p => ({ ...p, feed: [...p.feed, saved] }));
+                }}
                 onUpdateFeed={async (f) => { const updated = await backendService.updateFeed(f.id, f); setState(p => ({ ...p, feed: p.feed.map(i => i.id === f.id ? updated : i) })); }}
                 onDeleteFeed={async (id) => { try { await backendService.deleteFeed(id); setState(p => ({ ...p, feed: p.feed.filter(i => i.id !== id) })); } catch (e) { alert('Failed to delete feed item.'); } }}
                 onAddInfrastructure={async (i) => {
@@ -507,12 +990,27 @@ const App: React.FC = () => {
                 }}
                 onUpdateDietPlan={async (d) => { const updated = await backendService.updateDietPlan(d.id, d); setState(p => ({ ...p, dietPlans: p.dietPlans.map(i => i.id === d.id ? updated : i) })); }}
                 onDeleteDietPlan={async (id) => { try { await backendService.deleteDietPlan(id); setState(p => ({ ...p, dietPlans: p.dietPlans.filter(i => i.id !== id) })); } catch (e) { alert('Failed to delete diet plan.'); } }}
+                onRunDailyProcessing={processDailyConsumption}
+                onAddTreatmentProtocol={async (p) => {
+                  if (!state.currentFarmId) { alert("Select farm"); return; }
+                  const protoWithFarm = { ...p, farmId: state.currentFarmId };
+                  const saved = await backendService.createTreatmentProtocol(protoWithFarm);
+                  setState(s => ({ ...s, treatmentProtocols: [...s.treatmentProtocols, saved] }));
+                }}
+                onUpdateTreatmentProtocol={async (p) => { const updated = await backendService.updateTreatmentProtocol(p.id, p); setState(s => ({ ...s, treatmentProtocols: s.treatmentProtocols.map(x => x.id === p.id ? updated : x) })); }}
+                onDeleteTreatmentProtocol={async (id) => { await backendService.deleteTreatmentProtocol(id); setState(s => ({ ...s, treatmentProtocols: s.treatmentProtocols.filter(x => x.id !== id) })); }}
+                onLogTreatment={handleLogTreatment}
               />
             )}
             {activeView === 'PROCUREMENT' && (
               <Procurement
-                state={state}
-                onAddExpense={async (exp) => { await backendService.createExpense(exp); setState(p => ({ ...p, expenses: [...p.expenses, exp] })); }}
+                state={{
+                  ...state,
+                  feed: state.currentFarmId ? state.feed.filter(f => f.farmId === state.currentFarmId) : (state.currentLocationId ? state.feed.filter(f => state.farms.find(farm => farm.id === f.farmId)?.locationId === state.currentLocationId) : []),
+                  expenses: state.currentFarmId ? state.expenses.filter(e => e.farmId === state.currentFarmId) : (state.currentLocationId ? state.expenses.filter(e => state.farms.find(f => f.id === e.farmId)?.locationId === state.currentLocationId) : []),
+                  entities: state.currentFarmId ? state.entities.filter(e => !e.farmId || e.farmId === state.currentFarmId) : (state.currentLocationId ? state.entities.filter(e => !e.farmId || state.farms.find(f => f.id === e.farmId)?.locationId === state.currentLocationId) : []),
+                }}
+                onAddExpense={handleCreateExpense}
                 onUpdateExpense={async (exp) => {
                   try {
                     const updated = await backendService.updateExpense(exp.id, exp);
@@ -532,7 +1030,24 @@ const App: React.FC = () => {
                 onDeleteFeed={async (id) => { try { await backendService.deleteFeed(id); setState(p => ({ ...p, feed: p.feed.filter(f => f.id !== id) })); } catch (e) { alert('Failed to delete feed item'); } }}
               />
             )}
-            {activeView === 'REPORTS' && <Reports state={state} />}
+            {activeView === 'REPORTS' && <Reports state={{
+              ...state,
+              livestock: state.currentFarmId ? state.livestock.filter(l => l.farmId === state.currentFarmId) : (state.currentLocationId ? state.livestock.filter(l => state.farms.find(f => f.id === l.farmId)?.locationId === state.currentLocationId) : []),
+              expenses: state.currentFarmId ? state.expenses.filter(e => e.farmId === state.currentFarmId) : (state.currentLocationId ? state.expenses.filter(e => state.farms.find(f => f.id === e.farmId)?.locationId === state.currentLocationId) : []),
+              sales: state.currentFarmId ? state.sales.filter(s => s.farmId === state.currentFarmId) : (state.currentLocationId ? state.sales.filter(s => s.farmId && state.farms.find(f => f.id === s.farmId)?.locationId === state.currentLocationId) : state.sales),
+            }} />}
+            {activeView === 'ENTITIES' && (
+              <EntityManager
+                entities={state.currentFarmId ? state.entities.filter(e => !e.farmId || e.farmId === state.currentFarmId) : (state.currentLocationId ? state.entities.filter(e => !e.farmId || state.farms.find(f => f.id === e.farmId)?.locationId === state.currentLocationId) : [])}
+                ledger={state.currentFarmId ? state.ledger.filter(l => l.farmId === state.currentFarmId) : (state.currentLocationId ? state.ledger.filter(l => state.farms.find(f => f.id === l.farmId)?.locationId === state.currentLocationId) : [])}
+                currentFarmId={state.currentFarmId}
+                currentLocationId={state.currentLocationId}
+                onAddEntity={addEntity}
+                onUpdateEntity={updateEntity}
+                onDeleteEntity={deleteEntity}
+                onAddPayment={handleAddPayment}
+              />
+            )}
             {activeView === 'AI' && <GeminiAdvisor state={state} />}
           </div>
         </main>

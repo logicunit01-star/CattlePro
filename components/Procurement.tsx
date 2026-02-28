@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import { AppState, Expense, FeedInventory, ExpenseCategory } from '../types';
-import { Calendar, DollarSign, Truck, ShoppingCart, User, AlertTriangle, CheckCircle, Clock, Search, Layers, Archive, Activity, RefreshCw } from 'lucide-react';
+import { Calendar, DollarSign, Truck, ShoppingCart, User, AlertTriangle, CheckCircle, Clock, Search, Layers, Archive, Activity, RefreshCw, MinusCircle, Edit2, X, Save } from 'lucide-react';
 
 interface Props {
     state: AppState;
@@ -51,6 +51,24 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
         ...state.expenses.map(e => e.supplier).filter(Boolean),
         ...state.feed.map(f => f.defaultSupplier).filter(Boolean)
     ])) as string[];
+    const vendorEntities = state.entities.filter(ent => ent.type === 'VENDOR');
+    const CASH_LABEL = 'Cash / Walk-in';
+    const supplierOptionsList: { value: string; label: string }[] = [
+        ...vendorEntities.map(v => ({ value: v.id, label: v.name })),
+        ...suppliers
+            .filter(s => s !== 'CASH' && !vendorEntities.some(v => v.id === s || v.name === s))
+            .map(s => ({ value: s, label: s }))
+    ];
+    // When an item is selected, show only that item's default supplier in the Supplier dropdown
+    const selectedFeedItem = procurementForm.feedTypeId ? state.feed.find(f => f.id === procurementForm.feedTypeId) : null;
+    const selectedItemSupplierOptions: { value: string; label: string }[] = selectedFeedItem?.defaultSupplier?.trim()
+        ? (() => {
+            const def = selectedFeedItem.defaultSupplier!.trim();
+            if (def === 'CASH') return [{ value: CASH_LABEL, label: CASH_LABEL }];
+            const match = vendorEntities.find(v => v.id === def || v.name === def);
+            return [match ? { value: match.id, label: match.name } : { value: def, label: def }];
+        })()
+        : [];
 
     // --- ACTIONS ---
 
@@ -67,11 +85,11 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
         const selectedItem = state.feed.find(f => f.id === procurementForm.feedTypeId);
         if (!selectedItem) return alert("Invalid Feed Item Selected");
 
-        const totalCost = procurementForm.weight * procurementForm.rate;
+        const totalCost = isGrass ? procurementForm.weight * procurementForm.rate : (procurementForm.quantity * procurementForm.rate);
         const descGrass = `Purchase: ${selectedItem.name} (${procurementForm.weight} ${selectedItem.unit || 'kg'})`;
         const descTmrWanda = `Purchase: ${selectedItem.name} (Qty: ${procurementForm.quantity}, Weight: ${procurementForm.weight} ${selectedItem.unit || 'kg'})`;
 
-        // 1. Create Expense (scoped to selected farm)
+        // 1. Create Expense (scoped to selected farm) – include procurement fields for edit form
         const expense: Expense = {
             id: Math.random().toString(36).substr(2, 9),
             farmId: state.currentFarmId,
@@ -81,7 +99,12 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
             description: isGrass ? descGrass : descTmrWanda,
             supplier: procurementForm.supplier,
             paymentStatus: procurementForm.paymentStatus as 'PAID' | 'PENDING' | 'PARTIAL',
-            location: procurementForm.location
+            location: procurementForm.location,
+            feedCategory: procurementForm.feedCategory,
+            feedItemId: selectedItem.id,
+            weight: procurementForm.weight,
+            quantity: isTmrOrWanda ? procurementForm.quantity : undefined,
+            rate: procurementForm.rate
         };
         try {
             await onAddExpense(expense);
@@ -103,18 +126,65 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
         setProcurementForm({ ...procurementForm, weight: 0, quantity: 0 });
     };
 
-    const handleSaveEditExpense = async () => {
-        if (!editingExpense) return;
-        if (!editingExpense.amount || editingExpense.amount <= 0 || !editingExpense.description?.trim()) {
-            alert("Amount and Description are required.");
+    const handleUpdateExpenseSubmit = async () => {
+        if (!editingExpense || !state.currentFarmId) return;
+        const isGrass = procurementForm.feedCategory === 'GRASS';
+        const isTmrOrWanda = procurementForm.feedCategory === 'TMR' || procurementForm.feedCategory === 'WANDA';
+        if (!procurementForm.supplier || !procurementForm.rate || !procurementForm.feedTypeId) {
+            alert("Supplier, Rate, and Select Item are required.");
             return;
         }
+        if (isGrass && !procurementForm.weight) {
+            alert("Weight (kg) is required for Grass.");
+            return;
+        }
+        if (isTmrOrWanda && (procurementForm.quantity == null || procurementForm.weight == null)) {
+            alert("Quantity and Weight are both required for TMR / WANDA.");
+            return;
+        }
+        const selectedItem = state.feed.find(f => f.id === procurementForm.feedTypeId);
+        if (!selectedItem) {
+            alert("Invalid Feed Item Selected");
+            return;
+        }
+        const totalCost = isGrass ? procurementForm.weight * procurementForm.rate : (procurementForm.quantity * procurementForm.rate);
+        const descGrass = `Purchase: ${selectedItem.name} (${procurementForm.weight} ${selectedItem.unit || 'kg'})`;
+        const descTmrWanda = `Purchase: ${selectedItem.name} (Qty: ${procurementForm.quantity}, Weight: ${procurementForm.weight} ${selectedItem.unit || 'kg'})`;
+        const updated: Expense = {
+            ...editingExpense,
+            date: procurementForm.date,
+            description: isGrass ? descGrass : descTmrWanda,
+            supplier: procurementForm.supplier,
+            amount: totalCost,
+            paymentStatus: procurementForm.paymentStatus as 'PAID' | 'PENDING' | 'PARTIAL',
+            feedCategory: procurementForm.feedCategory,
+            feedItemId: selectedItem.id,
+            weight: procurementForm.weight,
+            quantity: isTmrOrWanda ? procurementForm.quantity : undefined,
+            rate: procurementForm.rate
+        };
         try {
-            await onUpdateExpense(editingExpense);
+            await onUpdateExpense(updated);
             setEditingExpense(null);
         } catch (e) {
             // Error already shown by parent
         }
+    };
+
+    const startEditExpense = (e: Expense) => {
+        setEditingExpense(e);
+        const supplierVal = e.supplier?.trim() ?? '';
+        setProcurementForm(prev => ({
+            ...prev,
+            date: e.date,
+            supplier: supplierVal === 'CASH' ? CASH_LABEL : supplierVal,
+            feedCategory: (e.feedCategory as 'GRASS' | 'TMR' | 'WANDA') || 'GRASS',
+            feedTypeId: e.feedItemId ?? '',
+            weight: e.weight ?? 0,
+            quantity: e.quantity ?? 0,
+            rate: e.rate ?? 0,
+            paymentStatus: (e.paymentStatus as 'PAID' | 'PENDING' | 'PARTIAL') || 'PENDING'
+        }));
     };
 
     const handleAddItem = () => {
@@ -209,16 +279,23 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
 
             {activeTab === 'PROCUREMENT' && (
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                    {/* Entry Form */}
+                    {/* Entry Form – New Purchase or Edit mode */}
                     <div className="lg:col-span-1 space-y-6">
                         <div className="bg-emerald-50 p-6 rounded-2xl border border-emerald-100 shadow-sm sticky top-6">
-                            <h3 className="font-bold text-emerald-800 mb-6 flex items-center gap-2"><Truck size={18} /> New Purchase Entry</h3>
+                            <div className="flex justify-between items-center mb-6">
+                                <h3 className="font-bold text-emerald-800 flex items-center gap-2">
+                                    {editingExpense ? <><Edit2 size={18} /> Edit Procurement Entry</> : <><Truck size={18} /> New Purchase Entry</>}
+                                </h3>
+                                {editingExpense && (
+                                    <button type="button" onClick={() => setEditingExpense(null)} className="text-gray-500 hover:text-gray-700 px-2 py-1 rounded-lg hover:bg-white/50 text-sm font-medium" title="Cancel edit">Cancel</button>
+                                )}
+                            </div>
 
                             <div className="space-y-4">
                                 {/* Feed Category Toggle */}
                                 <div className="flex bg-white rounded-lg p-1 border border-emerald-100 mb-4">
                                     {['GRASS', 'TMR', 'WANDA'].map(type => (
-                                        <button key={type} onClick={() => setProcurementForm({ ...procurementForm, feedCategory: type as 'GRASS' | 'TMR' | 'WANDA', feedTypeId: '', quantity: 0 })} className={`flex-1 py-1.5 text-[10px] font-bold rounded transition-all ${procurementForm.feedCategory === type ? 'bg-emerald-500 text-white shadow-sm' : 'text-gray-500 hover:bg-gray-50'}`}>
+                                        <button key={type} type="button" onClick={() => setProcurementForm(prev => ({ ...prev, feedCategory: type as 'GRASS' | 'TMR' | 'WANDA', feedTypeId: '', quantity: 0 }))} className={`flex-1 py-1.5 text-[10px] font-bold rounded transition-all ${procurementForm.feedCategory === type ? 'bg-emerald-500 text-white shadow-sm' : 'text-gray-500 hover:bg-gray-50'}`}>
                                             {type}
                                         </button>
                                     ))}
@@ -228,7 +305,10 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                     <label className="block text-xs font-bold text-emerald-700 uppercase mb-1">Select Item</label>
                                     <select value={procurementForm.feedTypeId} onChange={e => {
                                         const item = state.feed.find(f => f.id === e.target.value);
-                                        setProcurementForm({ ...procurementForm, feedTypeId: e.target.value, rate: item?.unitCost || 0, supplier: item?.defaultSupplier || '' })
+                                        const defaultSupp = item?.defaultSupplier?.trim() || '';
+                                        const vendorMatch = defaultSupp ? vendorEntities.find(v => v.id === defaultSupp || v.name === defaultSupp) : null;
+                                        const supplierValue = vendorMatch ? vendorMatch.id : (defaultSupp === 'CASH' ? 'Cash / Walk-in' : defaultSupp);
+                                        setProcurementForm(prev => ({ ...prev, feedTypeId: e.target.value, rate: item?.unitCost || 0, supplier: supplierValue }));
                                     }} className="w-full border border-emerald-200 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500 bg-white">
                                         <option value="">Select Feed...</option>
                                         {feedItems.filter(f => f.feedType === procurementForm.feedCategory).map(f => (
@@ -248,15 +328,17 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                     <div>
                                         <label className="block text-xs font-bold text-emerald-700 uppercase mb-1">Supplier</label>
                                         <select
-                                            value={procurementForm.supplier}
+                                            value={procurementForm.supplier === 'CASH' ? CASH_LABEL : procurementForm.supplier}
                                             onChange={e => setProcurementForm({ ...procurementForm, supplier: e.target.value })}
                                             className="w-full border border-emerald-200 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
                                         >
                                             <option value="">Select Vendor...</option>
-                                            {state.entities.filter(e => e.type === 'VENDOR').map(v => (
-                                                <option key={v.id} value={v.id}>{v.name}</option>
-                                            ))}
-                                            <option value="CASH">Cash / Walk-in</option>
+                                            {(selectedFeedItem ? selectedItemSupplierOptions : supplierOptionsList)
+                                                .filter(opt => opt.value !== CASH_LABEL)
+                                                .map(opt => (
+                                                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                                ))}
+                                            <option value={CASH_LABEL}>{CASH_LABEL}</option>
                                         </select>
                                     </div>
                                 </div>
@@ -305,9 +387,21 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                 <div className="pt-4 border-t border-emerald-100">
                                     <div className="flex justify-between items-end mb-4">
                                         <span className="text-sm font-medium text-emerald-700">Total Payable</span>
-                                        <span className="text-2xl font-black text-emerald-800">PKR {((procurementForm.weight || 0) * (procurementForm.rate || 0)).toLocaleString()}</span>
+                                        <span className="text-2xl font-black text-emerald-800">
+                                            PKR {(procurementForm.feedCategory === 'GRASS'
+                                                ? (procurementForm.weight || 0) * (procurementForm.rate || 0)
+                                                : (procurementForm.quantity || 0) * (procurementForm.rate || 0)
+                                            ).toLocaleString()}
+                                        </span>
                                     </div>
-                                    <button onClick={handleProcurementSubmit} className="w-full bg-emerald-600 text-white font-bold py-3 rounded-xl hover:bg-emerald-700 transition-shadow shadow-lg shadow-emerald-100">RECORD PROCUREMENT</button>
+                                    {editingExpense ? (
+                                        <div className="flex gap-2">
+                                            <button type="button" onClick={handleUpdateExpenseSubmit} className="flex-1 bg-emerald-600 text-white font-bold py-3 rounded-xl hover:bg-emerald-700 flex items-center justify-center gap-2 shadow-lg shadow-emerald-100"><Save size={18} /> Update Entry</button>
+                                            <button type="button" onClick={() => setEditingExpense(null)} className="px-4 py-3 rounded-xl border border-gray-300 text-gray-700 font-bold hover:bg-gray-50">Cancel</button>
+                                        </div>
+                                    ) : (
+                                        <button type="button" onClick={handleProcurementSubmit} className="w-full bg-emerald-600 text-white font-bold py-3 rounded-xl hover:bg-emerald-700 transition-shadow shadow-lg shadow-emerald-100">RECORD PROCUREMENT</button>
+                                    )}
                                 </div>
                             </div>
                         </div>
@@ -318,47 +412,8 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
                             <div className="p-4 border-b border-gray-100 bg-gray-50 flex justify-between items-center">
                                 <h3 className="font-bold text-gray-700">Procurement History</h3>
+                                {editingExpense && <span className="text-xs font-medium text-emerald-600">Editing entry → use form on the left</span>}
                             </div>
-
-                            {/* Inline edit form when editing */}
-                            {editingExpense && (
-                                <div className="p-4 bg-emerald-50 border-b border-emerald-100">
-                                    <div className="flex items-center justify-between mb-3">
-                                        <span className="text-sm font-bold text-emerald-800">Edit entry</span>
-                                        <button type="button" onClick={() => setEditingExpense(null)} className="text-gray-500 hover:text-gray-700 p-1"><X size={18} /></button>
-                                    </div>
-                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 items-end">
-                                        <div className="lg:col-span-2">
-                                            <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Date</label>
-                                            <input type="date" value={editingExpense.date} onChange={e => setEditingExpense({ ...editingExpense, date: e.target.value })} className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm" />
-                                        </div>
-                                        <div className="lg:col-span-4">
-                                            <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Description</label>
-                                            <input type="text" value={editingExpense.description} onChange={e => setEditingExpense({ ...editingExpense, description: e.target.value })} className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm" placeholder="Item / description" />
-                                        </div>
-                                        <div className="lg:col-span-2">
-                                            <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Supplier</label>
-                                            <input type="text" value={editingExpense.supplier ?? ''} onChange={e => setEditingExpense({ ...editingExpense, supplier: e.target.value })} className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm" />
-                                        </div>
-                                        <div className="lg:col-span-2">
-                                            <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Amount (PKR)</label>
-                                            <input type="number" min={0} value={editingExpense.amount} onChange={e => setEditingExpense({ ...editingExpense, amount: parseFloat(e.target.value) || 0 })} className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm" />
-                                        </div>
-                                        <div className="lg:col-span-2">
-                                            <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Payment</label>
-                                            <select value={editingExpense.paymentStatus ?? 'PENDING'} onChange={e => setEditingExpense({ ...editingExpense, paymentStatus: e.target.value as 'PAID' | 'PENDING' | 'PARTIAL' })} className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm bg-white">
-                                                <option value="PENDING">Pending</option>
-                                                <option value="PAID">Paid</option>
-                                                <option value="PARTIAL">Partial</option>
-                                            </select>
-                                        </div>
-                                        <div className="sm:col-span-2 lg:col-span-12 flex gap-2">
-                                            <button type="button" onClick={handleSaveEditExpense} className="bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-1.5 hover:bg-emerald-700"><Save size={14} /> Save</button>
-                                            <button type="button" onClick={() => setEditingExpense(null)} className="bg-gray-200 text-gray-700 px-4 py-2 rounded-lg text-sm font-bold hover:bg-gray-300">Cancel</button>
-                                        </div>
-                                    </div>
-                                </div>
-                            )}
 
                             <table className="min-w-full text-sm">
                                 <thead className="bg-gray-50">
@@ -373,7 +428,7 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                 </thead>
                                 <tbody className="divide-y divide-gray-100">
                                     {state.expenses.filter(e => e.category === 'FEED').slice(0, 50).map(e => (
-                                        <tr key={e.id} className={`hover:bg-gray-50 ${editingExpense?.id === e.id ? 'bg-emerald-50' : ''}`}>
+                                        <tr key={e.id} className={`hover:bg-gray-50 ${editingExpense?.id === e.id ? 'bg-emerald-100 ring-1 ring-emerald-200' : ''}`}>
                                             <td className="px-4 py-3 text-gray-500">{e.date}</td>
                                             <td className="px-4 py-3 font-medium text-gray-800">{e.description}</td>
                                             <td className="px-4 py-3 text-gray-600">{e.supplier}</td>
@@ -382,7 +437,7 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                                 <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${e.paymentStatus === 'PAID' ? 'bg-emerald-100 text-emerald-700' : e.paymentStatus === 'PARTIAL' ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'}`}>{e.paymentStatus || 'PENDING'}</span>
                                             </td>
                                             <td className="px-4 py-3 text-right">
-                                                <button type="button" onClick={() => setEditingExpense({ ...e })} className="text-gray-400 hover:text-emerald-600 p-1.5 rounded-lg hover:bg-emerald-50 transition-colors" title="Edit"><Edit2 size={16} /></button>
+                                                <button type="button" onClick={() => startEditExpense(e)} className="text-gray-400 hover:text-emerald-600 p-1.5 rounded-lg hover:bg-emerald-50 transition-colors" title="Edit"><Edit2 size={16} /></button>
                                             </td>
                                         </tr>
                                     ))}

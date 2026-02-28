@@ -266,10 +266,17 @@ export interface Expense {
   supplier?: string;
   paymentStatus?: 'PAID' | 'PENDING' | 'PARTIAL';
   paymentDate?: string;
+  // Procurement (FEED): so edit form matches new purchase entry
+  feedCategory?: string;  // GRASS, TMR, WANDA
+  feedItemId?: string;    // FeedInventory id
+  weight?: number;        // kg
+  quantity?: number;      // bags/bundles for TMR/WANDA
+  rate?: number;         // PKR per kg
 }
 
 export interface Sale {
   id: string;
+  farmId?: string; // Backend may omit; frontend infers from soldAnimalIds when missing
   itemType: 'ANIMAL' | 'MILK' | 'MANURE' | 'OTHER';
 
   // Animal Sale Specifics

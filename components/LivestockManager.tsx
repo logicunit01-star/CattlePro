@@ -2,7 +2,8 @@
 import React, { useState } from 'react';
 import { Livestock, LivestockSpecies, LivestockStatus, MedicalRecord, MedicalRecordType, InseminationRecord, WeightRecord, ServiceDetails, MilkRecord, Breeder, BirthRecord, FeedInventory, Sale, Entity } from '../types';
 import { COMMON_VACCINES, FEED_PLANS } from '../constants';
-import { Search, Plus, Tag, Scale, Settings, ArrowLeft, Save, Calendar, MapPin, Eye, Stethoscope, Dna, User, Phone, ScrollText, LineChart, Image as ImageIcon, Upload, Edit2, Milk, Droplets, Beef, Sprout, FileText, CheckCircle2, Baby, Info, Trash2, Clock, ChevronRight } from 'lucide-react';
+import { uploadImage } from '../services/uploadService';
+import { Search, Plus, Tag, Scale, Settings, ArrowLeft, Save, Calendar, MapPin, Eye, Stethoscope, Dna, User, Phone, ScrollText, LineChart, Image as ImageIcon, Upload, Edit2, Milk, Droplets, Beef, Sprout, FileText, CheckCircle2, Baby, Info, Trash2, Clock, ChevronRight, DollarSign, Skull } from 'lucide-react';
 import { LineChart as RechartsLine, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
 
 interface Props {
@@ -731,7 +732,25 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                         </div>
                     </div>
                     <div className="flex items-center gap-3">
-                        <button onClick={() => { setAnimalForm({ ...selectedAnimal }); setIsEditing(true); setCurrentView('ANIMAL_FORM'); }} className="bg-white px-6 py-2.5 rounded-xl border border-gray-200 font-bold text-gray-600 hover:bg-gray-50 transition-all flex items-center gap-2">
+                        <button
+                            onClick={() => {
+                                setSaleForm({ ...saleForm, pricePerAnimal: 0, buyer: '', notes: `Sale of ${selectedAnimal.tagId}` });
+                                setIsSelling(true);
+                            }}
+                            disabled={selectedAnimal.status === 'SOLD'}
+                            className="bg-emerald-600 text-white px-6 py-2.5 rounded-xl font-bold shadow-lg shadow-emerald-100 hover:bg-emerald-700 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-emerald-600"
+                        >
+                            <Tag size={18} /> SELL
+                        </button>
+                        <button onClick={() => {
+                            setAnimalForm({ ...selectedAnimal });
+                            setIsEditing(true);
+                            setIsAddingCalfEntry(false);
+                            setCalfList([{ gender: 'FEMALE', weight: 15, ageMonths: 1, name: '' }]);
+                            setIsPregnantEntry(false);
+                            setPregnantDate(new Date().toISOString().split('T')[0]);
+                            setCurrentView('ANIMAL_FORM');
+                        }} className="bg-white px-6 py-2.5 rounded-xl border border-gray-200 font-bold text-gray-600 hover:bg-gray-50 transition-all flex items-center gap-2">
                             <Edit2 size={18} /> EDIT PROFILE
                         </button>
                         <button

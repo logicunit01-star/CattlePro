@@ -1,13 +1,18 @@
 
 import React, { useState } from 'react';
-import { Expense, ExpenseCategory, Sale, Livestock } from '../types';
-import { Plus, DollarSign, Truck, Wrench, Syringe, Briefcase, Home, Stethoscope, Dna, ArrowLeft, Trash2 } from 'lucide-react';
+import { Expense, ExpenseCategory, Sale, Livestock, Entity, Farm } from '../types';
+import { Plus, DollarSign, Truck, Wrench, Syringe, Briefcase, Home, Stethoscope, Dna, ArrowLeft, Trash2, Store, User, Share2, AlertTriangle, Building2 } from 'lucide-react';
 
 interface Props {
     expenses: Expense[];
     sales: Sale[];
     livestockList?: Livestock[];
-    onAddExpense: (e: Expense) => void;
+    entities: Entity[];
+    farms?: Farm[];
+    locations?: { id: string; name: string }[];
+    currentFarmId?: string | null;
+    currentLocationId?: string | null;
+    onAddExpense: (e: Expense) => void | Promise<void>;
     onAddSale: (s: Sale) => void;
     onDeleteExpense: (id: string) => void;
     onDeleteSale: (id: string) => void;
@@ -15,7 +20,7 @@ interface Props {
 
 type FinancialView = 'LIST' | 'ADD_EXPENSE' | 'ADD_SALE';
 
-export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [], onAddExpense, onAddSale, onDeleteExpense, onDeleteSale }) => {
+export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [], entities, farms = [], locations = [], currentFarmId, currentLocationId, onAddExpense, onAddSale, onDeleteExpense, onDeleteSale }) => {
     const [activeTab, setActiveTab] = useState<'EXPENSES' | 'SALES'>('EXPENSES');
     const [viewMode, setViewMode] = useState<FinancialView>('LIST');
 
@@ -333,12 +338,19 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
 
     return (
         <div className="space-y-6 animate-fade-in">
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                <h2 className="text-2xl font-bold text-gray-800">Financial Management</h2>
-                <div className="bg-white border border-gray-200 rounded-lg p-3 shadow-sm flex gap-4">
-                    <div className="text-right">
-                        <p className="text-xs text-gray-500 uppercase font-bold">Revenue</p>
-                        <p className="text-sm font-bold text-green-600">PKR {totalSales.toLocaleString()}</p>
+            {scopeLabel && (
+                <div className="flex items-center gap-2 text-sm">
+                    <Building2 size={18} className="text-emerald-600" />
+                    <span className="text-gray-500 font-medium">Showing data for:</span>
+                    <span className="bg-emerald-100 text-emerald-800 font-bold px-3 py-1 rounded-full border border-emerald-200">{scopeLabel}</span>
+                </div>
+            )}
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-4">
+                <h2 className="text-3xl font-extrabold text-slate-800 tracking-tight font-display">Financial Management</h2>
+                <div className="flex gap-4 w-full md:w-auto">
+                    <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex-1 md:w-40 premium-card">
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Total Revenue</p>
+                        <p className="text-xl font-extrabold text-emerald-600">PKR {totalSales.toLocaleString()}</p>
                     </div>
                     <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex-1 md:w-40 premium-card">
                         <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Total Expenses</p>
@@ -476,6 +488,19 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                                 +PKR {sale.amount.toLocaleString()}
                                             </td>
                                             <td className="px-6 py-4 whitespace-nowrap text-right">
+                                                <button
+                                                    onClick={() => {
+                                                        const typeLabel = saleTypeLabel(sale.itemType || 'ANIMAL');
+                                                        const itemDetail = saleItemDisplay(sale);
+                                                        const qtyWeight = saleQtyWeightDisplay(sale);
+                                                        const text = `*INVOICE RECEIPT*\n\nDate: ${sale.date}\nType: ${typeLabel}\nItem: ${itemDetail}\n${qtyWeight !== '—' ? `Qty/Weight: ${qtyWeight}\n` : ''}Amount: PKR ${sale.amount.toLocaleString()}\nStatus: ${(sale.amountReceived ?? 0) >= sale.amount ? 'PAID' : 'PENDING'}\n\nThank you for your business!`;
+                                                        window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
+                                                    }}
+                                                    className="p-1.5 rounded-lg text-gray-400 hover:bg-green-50 hover:text-green-600 transition-colors mr-2"
+                                                    title="Share Invoice"
+                                                >
+                                                    <Share2 size={16} />
+                                                </button>
                                                 <button
                                                     onClick={() => { if (confirm('Delete this sale?')) onDeleteSale(sale.id); }}
                                                     className="p-1.5 rounded-lg text-gray-400 hover:bg-red-50 hover:text-red-600 transition-colors"

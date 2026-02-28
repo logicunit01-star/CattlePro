@@ -110,7 +110,6 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
             </div>
           </div>
           <div className="bg-blue-50 p-4 rounded-xl text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-all duration-300 shadow-inner">
-          <div className="bg-blue-50 p-4 rounded-xl text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-all duration-300 shadow-inner">
             <Activity size={24} />
           </div>
         </div>
@@ -122,7 +121,6 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
             <h3 className="text-4xl font-black text-sky-600 mt-2 font-display">{totalMilkToday.toFixed(1)} <span className="text-lg text-sky-400 font-bold">L</span></h3>
             <p className="text-xs text-slate-400 mt-3 font-medium flex items-center gap-1"><TrendingUp size={12} className="text-emerald-500" /> Avg Yield Stable</p>
           </div>
-          <div className="bg-sky-50 p-4 rounded-xl text-sky-500 group-hover:bg-sky-500 group-hover:text-white transition-all duration-300 shadow-inner">
           <div className="bg-sky-50 p-4 rounded-xl text-sky-500 group-hover:bg-sky-500 group-hover:text-white transition-all duration-300 shadow-inner">
             <Milk size={24} />
           </div>
@@ -136,9 +134,7 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
               {netProfit >= 0 ? '+' : ''}PKR {Math.abs(netProfit).toLocaleString()}
             </h3>
             <p className="text-xs text-slate-400 mt-3 font-medium">Revenue vs Expenses</p>
-            <p className="text-xs text-slate-400 mt-3 font-medium">Revenue vs Expenses</p>
           </div>
-          <div className={`p-4 rounded-xl shadow-inner transition-all duration-300 ${netProfit >= 0 ? 'bg-emerald-50 text-emerald-600 group-hover:bg-emerald-600 group-hover:text-white' : 'bg-red-50 text-red-600 group-hover:bg-red-600 group-hover:text-white'}`}>
           <div className={`p-4 rounded-xl shadow-inner transition-all duration-300 ${netProfit >= 0 ? 'bg-emerald-50 text-emerald-600 group-hover:bg-emerald-600 group-hover:text-white' : 'bg-red-50 text-red-600 group-hover:bg-red-600 group-hover:text-white'}`}>
             <TrendingUp size={24} />
           </div>
@@ -151,7 +147,6 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
             <h3 className="text-4xl font-black text-amber-500 mt-2 font-display">{upcomingTasks.length}</h3>
             <p className="text-xs text-slate-400 mt-3 font-medium">Tasks / Vaccine Checks</p>
           </div>
-          <div className="bg-amber-50 p-4 rounded-xl text-amber-500 group-hover:bg-amber-500 group-hover:text-white transition-all duration-300 shadow-inner">
           <div className="bg-amber-50 p-4 rounded-xl text-amber-500 group-hover:bg-amber-500 group-hover:text-white transition-all duration-300 shadow-inner">
             <AlertTriangle size={24} />
           </div>
@@ -168,7 +163,6 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
           <div role="button" tabIndex={0} onClick={() => onNavigate?.('OPERATIONS', { operationsTab: 'FEED' })} onKeyDown={e => e.key === 'Enter' && onNavigate?.('OPERATIONS', { operationsTab: 'FEED' })} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 premium-card cursor-pointer hover:shadow-md transition-shadow">
             <div className="flex justify-between items-center mb-6">
               <h3 className="font-bold text-slate-800 flex items-center gap-2 font-display"><Milk size={20} className="text-sky-500" /> Milk Production Trend (7 Days)</h3>
-              <h3 className="font-bold text-slate-800 flex items-center gap-2 font-display"><Milk size={20} className="text-sky-500" /> Milk Production Trend (7 Days)</h3>
             </div>
             <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
@@ -179,11 +173,6 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
                       <stop offset="95%" stopColor="#0ea5e9" stopOpacity={0} />
                     </linearGradient>
                   </defs>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                  <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12, fontWeight: 600 }} />
-                  <YAxis axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12, fontWeight: 600 }} />
-                  <Tooltip contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} />
-                  <Area type="monotone" dataKey="liters" stroke="#0ea5e9" strokeWidth={4} fillOpacity={1} fill="url(#colorMilk)" />
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                   <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12, fontWeight: 600 }} />
                   <YAxis axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12, fontWeight: 600 }} />
@@ -202,10 +191,8 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Pie data={pieData} cx="50%" cy="50%" innerRadius={60} outerRadius={80} paddingAngle={5} dataKey="value" stroke="none">
-                    <Pie data={pieData} cx="50%" cy="50%" innerRadius={60} outerRadius={80} paddingAngle={5} dataKey="value" stroke="none">
                       {pieData.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />)}
                     </Pie>
-                    <Tooltip formatter={(value) => `PKR ${value.toLocaleString()}`} contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} />
                     <Tooltip formatter={(value) => `PKR ${value.toLocaleString()}`} contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} />
                   </PieChart>
                 </ResponsiveContainer>
@@ -214,14 +201,10 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
                 <div className="space-y-3">
                   {pieData.slice(0, 5).map((entry, idx) => (
                     <div key={idx} className="flex items-center justify-between text-sm group cursor-default">
-                    <div key={idx} className="flex items-center justify-between text-sm group cursor-default">
                       <div className="flex items-center gap-2">
                         <div className="w-3 h-3 rounded-full transition-transform group-hover:scale-125" style={{ backgroundColor: COLORS[idx % COLORS.length] }}></div>
                         <span className="text-slate-600 font-bold">{entry.name}</span>
-                        <div className="w-3 h-3 rounded-full transition-transform group-hover:scale-125" style={{ backgroundColor: COLORS[idx % COLORS.length] }}></div>
-                        <span className="text-slate-600 font-bold">{entry.name}</span>
                       </div>
-                      <span className="font-extrabold text-slate-800">{(entry.value / totalExpenses * 100).toFixed(1)}%</span>
                       <span className="font-extrabold text-slate-800">{(entry.value / totalExpenses * 100).toFixed(1)}%</span>
                     </div>
                   ))}
@@ -288,9 +271,6 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 h-full premium-card">
             <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2 font-display">
               <Calendar size={20} className="text-amber-500" />
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 h-full premium-card">
-            <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2 font-display">
-              <Calendar size={20} className="text-amber-500" />
               Upcoming Tasks
             </h3>
 
@@ -299,14 +279,8 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
                 <div key={idx} className="flex gap-4 items-start p-3 hover:bg-amber-50 rounded-xl transition-all border border-transparent hover:border-amber-100 cursor-pointer group">
                   <div className="bg-amber-100 text-amber-600 p-2.5 rounded-xl shrink-0 group-hover:bg-amber-500 group-hover:text-white transition-all shadow-sm">
                     <AlertTriangle size={18} />
-                <div key={idx} className="flex gap-4 items-start p-3 hover:bg-amber-50 rounded-xl transition-all border border-transparent hover:border-amber-100 cursor-pointer group">
-                  <div className="bg-amber-100 text-amber-600 p-2.5 rounded-xl shrink-0 group-hover:bg-amber-500 group-hover:text-white transition-all shadow-sm">
-                    <AlertTriangle size={18} />
                   </div>
                   <div>
-                    <p className="text-xs font-extrabold text-amber-600 uppercase mb-0.5 tracking-wide">{task.date} • {task.tag}</p>
-                    <p className="text-sm font-bold text-slate-800 group-hover:text-amber-900 transition-colors">{task.description}</p>
-                    <p className="text-[10px] text-slate-400 mt-1 font-bold bg-slate-100 inline-block px-2 py-0.5 rounded-md">{task.task} Due</p>
                     <p className="text-xs font-extrabold text-amber-600 uppercase mb-0.5 tracking-wide">{task.date} • {task.tag}</p>
                     <p className="text-sm font-bold text-slate-800 group-hover:text-amber-900 transition-colors">{task.description}</p>
                     <p className="text-[10px] text-slate-400 mt-1 font-bold bg-slate-100 inline-block px-2 py-0.5 rounded-md">{task.task} Due</p>
@@ -314,8 +288,6 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
                 </div>
               )) : (
                 <div className="text-center py-10">
-                  <CheckCircle className="mx-auto text-emerald-200 mb-2" size={40} />
-                  <p className="text-slate-400 text-sm font-medium">No pending tasks for next 30 days.</p>
                   <CheckCircle className="mx-auto text-emerald-200 mb-2" size={40} />
                   <p className="text-slate-400 text-sm font-medium">No pending tasks for next 30 days.</p>
                 </div>
