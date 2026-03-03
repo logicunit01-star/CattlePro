@@ -228,8 +228,6 @@ export interface Livestock {
   serviceDetails?: ServiceDetails;
   damId?: string; // Mother
   sireId?: string; // Father
-  accumulatedFeedCost?: number;
-  accumulatedMedicalCost?: number;
 }
 
 export interface AppState {
@@ -241,10 +239,8 @@ export interface AppState {
   expenses: Expense[];
   sales: Sale[];
   feed: FeedInventory[];
-  treatmentProtocols: TreatmentProtocol[];
-  dietPlans: DietPlan[];
   infrastructure: Infrastructure[];
-  processedFeedLedgers: ProcessedFeedLedger[];
+  dietPlans: DietPlan[];
   breeders: Breeder[];
   categories: string[];
   customers: Customer[]; // Legacy, will migrate to entities
@@ -289,7 +285,6 @@ export interface Sale {
 
   // Financials
   amount: number; // Total Sale Value
-  estimatedProfit?: number; // Total generated minus cumulative animal COGS
   pricingMethod?: 'PER_ANIMAL' | 'LUMP_SUM'; // For bulk sales
   pricePerAnimal?: number;
 
@@ -315,7 +310,6 @@ export interface FeedInventory {
   category?: 'FEED' | 'MEDICINE' | 'TOOL' | 'SUPPLY' | 'EQUIPMENT' | 'OTHER';
   quantity: number;
   unit?: string;
-  weightPerUnit?: number;
   unitCost: number;
   reorderLevel: number;
   batchNumber?: string;
@@ -362,7 +356,6 @@ export interface Infrastructure {
 
 export type DietTargetType = 'INDIVIDUAL' | 'CATEGORY' | 'GROUP' | 'ALL';
 export type DietStatus = 'DRAFT' | 'ACTIVE' | 'ARCHIVED' | 'COMPLETED';
-export type DietDistributionMode = 'PER_ANIMAL' | 'TOTAL_DISTRIBUTED' | 'PER_HUNDRED_KG_BW';
 
 export interface DietPlanItem {
   id: string;
@@ -379,12 +372,8 @@ export interface DietPlan {
   name: string;
   targetType: DietTargetType;
   targetId?: string; // ID of animal, or 'Milking Cows', 'Calves', etc.
-  targetIds?: string[]; // Multiple individuals
   targetName?: string; // Display name for target
   status: DietStatus;
-  distributionMode: DietDistributionMode;
-  autoProcess?: boolean;
-  lastProcessedDate?: string;
   startDate: string;
   endDate?: string;
   items: DietPlanItem[];
@@ -399,24 +388,11 @@ export interface ConsumptionLog {
   id: string;
   farmId: string;
   dietPlanId: string;
-  processedLedgerId?: string; // Link to master ledger for easy batch reversal
-  animalId?: string; // Explicit link so animal history clearly shows exactly what they ate per day
   date: string;
   itemId: string; // FeedInventory ID
   quantityUsed: number; // Total consumed
   cost: number; // Total cost for this entry
   unit: string;
-}
-
-export interface ProcessedFeedLedger {
-  id: string;
-  farmId: string;
-  date: string;
-  dietPlanId: string;
-  totalAnimalsFed: number;
-  totalCost: number;
-  processedBy: string;
-  status: 'PROCESSED' | 'REVERSED';
 }
 
 // --- MEDICINE MODULE ---

@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { AppState, FeedInventory, Infrastructure, DietPlan, TreatmentProtocol, TreatmentLog, TreatmentItem, MaintenanceRecord, ExpenseCategory } from '../types';
+import { AppState, Livestock, FeedInventory, Infrastructure, DietPlan, TreatmentProtocol, TreatmentLog, TreatmentItem, MaintenanceRecord, ExpenseCategory } from '../types';
 import { Warehouse, Construction, AlertCircle, Plus, Trash2, Edit2, Tag, X, Save, CheckCircle, ArrowLeft, Utensils, CalendarClock, Beef, Upload, Image as ImageIcon, Stethoscope, Pill } from 'lucide-react';
 
 export type OperationsTab = 'FEED' | 'MEDICINE' | 'SUPPLIES' | 'INFRA' | 'DIET';
@@ -24,6 +24,7 @@ interface Props {
     onDeleteTreatmentProtocol: (id: string) => void | Promise<void>;
     onLogTreatment: (logs: TreatmentLog[]) => void | Promise<void>;
     onAddExpense: (expense: any) => Promise<void>;
+    onReverseFeedLedger: (ledgerId: string) => Promise<void>;
 }
 
 export const Operations: React.FC<Props> = ({
@@ -44,7 +45,8 @@ export const Operations: React.FC<Props> = ({
     onUpdateTreatmentProtocol,
     onDeleteTreatmentProtocol,
     onLogTreatment,
-    onAddExpense
+    onAddExpense,
+    onReverseFeedLedger
 }) => {
     const [activeTab, setActiveTab] = useState<OperationsTab>(initialTab);
 
@@ -57,7 +59,7 @@ export const Operations: React.FC<Props> = ({
         setActiveTab(tab);
         onTabChange?.(tab);
     };
-    const [viewMode, setViewMode] = useState<'LIST' | 'FORM' | 'PROTOCOL' | 'SERVICE'>('LIST');
+    const [viewMode, setViewMode] = useState<'LIST' | 'FORM' | 'PROTOCOL' | 'SERVICE' | 'LEDGER'>('LIST');
 
     // --- SERVICE STATE ---
     const [servicingAsset, setServicingAsset] = useState<Infrastructure | null>(null);
@@ -199,7 +201,7 @@ export const Operations: React.FC<Props> = ({
 
     const openAddDiet = () => {
         setEditingDiet(null);
-        setDietForm({ name: '', scheduleType: 'DAILY', description: '', assignedAnimalIds: [] });
+        setDietForm({ name: '', status: 'DRAFT', targetType: 'CATEGORY', distributionMode: 'PER_ANIMAL', startDate: new Date().toISOString().split('T')[0], items: [] });
         setViewMode('FORM');
     };
 
@@ -383,6 +385,7 @@ export const Operations: React.FC<Props> = ({
             targetId: dietForm.targetId,
             targetName: dietForm.targetName,
             status: dietForm.status || 'DRAFT',
+            distributionMode: dietForm.distributionMode || 'PER_ANIMAL',
             startDate: dietForm.startDate || new Date().toISOString().split('T')[0],
             items,
         };
@@ -1216,76 +1219,197 @@ export const Operations: React.FC<Props> = ({
             {
                 activeTab === 'DIET' && (
                     <>
-                        {viewMode === 'LIST' ? (
+                        {(viewMode === 'LIST' || viewMode === 'LEDGER') ? (
                             <div className="space-y-4 animate-fade-in">
-                                <div className="flex justify-between items-center bg-blue-50 p-4 rounded-lg border border-blue-200 mb-6">
-                                    <div>
-                                        <h4 className="font-bold text-blue-800">Daily Feed Log</h4>
-                                        <p className="text-xs text-blue-600">Click to process daily consumption for all active plans.</p>
+                                <div className="flex justify-between items-center mb-6">
+                                    <div className="flex bg-gray-100 p-1 rounded-lg">
+                                        <button onClick={() => setViewMode('LIST')} className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${viewMode === 'LIST' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500 hover:text-gray-700'}`}>
+                                            Active Diet Plans
+                                        </button>
+                                        <button onClick={() => setViewMode('LEDGER')} className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${viewMode === 'LEDGER' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500 hover:text-gray-700'}`}>
+                                            Processing Ledger
+                                        </button>
                                     </div>
-                                    <button onClick={onRunDailyProcessing} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 shadow-sm transition-colors text-sm font-medium">
-                                        <CalendarClock size={16} /> Process Today's Feed
-                                    </button>
-                                </div >
-
-                                <div className="flex justify-end">
                                     <button onClick={openAddDiet} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 shadow-sm transition-colors text-sm font-medium">
                                         <Plus size={16} /> Create Plan
                                     </button>
                                 </div>
 
-                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                                    {state.dietPlans.map(plan => (
-                                        <div key={plan.id} className="bg-white rounded-xl border border-gray-200 overflow-hidden hover:shadow-md transition-shadow">
-                                            <div className="p-6 border-b border-gray-100">
-                                                <div className="flex justify-between items-start mb-4">
-                                                    <div className="flex items-center gap-3">
-                                                        <div className="bg-blue-50 p-2 rounded-lg text-blue-600">
-                                                            <Utensils size={20} />
-                                                        </div>
-                                                        <div>
-                                                            <h3 className="font-bold text-gray-800 text-lg">{plan.name}</h3>
-                                                            <div className="flex gap-2 mt-1">
-                                                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${plan.status === 'ACTIVE' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
-                                                                    {plan.status}
-                                                                </span>
-                                                                <span className="text-[10px] bg-indigo-50 text-indigo-700 font-bold px-2 py-0.5 rounded-full uppercase">
-                                                                    {plan.targetType}: {plan.targetName || plan.targetId || 'N/A'}
-                                                                </span>
+                                {viewMode === 'LIST' && (
+                                    <>
+                                        <div className="flex justify-between items-center bg-blue-50 p-4 rounded-lg border border-blue-200 mb-6">
+                                            <div>
+                                                <h4 className="font-bold text-blue-800">Daily Feed Log</h4>
+                                                <p className="text-xs text-blue-600">Click to process daily consumption for all active plans.</p>
+                                            </div>
+                                            <button onClick={onRunDailyProcessing} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 shadow-sm transition-colors text-sm font-medium">
+                                                <CalendarClock size={16} /> Process Today's Feed
+                                            </button>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                            {state.dietPlans.map(plan => (
+                                                <div key={plan.id} className="bg-white rounded-xl border border-gray-200 overflow-hidden hover:shadow-md transition-shadow">
+                                                    <div className="p-6 border-b border-gray-100">
+                                                        <div className="flex justify-between items-start mb-4">
+                                                            <div className="flex items-center gap-3">
+                                                                <div className="bg-blue-50 p-2 rounded-lg text-blue-600">
+                                                                    <Utensils size={20} />
+                                                                </div>
+                                                                <div>
+                                                                    <h3 className="font-bold text-gray-800 text-lg">{plan.name}</h3>
+                                                                    <div className="flex gap-2 mt-1">
+                                                                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${plan.status === 'ACTIVE' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
+                                                                            {plan.status}
+                                                                        </span>
+                                                                        <span className="text-[10px] bg-indigo-50 text-indigo-700 font-bold px-2 py-0.5 rounded-full uppercase">
+                                                                            {plan.targetType}: {plan.targetName || plan.targetId || 'N/A'}
+                                                                        </span>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                            <div className="flex gap-2">
+                                                                <button onClick={() => openEditDiet(plan)} className="text-gray-400 hover:text-emerald-600"><Edit2 size={16} /></button>
+                                                                <button onClick={() => { if (confirm('Delete this diet plan?')) onDeleteDietPlan(plan.id); }} className="text-gray-400 hover:text-red-600"><Trash2 size={16} /></button>
                                                             </div>
                                                         </div>
-                                                    </div>
-                                                    <div className="flex gap-2">
-                                                        <button onClick={() => openEditDiet(plan)} className="text-gray-400 hover:text-emerald-600"><Edit2 size={16} /></button>
-                                                        <button onClick={() => { if (confirm('Delete this diet plan?')) onDeleteDietPlan(plan.id); }} className="text-gray-400 hover:text-red-600"><Trash2 size={16} /></button>
-                                                    </div>
-                                                </div>
 
-                                                <div className="space-y-2 mb-4">
-                                                    {(plan.items || []).slice(0, 3).map((item, idx) => (
-                                                        <div key={idx} className="flex justify-between text-sm text-gray-600 bg-gray-50 px-3 py-1.5 rounded">
-                                                            <span>{item.inventoryName}</span>
-                                                            <span className="font-bold">{item.quantity} {item.unit}</span>
+                                                        <div className="space-y-2 mb-4">
+                                                            {(plan.items || []).slice(0, 3).map((item, idx) => (
+                                                                <div key={idx} className="flex justify-between text-sm text-gray-600 bg-gray-50 px-3 py-1.5 rounded">
+                                                                    <span>{item.inventoryName}</span>
+                                                                    <span className="font-bold">{item.quantity} {item.unit}</span>
+                                                                </div>
+                                                            ))}
+                                                            {(plan.items || []).length > 3 && <div className="text-xs text-center text-gray-400">+{(plan.items || []).length - 3} more ingredients</div>}
                                                         </div>
-                                                    ))}
-                                                    {(plan.items || []).length > 3 && <div className="text-xs text-center text-gray-400">+{(plan.items || []).length - 3} more ingredients</div>}
-                                                </div>
 
-                                                <div className="flex items-center justify-between text-sm text-gray-500 pt-2 border-t border-gray-50">
-                                                    <span className="font-bold text-gray-700">Cost: PKR {plan.totalCostPerDay?.toLocaleString() || 0}/day</span>
-                                                    <span className="text-xs">{(plan.totalAnimals || 0)} Animals Assigned</span>
+                                                        <div className="flex items-center justify-between text-sm text-gray-500 pt-2 border-t border-gray-50">
+                                                            <span className="font-bold text-gray-700">Cost: PKR {plan.totalCostPerDay?.toLocaleString() || 0}/day</span>
+                                                            <span className="text-xs">{(plan.totalAnimals || 0)} Animals Assigned</span>
+                                                        </div>
+                                                    </div>
                                                 </div>
-                                            </div>
+                                            ))}
+                                            {state.dietPlans.length === 0 && (
+                                                <div className="col-span-full p-8 bg-gray-50 rounded-xl border border-dashed border-gray-300 text-center">
+                                                    <Utensils className="mx-auto text-gray-300 mb-2" size={48} />
+                                                    <p className="text-gray-500">No diet plans created yet.</p>
+                                                </div>
+                                            )}
                                         </div>
-                                    ))}
-                                    {state.dietPlans.length === 0 && (
-                                        <div className="col-span-full p-8 bg-gray-50 rounded-xl border border-dashed border-gray-300 text-center">
-                                            <Utensils className="mx-auto text-gray-300 mb-2" size={48} />
-                                            <p className="text-gray-500">No diet plans created yet.</p>
+                                    </>
+                                )}
+
+                                {viewMode === 'LEDGER' && (
+                                    <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                                        <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
+                                            <h3 className="font-bold text-gray-800">Processed Feed Transactions</h3>
+                                            <p className="text-xs text-gray-500 mt-1">History of all successfully processed daily diets and material deductions.</p>
                                         </div>
-                                    )}
-                                </div>
-                            </div >
+                                        <div className="overflow-x-auto">
+                                            <table className="w-full text-left text-sm text-gray-600">
+                                                <thead className="bg-gray-50 text-gray-700 border-b border-gray-200">
+                                                    <tr>
+                                                        <th className="px-6 py-3 font-semibold">Date</th>
+                                                        <th className="px-6 py-3 font-semibold">Diet Plan</th>
+                                                        <th className="px-6 py-3 font-semibold">Animals Fed</th>
+                                                        <th className="px-6 py-3 font-semibold">Consumed Items</th>
+                                                        <th className="px-6 py-3 font-semibold">Total Cost (PKR)</th>
+                                                        <th className="px-6 py-3 font-semibold text-right">Actions</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody className="divide-y divide-gray-100">
+                                                    {(() => {
+                                                        const ledgers = state.processedFeedLedgers || [];
+                                                        const legacyLogs = state.consumptionLogs?.filter(l => !l.processedLedgerId) || [];
+
+                                                        // Group legacy logs by date + dietPlanId
+                                                        const legacyGroups = new Map<string, typeof legacyLogs>();
+                                                        legacyLogs.forEach(l => {
+                                                            const key = `${l.date}_${l.dietPlanId}`;
+                                                            if (!legacyGroups.has(key)) legacyGroups.set(key, []);
+                                                            legacyGroups.get(key)!.push(l);
+                                                        });
+
+                                                        const virtualLedgers: any[] = [];
+                                                        for (const [key, group] of legacyGroups.entries()) {
+                                                            const [date, planId] = key.split('_');
+                                                            const totalCost = group.reduce((sum, g) => sum + g.cost, 0);
+                                                            // For legacy logs, we can guess animals fed if animalId exists
+                                                            const uniqueAnimals = new Set(group.map(g => g.animalId).filter(Boolean));
+                                                            virtualLedgers.push({
+                                                                id: `legacy-${key}`,
+                                                                date,
+                                                                dietPlanId: planId,
+                                                                status: 'PROCESSED',
+                                                                totalCost,
+                                                                totalAnimalsFed: uniqueAnimals.size || 0,
+                                                                isLegacy: true,
+                                                                _logs: group
+                                                            });
+                                                        }
+
+                                                        const allLedgers = [...ledgers, ...virtualLedgers].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+                                                        if (allLedgers.length === 0) {
+                                                            return <tr><td colSpan={6} className="px-6 py-12 text-center text-gray-400">No processing history recorded yet.</td></tr>;
+                                                        }
+
+                                                        return allLedgers.map(ledger => {
+                                                            const plan = state.dietPlans.find(p => p.id === ledger.dietPlanId);
+                                                            const logs = ledger.isLegacy ? ledger._logs : (state.consumptionLogs?.filter(l => l.processedLedgerId === ledger.id) || []);
+                                                            return (
+                                                                <tr key={ledger.id} className={`hover:bg-gray-50 transition-colors ${ledger.status === 'REVERSED' ? 'opacity-50' : ''}`}>
+                                                                    <td className="px-6 py-4 whitespace-nowrap">{ledger.date}</td>
+                                                                    <td className="px-6 py-4">
+                                                                        <div className="font-bold text-gray-800">{plan?.name || 'Unknown Plan'}</div>
+                                                                        <div className="text-xs text-gray-500 uppercase">{ledger.id.split('-')[2] || ledger.id}</div>
+                                                                    </td>
+                                                                    <td className="px-6 py-4">{ledger.totalAnimalsFed} Heads</td>
+                                                                    <td className="px-6 py-4 max-w-xs">
+                                                                        <div className="flex flex-col gap-1">
+                                                                            {logs.map((L, i) => {
+                                                                                const fItem = state.feed.find(F => F.id === L.itemId);
+                                                                                return (
+                                                                                    <span key={i} className="text-[11px] bg-gray-100 px-2 py-0.5 rounded text-gray-600 truncate">
+                                                                                        {fItem?.name || L.itemId} ({L.quantityUsed} {L.unit})
+                                                                                    </span>
+                                                                                );
+                                                                            })}
+                                                                        </div>
+                                                                    </td>
+                                                                    <td className="px-6 py-4 font-bold text-emerald-600">
+                                                                        {ledger.totalCost.toLocaleString()}
+                                                                    </td>
+                                                                    <td className="px-6 py-4 text-right">
+                                                                        {ledger.status === 'REVERSED' ? (
+                                                                            <span className="text-xs font-bold text-red-500 bg-red-50 px-2 py-1 rounded border border-red-100">REVERSED</span>
+                                                                        ) : ledger.isLegacy ? (
+                                                                            <span className="text-[10px] text-gray-400 font-medium">LEGACY NO-REVERSE</span>
+                                                                        ) : (
+                                                                            <button
+                                                                                onClick={() => {
+                                                                                    if (confirm('Are you absolutely sure you want to REVERSE this transaction? This will instantly place inventory back into your physical stock and lower the accumulated cost mapping on the animals.')) {
+                                                                                        onReverseFeedLedger(ledger.id);
+                                                                                    }
+                                                                                }}
+                                                                                className="text-xs font-bold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-3 py-1.5 rounded transition-colors"
+                                                                            >
+                                                                                REVERSE
+                                                                            </button>
+                                                                        )}
+                                                                    </td>
+                                                                </tr>
+                                                            );
+                                                        });
+                                                    })()}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
                         ) : (
                             <div className="animate-fade-in max-w-4xl mx-auto">
                                 <div className="flex items-center gap-4 mb-6">
@@ -1297,7 +1421,7 @@ export const Operations: React.FC<Props> = ({
 
                                 <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-6">
                                     {/* STEP 1: BASIC INFO */}
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                                         <div>
                                             <label className="block text-sm font-medium text-gray-700 mb-1">Plan Name</label>
                                             <input type="text" value={dietForm.name} onChange={e => setDietForm({ ...dietForm, name: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" placeholder="e.g. Winter Milking Ration" />
@@ -1310,12 +1434,20 @@ export const Operations: React.FC<Props> = ({
                                                 <option value="ARCHIVED">Archived</option>
                                             </select>
                                         </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Distribution Mode <span className="text-red-500">*</span></label>
+                                            <select value={dietForm.distributionMode || 'PER_ANIMAL'} onChange={e => setDietForm({ ...dietForm, distributionMode: e.target.value as any })} className="w-full border border-emerald-300 bg-emerald-50 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none">
+                                                <option value="PER_ANIMAL">Per Animal (Qty * Animals)</option>
+                                                <option value="TOTAL_DISTRIBUTED">Total Distributed (Qty Split Equal)</option>
+                                                <option value="PER_HUNDRED_KG_BW">Per 100kg Body Weight</option>
+                                            </select>
+                                        </div>
                                     </div>
 
                                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                                         <div>
                                             <label className="block text-sm font-medium text-gray-700 mb-1">Assign To</label>
-                                            <select value={dietForm.targetType || 'CATEGORY'} onChange={e => setDietForm({ ...dietForm, targetType: e.target.value as any, targetId: '', targetName: '' })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none">
+                                            <select value={dietForm.targetType || 'CATEGORY'} onChange={e => setDietForm({ ...dietForm, targetType: e.target.value as any, targetId: '', targetIds: [], targetName: '' })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none">
                                                 <option value="ALL">All Animals (Farm)</option>
                                                 <option value="CATEGORY">Category (e.g. Milking)</option>
                                                 <option value="INDIVIDUAL">Individual Animal</option>
@@ -1335,15 +1467,23 @@ export const Operations: React.FC<Props> = ({
                                                     ))}
                                                 </select>
                                             ) : dietForm.targetType === 'INDIVIDUAL' ? (
-                                                <select value={dietForm.targetId || ''} onChange={e => {
-                                                    const animal = state.livestock.find(l => l.id === e.target.value);
-                                                    setDietForm({ ...dietForm, targetId: e.target.value, targetName: animal?.tagId });
-                                                }} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none">
-                                                    <option value="">Select Animal...</option>
+                                                <div className="border border-gray-300 rounded-lg max-h-40 overflow-y-auto p-2">
                                                     {(state.livestock.filter(l => l.status === 'ACTIVE' && (!state.currentFarmId || l.farmId === state.currentFarmId))).map(l => (
-                                                        <option key={l.id} value={l.id}>{l.tagId} ({l.breed})</option>
+                                                        <label key={l.id} className="flex items-center gap-2 p-1 hover:bg-gray-50 cursor-pointer text-sm">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={(dietForm.targetIds || []).includes(l.id)}
+                                                                onChange={e => {
+                                                                    const set = new Set(dietForm.targetIds || []);
+                                                                    if (e.target.checked) set.add(l.id); else set.delete(l.id);
+                                                                    setDietForm({ ...dietForm, targetIds: Array.from(set) });
+                                                                }}
+                                                            />
+                                                            {l.tagId} ({l.breed})
+                                                        </label>
                                                     ))}
-                                                </select>
+                                                    {(state.livestock.filter(l => l.status === 'ACTIVE' && (!state.currentFarmId || l.farmId === state.currentFarmId))).length === 0 && <span className="text-gray-400 italic text-sm">No active animals.</span>}
+                                                </div>
                                             ) : (
                                                 <input type="text" disabled placeholder="Group selection logic here..." className="w-full border border-gray-300 bg-gray-100 rounded-lg px-4 py-2 outline-none" />
                                             )}
@@ -1388,7 +1528,7 @@ export const Operations: React.FC<Props> = ({
                                                         </select>
                                                     </div>
                                                     <div className="col-span-3">
-                                                        <div className="relative">
+                                                        <div className="flex gap-1 border border-gray-300 rounded overflow-hidden p-0.5">
                                                             <input
                                                                 type="number"
                                                                 value={item.quantity}
@@ -1397,14 +1537,44 @@ export const Operations: React.FC<Props> = ({
                                                                     newItems[index] = { ...item, quantity: parseFloat(e.target.value) };
                                                                     setDietForm({ ...dietForm, items: newItems });
                                                                 }}
-                                                                className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
+                                                                className="w-full px-2 py-1 text-sm outline-none bg-transparent"
                                                                 placeholder="0.00"
                                                             />
-                                                            <span className="absolute right-2 top-1.5 text-xs text-gray-400">{item.unit}</span>
+                                                            <select
+                                                                value={item.unit}
+                                                                onChange={e => {
+                                                                    const newItems = [...(dietForm.items || [])];
+                                                                    newItems[index] = { ...item, unit: e.target.value };
+                                                                    setDietForm({ ...dietForm, items: newItems });
+                                                                }}
+                                                                className="bg-gray-100 text-xs px-1 border-l border-gray-200 outline-none"
+                                                            >
+                                                                <option value={state.feed.find(f => f.id === item.inventoryId)?.unit || 'kg'}>{state.feed.find(f => f.id === item.inventoryId)?.unit || 'kg'}</option>
+                                                                {['BAG', 'BUNDLE'].includes((state.feed.find(f => f.id === item.inventoryId)?.unit || '').toUpperCase()) && state.feed.find(f => f.id === item.inventoryId)?.weightPerUnit && (
+                                                                    <>
+                                                                        <option value="kg">kg</option>
+                                                                        <option value="g">g</option>
+                                                                    </>
+                                                                )}
+                                                            </select>
                                                         </div>
                                                     </div>
                                                     <div className="col-span-3 text-right text-xs text-gray-500">
-                                                        Est. Cost: <span className="font-bold text-emerald-600">{(item.quantity * (item.costPerUnit || 0)).toFixed(1)}</span>
+                                                        {(() => {
+                                                            let c = 0;
+                                                            if (item.costPerUnit) {
+                                                                const isInvBag = ['BAG', 'BUNDLE'].includes((state.feed.find(f => f.id === item.inventoryId)?.unit || '').toUpperCase());
+                                                                const wpu = state.feed.find(f => f.id === item.inventoryId)?.weightPerUnit;
+                                                                if (isInvBag && wpu && item.unit === 'kg') {
+                                                                    c = (item.quantity / wpu) * item.costPerUnit;
+                                                                } else if (isInvBag && wpu && item.unit === 'g') {
+                                                                    c = (item.quantity / 1000 / wpu) * item.costPerUnit;
+                                                                } else {
+                                                                    c = item.quantity * item.costPerUnit;
+                                                                }
+                                                            }
+                                                            return <>Est. Cost: <span className="font-bold text-emerald-600">{c.toFixed(1)}</span></>;
+                                                        })()}
                                                     </div>
                                                     <div className="col-span-1 text-right">
                                                         <button onClick={() => setDietForm(prev => ({ ...prev, items: prev.items?.filter((_, i) => i !== index) }))} className="text-red-400 hover:text-red-600"><X size={16} /></button>
@@ -1412,11 +1582,62 @@ export const Operations: React.FC<Props> = ({
                                                 </div>
                                             ))}
 
+                                            {/* LIVE CALCULATION PREVIEW */}
+                                            {(() => {
+                                                let previewAnimals: Livestock[] = [];
+                                                if (dietForm.targetType === 'CATEGORY' && dietForm.targetId) {
+                                                    previewAnimals = state.livestock.filter(l => l.category === dietForm.targetName && l.farmId === state.currentFarmId && l.status === 'ACTIVE');
+                                                } else if (dietForm.targetType === 'INDIVIDUAL' && dietForm.targetIds && dietForm.targetIds.length > 0) {
+                                                    previewAnimals = state.livestock.filter(l => dietForm.targetIds!.includes(l.id) && l.status === 'ACTIVE');
+                                                } else if (dietForm.targetType === 'ALL') {
+                                                    previewAnimals = state.livestock.filter(l => l.farmId === state.currentFarmId && l.status === 'ACTIVE');
+                                                }
+                                                const aCount = previewAnimals.length;
+                                                const mode = dietForm.distributionMode || 'PER_ANIMAL';
+
+                                                return (
+                                                    <div className="border-t border-gray-200 mt-2 pt-2 bg-emerald-50 rounded-xl border border-emerald-100 p-4">
+                                                        <div className="flex justify-between items-center mb-2 border-b border-emerald-200 pb-2">
+                                                            <span className="text-sm font-bold text-emerald-800">Processing Preview (Targeting {aCount} Animals)</span>
+                                                            <span className="text-xs font-bold px-2 py-1 rounded bg-white text-emerald-700 border border-emerald-200">{mode.replace(/_/g, ' ')}</span>
+                                                        </div>
+                                                        <div className="space-y-1">
+                                                            {dietForm.items?.map(it => {
+                                                                let deductTotal = 0;
+                                                                if (mode === 'TOTAL_DISTRIBUTED') deductTotal = it.quantity;
+                                                                else if (mode === 'PER_HUNDRED_KG_BW') deductTotal = it.quantity * (previewAnimals.reduce((s, a) => s + (a.weight || 0), 0) / 100);
+                                                                else deductTotal = it.quantity * aCount;
+
+                                                                let totalReq = deductTotal; // requested locally
+                                                                let inventoryDeductionCount = deductTotal; // in native units mapped for stock reduction
+
+                                                                const fInv = state.feed.find(f => f.id === it.inventoryId);
+                                                                const isBag = fInv ? ['BAG', 'BUNDLE'].includes((fInv.unit || '').toUpperCase()) : false;
+                                                                if (isBag && fInv?.weightPerUnit && it.unit === 'kg') {
+                                                                    inventoryDeductionCount = deductTotal / fInv.weightPerUnit;
+                                                                } else if (isBag && fInv?.weightPerUnit && it.unit === 'g') {
+                                                                    inventoryDeductionCount = (deductTotal / 1000) / fInv.weightPerUnit;
+                                                                }
+
+                                                                const warn = inventoryDeductionCount > (fInv?.quantity || 0);
+
+                                                                return (
+                                                                    <div key={it.id} className="flex justify-between text-xs text-emerald-900">
+                                                                        <span>{it.inventoryName || 'Unknown'} (In Stock: {fInv?.quantity?.toFixed(2)}{fInv?.unit} - {(fInv?.weightPerUnit || 0) * (fInv?.quantity || 0)}kg):</span>
+                                                                        <span className={warn ? "text-red-500 font-bold" : "font-medium"}>Require {deductTotal.toFixed(2)} {it.unit}  =  (-{inventoryDeductionCount.toFixed(2)} {fInv?.unit || 'units'})</span>
+                                                                    </div>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })()}
+
                                             {/* TOTALS */}
                                             <div className="border-t border-gray-200 mt-2 pt-2 flex justify-between items-center bg-white p-2 rounded border-emerald-100">
-                                                <span className="text-sm font-bold text-gray-700">Total Ration Cost:</span>
+                                                <span className="text-sm font-bold text-gray-700">Cost Baseline:</span>
                                                 <span className="text-lg font-black text-emerald-600">
-                                                    PKR {(dietForm.items?.reduce((sum, item) => sum + (item.quantity * (item.costPerUnit || 0)), 0) || 0).toLocaleString()} <span className="text-xs text-gray-400 font-medium">/ animal / day</span>
+                                                    PKR {(dietForm.items?.reduce((sum, item) => sum + (item.quantity * (item.costPerUnit || 0)), 0) || 0).toLocaleString()} <span className="text-xs text-gray-400 font-medium">base value</span>
                                                 </span>
                                             </div>
                                         </div>

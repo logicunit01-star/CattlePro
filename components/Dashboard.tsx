@@ -25,8 +25,10 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
   const farmCount = isGlobalView ? new Set(state.livestock.map(l => l.farmId).filter(Boolean)).size : 1;
 
   const totalExpenses = state.expenses.reduce((acc, curr) => acc + curr.amount, 0);
+  const operatingExpenses = state.expenses.filter(e => e.category !== 'INFRASTRUCTURE');
+  const totalOperatingExpenses = operatingExpenses.reduce((acc, curr) => acc + curr.amount, 0);
   const totalRevenue = state.sales.reduce((acc, curr) => acc + curr.amount, 0);
-  const netProfit = totalRevenue - totalExpenses;
+  const netProfit = totalRevenue - totalExpenses; // Still reflecting absolute cash flow
 
   // --- DAIRY METRICS ---
   const todayStr = new Date().toISOString().split('T')[0];
@@ -75,6 +77,20 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
     name: key,
     value: expenseByCategory[key]
   })).sort((a, b) => b.value - a.value);
+
+  // --- NEW KPIs ---
+  const currentMonthDate = new Date();
+  const currentMonth = currentMonthDate.getMonth();
+  const currentYear = currentMonthDate.getFullYear();
+
+  const currentMonthFeedExpense = state.expenses
+    .filter(e => e.category === 'FEED' && new Date(e.date).getMonth() === currentMonth && new Date(e.date).getFullYear() === currentYear)
+    .reduce((sum, e) => sum + e.amount, 0);
+
+  const avgCostPerAnimal = totalLivestock > 0 ? (totalOperatingExpenses / totalLivestock) : 0;
+
+  const deceasedCount = state.livestock.filter(l => l.status === 'DECEASED').length;
+  const mortalityRate = state.livestock.length > 0 ? (deceasedCount / state.livestock.length) * 100 : 0;
 
   return (
     <div className="space-y-8 animate-fade-in pb-10">
@@ -148,6 +164,37 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
             <p className="text-xs text-slate-400 mt-3 font-medium">Tasks / Vaccine Checks</p>
           </div>
           <div className="bg-amber-50 p-4 rounded-xl text-amber-500 group-hover:bg-amber-500 group-hover:text-white transition-all duration-300 shadow-inner">
+            <AlertTriangle size={24} />
+          </div>
+        </div>
+      </div>
+
+      {/* KPI WIDGETS (MEDIUM PRIORITY) */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex items-center justify-between premium-card relative overflow-hidden">
+          <div className="relative z-10">
+            <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Avg Cost Per Animal</p>
+            <h3 className="text-2xl font-black text-slate-800 mt-2 font-display">PKR {avgCostPerAnimal.toLocaleString(undefined, { maximumFractionDigits: 0 })}</h3>
+          </div>
+          <div className="bg-slate-50 p-4 rounded-xl text-slate-500 shadow-inner">
+            <DollarSign size={24} />
+          </div>
+        </div>
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex items-center justify-between premium-card relative overflow-hidden">
+          <div className="relative z-10">
+            <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Current Month Feed</p>
+            <h3 className="text-2xl font-black text-slate-800 mt-2 font-display">PKR {currentMonthFeedExpense.toLocaleString(undefined, { maximumFractionDigits: 0 })}</h3>
+          </div>
+          <div className="bg-orange-50 p-4 rounded-xl text-orange-500 shadow-inner">
+            <Activity size={24} />
+          </div>
+        </div>
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex items-center justify-between premium-card relative overflow-hidden">
+          <div className="relative z-10">
+            <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Mortality Rate</p>
+            <h3 className={`text-2xl font-black mt-2 font-display ${mortalityRate > 5 ? 'text-red-500' : 'text-emerald-500'}`}>{mortalityRate.toFixed(1)}%</h3>
+          </div>
+          <div className={`p-4 rounded-xl shadow-inner ${mortalityRate > 5 ? 'bg-red-50 text-red-500' : 'bg-emerald-50 text-emerald-500'}`}>
             <AlertTriangle size={24} />
           </div>
         </div>

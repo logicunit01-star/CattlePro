@@ -1,13 +1,14 @@
 
-import React, { useState } from 'react';
-import { Expense, ExpenseCategory, Sale, Livestock, Entity, Farm } from '../types';
-import { Plus, DollarSign, Truck, Wrench, Syringe, Briefcase, Home, Stethoscope, Dna, ArrowLeft, Trash2, Store, User, Share2, AlertTriangle, Building2 } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import { Expense, ExpenseCategory, Sale, Livestock, Entity, Farm, Infrastructure } from '../types';
+import { Plus, DollarSign, Truck, Wrench, Syringe, Briefcase, Home, Stethoscope, Dna, ArrowLeft, Trash2, Store, User, Share2, AlertTriangle, Building2, BookOpen, Activity } from 'lucide-react';
 
 interface Props {
     expenses: Expense[];
     sales: Sale[];
     livestockList?: Livestock[];
     entities: Entity[];
+    infrastructure?: Infrastructure[];
     farms?: Farm[];
     locations?: { id: string; name: string }[];
     currentFarmId?: string | null;
@@ -20,9 +21,45 @@ interface Props {
 
 type FinancialView = 'LIST' | 'ADD_EXPENSE' | 'ADD_SALE';
 
-export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [], entities, farms = [], locations = [], currentFarmId, currentLocationId, onAddExpense, onAddSale, onDeleteExpense, onDeleteSale }) => {
-    const [activeTab, setActiveTab] = useState<'EXPENSES' | 'SALES'>('EXPENSES');
+export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [], entities, infrastructure = [], farms = [], locations = [], currentFarmId, currentLocationId, onAddExpense, onAddSale, onDeleteExpense, onDeleteSale }) => {
+    const [activeTab, setActiveTab] = useState<'EXPENSES' | 'SALES' | 'LEDGER'>('EXPENSES');
     const [viewMode, setViewMode] = useState<FinancialView>('LIST');
+
+    const ledgerEntries = useMemo(() => {
+        const entries = [
+            ...expenses.map(e => ({
+                id: `exp_${e.id}`,
+                date: e.date || '',
+                description: e.description || `Expense: ${e.category}`,
+                type: 'EXPENSE',
+                amount: e.amount || 0,
+                refId: e.id,
+                farmId: e.farmId
+            })),
+            ...sales.map(s => ({
+                id: `sale_${s.id}`,
+                date: s.date || '',
+                description: s.description || `Sale: ${s.itemType || 'ANIMAL'}`,
+                type: 'SALE',
+                amount: s.amount || 0,
+                refId: s.id,
+                farmId: s.farmId
+            }))
+        ];
+
+        // Sort by date chronological (oldest to newest for running balance)
+        entries.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+        let balance = 0;
+        return entries.map(entry => {
+            if (entry.type === 'SALE') {
+                balance += entry.amount;
+            } else {
+                balance -= entry.amount;
+            }
+            return { ...entry, balance };
+        }).reverse(); // Reverse back for latest first
+    }, [expenses, sales]);
 
     const scopeLabel = currentFarmId
         ? farms.find(f => f.id === currentFarmId)?.name || 'Selected farm'
@@ -64,7 +101,10 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
             category: newExpense.category || ExpenseCategory.OTHER,
             amount: Number(newExpense.amount),
             date: newExpense.date || new Date().toISOString().split('T')[0],
-            description: newExpense.description
+            description: newExpense.description,
+            location: newExpense.location,
+            relatedAnimalId: newExpense.relatedAnimalId,
+            supplier: newExpense.supplier
         };
         try {
             await onAddExpense(expense);
@@ -195,8 +235,22 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">Location / Cost Centre</label>
-                            <input type="text" className="w-full border border-gray-300 rounded-lg px-4 py-2 outline-none focus:ring-2 focus:ring-emerald-500" value={newExpense.location || ''} onChange={e => setNewExpense({ ...newExpense, location: e.target.value })} placeholder="e.g. Shed A" />
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Assign to Flock/Group (Cost Centre)</label>
+                            <select className="w-full border border-gray-300 rounded-lg px-4 py-2 outline-none focus:ring-2 focus:ring-emerald-500 bg-white" value={newExpense.location || ''} onChange={e => setNewExpense({ ...newExpense, location: e.target.value })}>
+                                <option value="">Select Location/Barn (Optional)</option>
+                                {infrastructure.filter(i => i.category === 'BUILDING' || i.category === 'PASTURE').map(i => (
+                                    <option key={i.id} value={i.id}>{i.name}</option>
+                                ))}
+                            </select>
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Assign to Individual Animal</label>
+                            <select className="w-full border border-gray-300 rounded-lg px-4 py-2 outline-none focus:ring-2 focus:ring-emerald-500 bg-white" value={newExpense.relatedAnimalId || ''} onChange={e => setNewExpense({ ...newExpense, relatedAnimalId: e.target.value })}>
+                                <option value="">Select Animal (Optional)</option>
+                                {livestockList.filter(l => l.status === 'ACTIVE').map(l => (
+                                    <option key={l.id} value={l.id}>{l.tagId} ({l.category})</option>
+                                ))}
+                            </select>
                         </div>
                         <div>
                             <label className="block text-sm font-medium text-gray-700 mb-1">Vendor / Payee</label>
@@ -383,6 +437,15 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                 >
                     Sales & Revenue
                 </button>
+                <button
+                    onClick={() => setActiveTab('LEDGER')}
+                    className={`flex-1 md:flex-none px-6 py-2.5 rounded-lg text-sm font-bold transition-all flex items-center justify-center gap-2 ${activeTab === 'LEDGER'
+                        ? 'bg-white text-slate-800 shadow-sm ring-1 ring-slate-200'
+                        : 'text-slate-400 hover:text-slate-600 hover:bg-slate-200/50'
+                        }`}
+                >
+                    <BookOpen size={16} /> Ledger View
+                </button>
             </div>
 
             {activeTab === 'SALES' && !currentFarmId && !currentLocationId && (
@@ -441,12 +504,21 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                             </td>
                                         </tr>
                                     ))}
+                                    {expenses.length === 0 && (
+                                        <tr>
+                                            <td colSpan={showFarmColumn ? 6 : 5} className="text-center py-16 bg-slate-50/50">
+                                                <Activity className="mx-auto mb-4 opacity-30 text-red-500" size={48} />
+                                                <p className="font-bold text-slate-600 text-lg">No expenses recorded yet</p>
+                                                <p className="text-sm text-slate-400 mt-1">Click the 'Log Expense' button to register an expense.</p>
+                                            </td>
+                                        </tr>
+                                    )}
                                 </tbody>
                             </table>
                         </div>
                     </div>
                 </div>
-            ) : (
+            ) : activeTab === 'SALES' ? (
                 <div className="space-y-4 animate-fade-in">
                     <div className="flex justify-end">
                         <button
@@ -511,12 +583,77 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                             </td>
                                         </tr>
                                     ))}
+                                    {sales.length === 0 && (
+                                        <tr>
+                                            <td colSpan={showFarmColumn ? 8 : 7} className="text-center py-16 bg-slate-50/50">
+                                                <DollarSign className="mx-auto mb-4 opacity-30 text-emerald-600" size={48} />
+                                                <p className="font-bold text-slate-600 text-lg">No sales recorded yet</p>
+                                                <p className="text-sm text-slate-400 mt-1">Click the 'Record New Sale' button to register revenue.</p>
+                                            </td>
+                                        </tr>
+                                    )}
                                 </tbody>
                             </table>
                         </div>
                     </div>
                 </div>
-            )}
+            ) : activeTab === 'LEDGER' ? (
+                <div className="space-y-4 animate-fade-in">
+                    <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden premium-card">
+                        <div className="p-4 border-b border-gray-100 flex items-center justify-between bg-slate-50">
+                            <h3 className="font-bold text-slate-800 flex items-center gap-2 font-display">
+                                <BookOpen className="text-emerald-600" size={20} />
+                                Chronological Double-Entry Ledger
+                            </h3>
+                        </div>
+                        <div className="overflow-x-auto">
+                            <table className="min-w-full divide-y divide-gray-200">
+                                <thead className="bg-white">
+                                    <tr>
+                                        <th className="px-6 py-3 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest">Date</th>
+                                        <th className="px-6 py-3 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest">Description</th>
+                                        {showFarmColumn && <th className="px-6 py-3 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest">Farm</th>}
+                                        <th className="px-6 py-3 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest text-emerald-600">Credit (In)</th>
+                                        <th className="px-6 py-3 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest text-red-500">Debit (Out)</th>
+                                        <th className="px-6 py-3 text-right text-[10px] font-bold text-slate-400 uppercase tracking-widest">Running Balance</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="bg-white divide-y divide-gray-100">
+                                    {ledgerEntries.map((entry) => (
+                                        <tr key={entry.id} className="hover:bg-slate-50 transition-colors">
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-600">{entry.date}</td>
+                                            <td className="px-6 py-4 text-sm text-slate-800 font-medium">
+                                                <div className="flex flex-col">
+                                                    <span>{entry.description}</span>
+                                                    <span className="text-[10px] text-slate-400 font-bold uppercase">{entry.type} • ID: {entry.refId.substring(0, 6)}</span>
+                                                </div>
+                                            </td>
+                                            {showFarmColumn && <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">{getFarmName(entry.farmId)}</td>}
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm font-black text-emerald-600">
+                                                {entry.type === 'SALE' ? `+ PKR ${entry.amount.toLocaleString()}` : '—'}
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm font-black text-red-500">
+                                                {entry.type === 'EXPENSE' ? `- PKR ${entry.amount.toLocaleString()}` : '—'}
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-black text-slate-800">
+                                                PKR {entry.balance.toLocaleString()}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                    {ledgerEntries.length === 0 && (
+                                        <tr>
+                                            <td colSpan={showFarmColumn ? 6 : 5} className="px-6 py-12 text-center text-slate-400">
+                                                <BookOpen className="mx-auto mb-3 opacity-50" size={32} />
+                                                <p>No transactions found for the ledger.</p>
+                                            </td>
+                                        </tr>
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            ) : null}
         </div>
     );
 };

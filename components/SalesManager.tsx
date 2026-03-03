@@ -71,6 +71,13 @@ export const SalesManager: React.FC<Props> = ({ state, currentFarmId, currentLoc
         if (!buyerName) { alert("Buyer Name Required"); return; }
 
         const farmId = currentFarmId || state.livestock.find(l => l.id === selectedAnimalIds[0])?.farmId || '';
+
+        const cogsTotal = selectedAnimalIds.reduce((sum, id) => {
+            const a = state.livestock.find(l => l.id === id);
+            if (!a) return sum;
+            return sum + (a.purchasePrice || 0) + (a.accumulatedFeedCost || 0) + (a.accumulatedMedicalCost || 0);
+        }, 0);
+
         const newSale: Sale = {
             id: Math.random().toString(36).substr(2, 9),
             farmId,
@@ -78,6 +85,7 @@ export const SalesManager: React.FC<Props> = ({ state, currentFarmId, currentLoc
             soldAnimalIds: selectedAnimalIds,
             saleType: saleType === 'SINGLE' ? 'SINGLE_ANIMAL' : 'BULK_ANIMALS',
             amount: finalTotal,
+            estimatedProfit: finalTotal - cogsTotal,
             pricingMethod: saleType === 'BULK' ? pricingMethod : undefined,
             pricePerAnimal: pricingMethod === 'PER_ANIMAL' || saleType === 'SINGLE' ? pricePerAnimal : undefined,
             paymentStatus,
@@ -190,7 +198,7 @@ export const SalesManager: React.FC<Props> = ({ state, currentFarmId, currentLoc
                             <span className="font-bold text-gray-700">Recent Transactions</span>
                             {scopeLabel && <span className="text-xs text-gray-500 font-medium">(farm-wise)</span>}
                         </div>
-                    <table className="min-w-full text-sm">
+                        <table className="min-w-full text-sm">
                             <thead className="bg-white text-gray-500">
                                 <tr>
                                     <th className="px-4 py-2 text-left">Date</th>
@@ -366,6 +374,7 @@ export const SalesManager: React.FC<Props> = ({ state, currentFarmId, currentLoc
                                 <th className="px-6 py-4">Buyer</th>
                                 <th className="px-6 py-4">Details</th>
                                 <th className="px-6 py-4 text-right">Total Amount</th>
+                                <th className="px-6 py-4 text-right">Profit (Est)</th>
                                 <th className="px-6 py-4 text-center">Payment</th>
                                 <th className="px-6 py-4 text-center">Action</th>
                             </tr>
@@ -381,6 +390,9 @@ export const SalesManager: React.FC<Props> = ({ state, currentFarmId, currentLoc
                                         <div className="text-xs text-gray-400">{sale.soldAnimalIds?.length} animals</div>
                                     </td>
                                     <td className="px-6 py-4 text-right font-bold text-gray-800">PKR {(sale.amount ?? 0).toLocaleString()}</td>
+                                    <td className={`px-6 py-4 text-right font-bold ${sale.estimatedProfit && sale.estimatedProfit > 0 ? 'text-emerald-600' : 'text-slate-400'}`}>
+                                        {sale.estimatedProfit !== undefined ? `PKR ${sale.estimatedProfit.toLocaleString()}` : '—'}
+                                    </td>
                                     <td className="px-6 py-4 text-center">
                                         <span className={`text-xs font-bold px-2 py-1 rounded-full ${sale.paymentStatus === 'PAID' ? 'bg-green-100 text-green-700' : (sale.paymentStatus === 'PARTIAL' ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700')}`}>
                                             {sale.paymentStatus}

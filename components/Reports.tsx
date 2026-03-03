@@ -14,7 +14,7 @@ export const Reports: React.FC<Props> = ({ state }) => {
     const [logPeriod, setLogPeriod] = useState<'DAILY' | 'WEEKLY' | 'MONTHLY'>('DAILY');
     const [logCategory, setLogCategory] = useState<'MILK' | 'FINANCE'>('MILK');
 
-    // --- FINANCIAL CALCS ---
+    // --- FINANCIAL CALCS (ACCRUAL ADJUSTED) ---
     const calculateFinancials = () => {
         const expenses = state.expenses;
         const sales = state.sales;
@@ -27,13 +27,35 @@ export const Reports: React.FC<Props> = ({ state }) => {
         }).reverse();
 
         const monthlyData = months.map(month => {
-            const monthExpenses = expenses.filter(e => e.date.startsWith(month)).reduce((sum, e) => sum + e.amount, 0);
+            // Raw cash expenses
+            const monthExpensesRaw = expenses.filter(e => e.date.startsWith(month)).reduce((sum, e) => sum + e.amount, 0);
             const monthSales = sales.filter(s => s.date.startsWith(month)).reduce((sum, s) => sum + s.amount, 0);
+
+            // Calculate Inventory Delta (Purchases - Consumption)
+            // Identify procurement expenses (excluding auto-generated consumption logs)
+            const inventoryPurchased = expenses
+                .filter(e => e.date.startsWith(month) &&
+                    !e.description?.includes('Consumption') &&
+                    !e.description?.includes('Treatment Application') &&
+                    (e.category === 'FEED' || e.category === 'MEDICAL' || e.category === 'PURCHASE' || e.category === 'INFRASTRUCTURE'))
+                .reduce((sum, e) => sum + e.amount, 0);
+
+            const inventoryConsumed =
+                (state.consumptionLogs?.filter(l => l.date.startsWith(month)).reduce((sum, l) => sum + l.cost, 0) || 0) +
+                (state.treatmentLogs?.filter(l => l.date.startsWith(month)).reduce((sum, l) => sum + l.cost, 0) || 0);
+
+            // Change in value of inventory/assets on hand
+            const inventoryDelta = inventoryPurchased - inventoryConsumed;
+
+            // Accrual Expenses = Cash Expenses - Inventory Built Up (or + Inventory Depleted)
+            // This prevents bulk purchases from artificially tanking the Net Profit for the month
+            const accrualExpenses = monthExpensesRaw - inventoryDelta;
+
             return {
                 name: month,
                 Revenue: monthSales,
-                Expenses: monthExpenses,
-                Profit: monthSales - monthExpenses
+                Expenses: accrualExpenses,
+                Profit: monthSales - accrualExpenses
             };
         });
 
@@ -114,7 +136,15 @@ export const Reports: React.FC<Props> = ({ state }) => {
                                                 </tr>
                                             ));
                                         })()}
-                                        {(state.consumptionLogs || []).length === 0 && <tr><td colSpan={3} className="text-center py-4 text-gray-400">No consumption logs found.</td></tr>}
+                                        {(state.consumptionLogs || []).length === 0 && (
+                                            <tr>
+                                                <td colSpan={3} className="text-center py-10 bg-gray-50/50">
+                                                    <Activity className="mx-auto mb-3 opacity-30 text-gray-500" size={32} />
+                                                    <p className="font-bold text-gray-500">No feed usage logged</p>
+                                                    <p className="text-xs text-gray-400 mt-1">Consumption logs will appear here when diet plans are active.</p>
+                                                </td>
+                                            </tr>
+                                        )}
                                     </tbody>
                                 </table>
                             </div>
@@ -146,7 +176,14 @@ export const Reports: React.FC<Props> = ({ state }) => {
                                                 </tr>
                                             ));
                                         })()}
-                                        {(state.consumptionLogs || []).length === 0 && <tr><td colSpan={2} className="text-center py-4 text-gray-400">No data available.</td></tr>}
+                                        {(state.consumptionLogs || []).length === 0 && (
+                                            <tr>
+                                                <td colSpan={2} className="text-center py-10 bg-gray-50/50">
+                                                    <TrendingUp className="mx-auto mb-3 opacity-30 text-emerald-600" size={32} />
+                                                    <p className="font-bold text-gray-500">No diet plan data</p>
+                                                </td>
+                                            </tr>
+                                        )}
                                     </tbody>
                                 </table>
                             </div>
@@ -277,6 +314,15 @@ export const Reports: React.FC<Props> = ({ state }) => {
                                             </td>
                                         </tr>
                                     ))}
+                                {(state.sales.length + state.expenses.length === 0) && (
+                                    <tr>
+                                        <td colSpan={4} className="text-center py-12 bg-gray-50/50">
+                                            <DollarSign className="mx-auto mb-3 opacity-30 text-emerald-600" size={40} />
+                                            <p className="font-bold text-gray-500">No financial transactions recorded.</p>
+                                            <p className="text-xs text-gray-400 mt-1">Add sales or expenses to generate profit & loss insights.</p>
+                                        </td>
+                                    </tr>
+                                )}
                             </tbody>
                         </table>
                     </div>
@@ -292,7 +338,7 @@ export const Reports: React.FC<Props> = ({ state }) => {
                             <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mt-2">Active Animals</p>
                         </div>
                         <div className="bg-white p-6 rounded-2xl border border-slate-100 text-center premium-card hover:-translate-y-1 transition-transform">
-                            <h3 className="text-4xl font-extrabold text-blue-600 font-display">{active.filter(a => a.gender === 'F').length}</h3>
+                            <h3 className="text-4xl font-extrabold text-blue-600 font-display">{active.filter(a => a.gender === 'FEMALE').length}</h3>
                             <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mt-2">Females</p>
                         </div>
                         <div className="bg-white p-6 rounded-2xl border border-slate-100 text-center premium-card hover:-translate-y-1 transition-transform">
@@ -459,7 +505,15 @@ export const Reports: React.FC<Props> = ({ state }) => {
                                         const rows = groupData();
 
                                         if (rows.length === 0) {
-                                            return <tr><td colSpan={4} className="px-6 py-8 text-center text-slate-400 font-medium">No records found for this category.</td></tr>;
+                                            return (
+                                                <tr>
+                                                    <td colSpan={4} className="px-6 py-16 text-center bg-slate-50/50">
+                                                        <FileText className="mx-auto mb-4 opacity-30 text-slate-500" size={48} />
+                                                        <p className="font-bold text-slate-600 text-lg">No records found for this period</p>
+                                                        <p className="text-sm text-slate-400 mt-1">Change the category or period to see detailed insights.</p>
+                                                    </td>
+                                                </tr>
+                                            );
                                         }
 
                                         return rows.map(([period, data]) => (

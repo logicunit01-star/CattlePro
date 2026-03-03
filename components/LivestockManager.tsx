@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { Livestock, LivestockSpecies, LivestockStatus, MedicalRecord, MedicalRecordType, InseminationRecord, WeightRecord, ServiceDetails, MilkRecord, Breeder, BirthRecord, FeedInventory, Sale, Entity } from '../types';
+import { Livestock, LivestockSpecies, LivestockStatus, MedicalRecord, MedicalRecordType, InseminationRecord, WeightRecord, ServiceDetails, MilkRecord, Breeder, BirthRecord, FeedInventory, Sale, Entity, Infrastructure } from '../types';
 import { COMMON_VACCINES, FEED_PLANS } from '../constants';
 import { uploadImage } from '../services/uploadService';
 import { Search, Plus, Tag, Scale, Settings, ArrowLeft, Save, Calendar, MapPin, Eye, Stethoscope, Dna, User, Phone, ScrollText, LineChart, Image as ImageIcon, Upload, Edit2, Milk, Droplets, Beef, Sprout, FileText, CheckCircle2, Baby, Info, Trash2, Clock, ChevronRight, DollarSign, Skull } from 'lucide-react';
@@ -12,6 +12,7 @@ interface Props {
     species: LivestockSpecies;
     categories: string[];
     entities?: Entity[];
+    infrastructure?: Infrastructure[];
     onAddLivestock: (c: Livestock) => void;
     onUpdateLivestock: (c: Livestock) => void;
     onDeleteLivestock: (id: string) => void | Promise<void>;
@@ -27,7 +28,7 @@ interface Props {
 
 type ViewMode = 'LIST' | 'ANIMAL_FORM' | 'DETAILS';
 
-export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species, categories, entities = [], onAddLivestock, onUpdateLivestock, onDeleteLivestock, onAddMedicalRecord, onAddBreedingRecord, onAddWeightRecord, onAddMilkRecord, onUpdateBreedingRecord, inventory, onAddSale }) => {
+export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species, categories, entities = [], infrastructure = [], onAddLivestock, onUpdateLivestock, onDeleteLivestock, onAddMedicalRecord, onAddBreedingRecord, onAddWeightRecord, onAddMilkRecord, onUpdateBreedingRecord, inventory, onAddSale }) => {
     const T = {
         animal: species === 'CATTLE' ? 'Animal' : 'Goat',
         sire: species === 'CATTLE' ? 'Bull' : 'Buck',
@@ -236,6 +237,7 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
         for (let i = 0; i < birth.count; i++) {
             const offspring: Livestock = {
                 id: Math.random().toString(36).substr(2, 9),
+                farmId: '',
                 tagId: `${selectedAnimal.tagId}-${T.offspringTag}-${i + 1}`,
                 species: selectedAnimal.species,
                 category: 'Calf',
@@ -411,12 +413,19 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                             if (!saleForm.buyer || !saleForm.amount) return alert("Please fill Buyer and Amount");
                             const idsToSell = selectedBatchIds.length > 0 ? selectedBatchIds : selectedAnimal ? [selectedAnimal.id] : [];
 
+                            const cogsTotal = idsToSell.reduce((sum, id) => {
+                                const a = livestock.find(l => l.id === id);
+                                if (!a) return sum;
+                                return sum + (a.purchasePrice || 0) + (a.accumulatedFeedCost || 0) + (a.accumulatedMedicalCost || 0);
+                            }, 0);
+
                             const sale: Sale = {
                                 id: Math.random().toString(36).substr(2, 9),
                                 itemType: 'ANIMAL',
                                 soldAnimalIds: idsToSell,
                                 saleType: idsToSell.length > 1 ? 'BULK_ANIMALS' : 'SINGLE_ANIMAL',
                                 amount: saleForm.amount || 0,
+                                estimatedProfit: (saleForm.amount || 0) - cogsTotal,
                                 amountReceived: saleForm.paymentStatus === 'PAID' ? (saleForm.amount || 0) : (saleForm.amountReceived || 0),
                                 paymentStatus: saleForm.paymentStatus || 'PAID',
                                 paymentMethod: 'CASH',
@@ -512,7 +521,12 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                                 </div>
                                 <div>
                                     <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Location / Barn</label>
-                                    <input type="text" value={animalForm.location} onChange={e => setAnimalForm({ ...animalForm, location: e.target.value })} className="w-full border-b-2 border-gray-100 focus:border-emerald-500 py-2 outline-none" placeholder={T.locationPlaceholder} />
+                                    <select value={animalForm.location || ''} onChange={e => setAnimalForm({ ...animalForm, location: e.target.value })} className="w-full border-b-2 border-gray-100 focus:border-emerald-500 py-2 outline-none bg-white">
+                                        <option value="">Select Location (Optional)</option>
+                                        {infrastructure.filter(i => i.category === 'BUILDING' || i.category === 'PASTURE').map(i => (
+                                            <option key={i.id} value={i.id}>{i.name}</option>
+                                        ))}
+                                    </select>
                                 </div>
                             </div>
                             <div className="grid grid-cols-2 gap-6">
@@ -677,6 +691,7 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                                     calfDob.setMonth(calfDob.getMonth() - entry.ageMonths);
                                     const calf: Livestock = {
                                         id: Math.random().toString(36).substr(2, 9),
+                                        farmId: '',
                                         tagId: entry.name.trim() || `${animalForm.tagId}-${T.offspringTag}-${i + 1}`,
                                         species: species,
                                         category: 'Calf',
@@ -815,8 +830,13 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                                         <div className="grid grid-cols-2 sm:grid-cols-4 gap-8">
                                             <div><p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Current Weight</p><p className="text-xl font-black text-gray-800">{selectedAnimal.weight} kg</p></div>
                                             <div><p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Age</p><p className="text-xl font-black text-gray-800">{getAgeDisplay(selectedAnimal.dob)}</p></div>
-                                            <div><p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Entry Price</p><p className="text-xl font-black text-emerald-600">PKR {selectedAnimal.purchasePrice?.toLocaleString()}</p></div>
+                                            <div><p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Entry Price</p><p className="text-xl font-black text-slate-600">PKR {(selectedAnimal.purchasePrice || 0).toLocaleString()}</p></div>
                                             <div><p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Location</p><p className="text-xl font-black text-gray-800">{selectedAnimal.location}</p></div>
+                                        </div>
+                                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-8 mt-6 pt-6 border-t border-slate-100">
+                                            <div><p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Acc. Feed Cost</p><p className="text-xl font-black text-amber-600">PKR {Math.round(selectedAnimal.accumulatedFeedCost || 0).toLocaleString()}</p></div>
+                                            <div><p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Acc. Medical Cost</p><p className="text-xl font-black text-sky-600">PKR {Math.round(selectedAnimal.accumulatedMedicalCost || 0).toLocaleString()}</p></div>
+                                            <div className="sm:col-span-2"><p className="text-[10px] font-bold text-emerald-600 uppercase mb-1 tracking-widest bg-emerald-50 w-fit px-2 rounded">Total COGS (Break-even)</p><p className="text-2xl font-black text-emerald-700">PKR {Math.round((selectedAnimal.purchasePrice || 0) + (selectedAnimal.accumulatedFeedCost || 0) + (selectedAnimal.accumulatedMedicalCost || 0)).toLocaleString()}</p></div>
                                         </div>
                                     </div>
                                     <div className="bg-gray-50 rounded-3xl p-8 border border-gray-100">
