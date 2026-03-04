@@ -25,6 +25,7 @@ interface Props {
     onLogTreatment: (logs: TreatmentLog[]) => void | Promise<void>;
     onAddExpense: (expense: any) => Promise<void>;
     onReverseFeedLedger: (ledgerId: string) => Promise<void>;
+    onClearFeedLedger: () => Promise<void>;
 }
 
 export const Operations: React.FC<Props> = ({
@@ -46,7 +47,8 @@ export const Operations: React.FC<Props> = ({
     onDeleteTreatmentProtocol,
     onLogTreatment,
     onAddExpense,
-    onReverseFeedLedger
+    onReverseFeedLedger,
+    onClearFeedLedger
 }) => {
     const [activeTab, setActiveTab] = useState<OperationsTab>(initialTab);
 
@@ -1303,9 +1305,20 @@ export const Operations: React.FC<Props> = ({
 
                                 {viewMode === 'LEDGER' && (
                                     <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-                                        <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
-                                            <h3 className="font-bold text-gray-800">Processed Feed Transactions</h3>
-                                            <p className="text-xs text-gray-500 mt-1">History of all successfully processed daily diets and material deductions.</p>
+                                        <div className="px-6 py-4 border-b border-gray-200 bg-gray-50 flex justify-between items-center">
+                                            <div>
+                                                <h3 className="font-bold text-gray-800">Processed Feed Transactions</h3>
+                                                <p className="text-xs text-gray-500 mt-1">History of all successfully processed daily diets and material deductions.</p>
+                                            </div>
+                                            {(state.processedFeedLedgers?.length > 0 || state.consumptionLogs?.length > 0) && (
+                                                <button onClick={() => {
+                                                    if (confirm('DANGER: Are you sure you want to completely PURGE all processing history? This will permanently delete the transaction logs. (Cost mapping on animals and inventory deductions will REMAIN INTACT, only the viewable history is deleted).')) {
+                                                        onClearFeedLedger();
+                                                    }
+                                                }} className="bg-red-50 text-red-600 font-bold px-4 py-2 text-xs rounded-xl hover:bg-red-100 transition-colors border border-red-200">
+                                                    CLEAR HISTORY
+                                                </button>
+                                            )}
                                         </div>
                                         <div className="overflow-x-auto">
                                             <table className="w-full text-left text-sm text-gray-600">
@@ -1516,7 +1529,9 @@ export const Operations: React.FC<Props> = ({
                                                             onChange={e => {
                                                                 const inv = state.feed.find(f => f.id === e.target.value);
                                                                 const newItems = [...(dietForm.items || [])];
-                                                                newItems[index] = { ...item, inventoryId: e.target.value, inventoryName: inv?.name || '', unit: inv?.unit || 'kg', costPerUnit: inv?.unitCost };
+                                                                const isBagOrBundle = ['BAG', 'BUNDLE'].includes((inv?.unit || '').toUpperCase());
+                                                                const initialUnit = isBagOrBundle ? 'kg' : (inv?.unit || 'kg');
+                                                                newItems[index] = { ...item, inventoryId: e.target.value, inventoryName: inv?.name || '', unit: initialUnit, costPerUnit: inv?.unitCost };
                                                                 setDietForm({ ...dietForm, items: newItems });
                                                             }}
                                                             className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
@@ -1550,12 +1565,8 @@ export const Operations: React.FC<Props> = ({
                                                                 className="bg-gray-100 text-xs px-1 border-l border-gray-200 outline-none"
                                                             >
                                                                 <option value={state.feed.find(f => f.id === item.inventoryId)?.unit || 'kg'}>{state.feed.find(f => f.id === item.inventoryId)?.unit || 'kg'}</option>
-                                                                {['BAG', 'BUNDLE'].includes((state.feed.find(f => f.id === item.inventoryId)?.unit || '').toUpperCase()) && state.feed.find(f => f.id === item.inventoryId)?.weightPerUnit && (
-                                                                    <>
-                                                                        <option value="kg">kg</option>
-                                                                        <option value="g">g</option>
-                                                                    </>
-                                                                )}
+                                                                {state.feed.find(f => f.id === item.inventoryId)?.unit?.toUpperCase() !== 'KG' && <option value="kg">kg</option>}
+                                                                {state.feed.find(f => f.id === item.inventoryId)?.unit?.toUpperCase() !== 'G' && <option value="g">g</option>}
                                                             </select>
                                                         </div>
                                                     </div>
@@ -1563,15 +1574,22 @@ export const Operations: React.FC<Props> = ({
                                                         {(() => {
                                                             let c = 0;
                                                             if (item.costPerUnit) {
-                                                                const isInvBag = ['BAG', 'BUNDLE'].includes((state.feed.find(f => f.id === item.inventoryId)?.unit || '').toUpperCase());
-                                                                const wpu = state.feed.find(f => f.id === item.inventoryId)?.weightPerUnit;
-                                                                if (isInvBag && wpu && item.unit === 'kg') {
-                                                                    c = (item.quantity / wpu) * item.costPerUnit;
-                                                                } else if (isInvBag && wpu && item.unit === 'g') {
-                                                                    c = (item.quantity / 1000 / wpu) * item.costPerUnit;
-                                                                } else {
-                                                                    c = item.quantity * item.costPerUnit;
+                                                                const fInv = state.feed.find(f => f.id === item.inventoryId);
+                                                                const uiInv = (fInv?.unit || '').toUpperCase();
+                                                                const uiItem = (item.unit || '').toUpperCase();
+                                                                const wpu = fInv?.weightPerUnit || 1;
+                                                                let nativeQty = item.quantity || 0;
+
+                                                                if (['BAG', 'BUNDLE'].includes(uiInv)) {
+                                                                    if (uiItem === 'KG') nativeQty = (item.quantity || 0) / wpu;
+                                                                    else if (uiItem === 'G') nativeQty = ((item.quantity || 0) / 1000) / wpu;
+                                                                } else if (uiInv === 'KG' && uiItem === 'G') {
+                                                                    nativeQty = (item.quantity || 0) / 1000;
+                                                                } else if (uiInv === 'G' && uiItem === 'KG') {
+                                                                    nativeQty = (item.quantity || 0) * 1000;
                                                                 }
+
+                                                                c = nativeQty * item.costPerUnit;
                                                             }
                                                             return <>Est. Cost: <span className="font-bold text-emerald-600">{c.toFixed(1)}</span></>;
                                                         })()}
@@ -1612,19 +1630,32 @@ export const Operations: React.FC<Props> = ({
                                                                 let inventoryDeductionCount = deductTotal; // in native units mapped for stock reduction
 
                                                                 const fInv = state.feed.find(f => f.id === it.inventoryId);
-                                                                const isBag = fInv ? ['BAG', 'BUNDLE'].includes((fInv.unit || '').toUpperCase()) : false;
-                                                                if (isBag && fInv?.weightPerUnit && it.unit === 'kg') {
-                                                                    inventoryDeductionCount = deductTotal / fInv.weightPerUnit;
-                                                                } else if (isBag && fInv?.weightPerUnit && it.unit === 'g') {
-                                                                    inventoryDeductionCount = (deductTotal / 1000) / fInv.weightPerUnit;
+                                                                const uiInv = (fInv?.unit || '').toUpperCase();
+                                                                const uiItem = (it.unit || '').toUpperCase();
+                                                                const isBag = fInv ? ['BAG', 'BUNDLE'].includes(uiInv) : false;
+                                                                const wpu = fInv?.weightPerUnit || 1;
+                                                                const isMissingWpu = isBag && (!fInv?.weightPerUnit || fInv.weightPerUnit <= 0);
+
+                                                                if (isBag) {
+                                                                    if (uiItem === 'KG') inventoryDeductionCount = deductTotal / wpu;
+                                                                    else if (uiItem === 'G') inventoryDeductionCount = (deductTotal / 1000) / wpu;
+                                                                } else if (uiInv === 'KG' && uiItem === 'G') {
+                                                                    inventoryDeductionCount = deductTotal / 1000;
+                                                                } else if (uiInv === 'G' && uiItem === 'KG') {
+                                                                    inventoryDeductionCount = deductTotal * 1000;
                                                                 }
 
                                                                 const warn = inventoryDeductionCount > (fInv?.quantity || 0);
 
                                                                 return (
-                                                                    <div key={it.id} className="flex justify-between text-xs text-emerald-900">
-                                                                        <span>{it.inventoryName || 'Unknown'} (In Stock: {fInv?.quantity?.toFixed(2)}{fInv?.unit} - {(fInv?.weightPerUnit || 0) * (fInv?.quantity || 0)}kg):</span>
-                                                                        <span className={warn ? "text-red-500 font-bold" : "font-medium"}>Require {deductTotal.toFixed(2)} {it.unit}  =  (-{inventoryDeductionCount.toFixed(2)} {fInv?.unit || 'units'})</span>
+                                                                    <div key={it.id} className="flex flex-col text-xs text-emerald-900 border-b border-emerald-50/50 pb-1.5 mb-1.5 last:mb-0 last:pb-0 last:border-0">
+                                                                        <div className="flex justify-between items-center">
+                                                                            <span>{it.inventoryName || 'Unknown'} (In Stock: {fInv?.quantity?.toFixed(2)}{fInv?.unit}{wpu > 1 ? ` - ${(wpu) * (fInv?.quantity || 0)}kg` : ''}):</span>
+                                                                            <span className={warn ? "text-red-500 font-bold" : "font-medium"}>Require {deductTotal.toFixed(2)} {it.unit}  =  (-{inventoryDeductionCount.toFixed(2)} {fInv?.unit || 'units'})</span>
+                                                                        </div>
+                                                                        {isMissingWpu && (it.unit === 'kg' || it.unit === 'g') && (
+                                                                            <span className="text-red-500 block text-[10px] mt-1 font-bold italic bg-red-50 px-2 py-1 rounded inline-flex w-fit">*Warning: "Weight Per Unit" missing for {fInv?.name}. System assuming 1 {fInv?.unit} = 1 kg. Please configure in inventory to accurately convert fractions.*</span>
+                                                                        )}
                                                                     </div>
                                                                 );
                                                             })}

@@ -341,9 +341,17 @@ const App: React.FC = () => {
           const invItem = state.feed.find(f => f.id === item.inventoryId);
           let deductionQty = totalRequiredForPlan;
           if (invItem) {
-            const isInvBag = ['BAG', 'BUNDLE'].includes((invItem.unit || '').toUpperCase());
-            if (isInvBag && invItem.weightPerUnit && item.unit.toLowerCase() === 'kg') {
-              deductionQty = totalRequiredForPlan / invItem.weightPerUnit;
+            const uiInv = (invItem.unit || '').toUpperCase();
+            const uiItem = (item.unit || '').toUpperCase();
+            const wpu = invItem.weightPerUnit || 1;
+
+            if (['BAG', 'BUNDLE'].includes(uiInv)) {
+              if (uiItem === 'KG') deductionQty = totalRequiredForPlan / wpu;
+              else if (uiItem === 'G') deductionQty = (totalRequiredForPlan / 1000) / wpu;
+            } else if (uiInv === 'KG' && uiItem === 'G') {
+              deductionQty = totalRequiredForPlan / 1000;
+            } else if (uiInv === 'G' && uiItem === 'KG') {
+              deductionQty = totalRequiredForPlan * 1000;
             }
           }
           requiredInventory.set(item.inventoryId, (requiredInventory.get(item.inventoryId) || 0) + deductionQty);
@@ -419,9 +427,17 @@ const App: React.FC = () => {
           const invItem = invUpdates.get(item.inventoryId);
           if (invItem && totalQty > 0) {
             let deductionQty = totalQty;
-            const isInvBag = ['BAG', 'BUNDLE'].includes((invItem.unit || '').toUpperCase());
-            if (isInvBag && invItem.weightPerUnit && item.unit.toLowerCase() === 'kg') {
-              deductionQty = totalQty / invItem.weightPerUnit;
+            const uiInv = (invItem.unit || '').toUpperCase();
+            const uiItem = (item.unit || '').toUpperCase();
+            const wpu = invItem.weightPerUnit || 1;
+
+            if (['BAG', 'BUNDLE'].includes(uiInv)) {
+              if (uiItem === 'KG') deductionQty = totalQty / wpu;
+              else if (uiItem === 'G') deductionQty = (totalQty / 1000) / wpu;
+            } else if (uiInv === 'KG' && uiItem === 'G') {
+              deductionQty = totalQty / 1000;
+            } else if (uiInv === 'G' && uiItem === 'KG') {
+              deductionQty = totalQty * 1000;
             }
 
             invItem.quantity -= deductionQty; // Safe because of hard lock
@@ -522,12 +538,14 @@ const App: React.FC = () => {
       // 1. Recover Inventory
       const invUpdates = new Map<string, FeedInventory>();
       state.feed.forEach(f => invUpdates.set(f.id, { ...f }));
+      const modifiedFeedIds = new Set<string>();
 
       for (const log of logs) {
         const invItem = invUpdates.get(log.itemId);
         if (invItem) {
-          invItem.quantity += log.quantityUsed;
+          invItem.quantity += Number(log.quantityUsed || 0);
           invUpdates.set(invItem.id, invItem);
+          modifiedFeedIds.add(invItem.id);
         }
       }
 
@@ -535,6 +553,7 @@ const App: React.FC = () => {
       const logCostPerAnimal = ledger.totalCost / (ledger.totalAnimalsFed || 1);
       const plan = state.dietPlans.find(p => p.id === ledger.dietPlanId);
       const livestockUpdates = new Map<string, Livestock>();
+      const modifiedLivestockIds = new Set<string>();
 
       if (plan) {
         let animalsToReverse: Livestock[] = [];
@@ -551,27 +570,44 @@ const App: React.FC = () => {
           const currentAnimal = livestockUpdates.get(animal.id) || { ...animal };
           currentAnimal.accumulatedFeedCost = Math.max(0, (currentAnimal.accumulatedFeedCost || 0) - logCostPerAnimal);
           livestockUpdates.set(animal.id, currentAnimal);
+          modifiedLivestockIds.add(animal.id);
         }
       }
 
       // 3. Commit updates locally to backend (since backend lacks explicit batch reverse API yet)
-      for (const inv of Array.from(invUpdates.values())) {
-        await backendService.updateFeed(inv.id, inv);
+      for (const id of modifiedFeedIds) {
+        const inv = invUpdates.get(id);
+        if (inv) await backendService.updateFeed(id, inv);
       }
-      for (const animal of Array.from(livestockUpdates.values())) {
-        await backendService.updateLivestock(animal.id, animal);
+      for (const id of modifiedLivestockIds) {
+        const animal = livestockUpdates.get(id);
+        if (animal) await backendService.updateLivestock(id, animal);
       }
 
       setState(prev => ({
         ...prev,
-        feed: Array.from(invUpdates.values()),
-        livestock: prev.livestock.map(l => livestockUpdates.get(l.id) || l),
+        feed: prev.feed.map(f => modifiedFeedIds.has(f.id) ? invUpdates.get(f.id)! : f),
+        livestock: prev.livestock.map(l => modifiedLivestockIds.has(l.id) ? livestockUpdates.get(l.id)! : l),
         processedFeedLedgers: (prev.processedFeedLedgers || []).map(l => l.id === ledgerId ? { ...l, status: 'REVERSED' } : l)
       }));
 
       alert(`Transaction ${ledgerId} highly reversed. Feed inventory and animal costs accurately restored. Note: Daily unified feed expense was NOT altered; adjust manually if required.`);
     } catch (e: any) {
       alert(`Reversal failed: ${e.message}`);
+    }
+  };
+
+  const handleClearFeedLedger = async () => {
+    try {
+      const apiUrl = (import.meta as any).env?.VITE_API_URL || 'https://api.hulmsolutions.com/livestock';
+      await fetch(`${apiUrl}/operations/consumption-logs/clear`, { method: 'DELETE' }).catch(() => { });
+
+      setState(prev => ({ ...prev, consumptionLogs: [], processedFeedLedgers: [] }));
+      localStorage.removeItem('cattleops_consumption_logs');
+      localStorage.removeItem('cattleops_processed_feed_ledgers');
+      alert("Ledger history completely purged.");
+    } catch (e: any) {
+      alert(`Clear failed: ${e.message}`);
     }
   };
 
@@ -1249,6 +1285,7 @@ const App: React.FC = () => {
                 onUpdateTreatmentProtocol={async (p) => { const updated = await backendService.updateTreatmentProtocol(p.id, p); setState(s => ({ ...s, treatmentProtocols: s.treatmentProtocols.map(x => x.id === p.id ? updated : x) })); }}
                 onDeleteTreatmentProtocol={async (id) => { await backendService.deleteTreatmentProtocol(id); setState(s => ({ ...s, treatmentProtocols: s.treatmentProtocols.filter(x => x.id !== id) })); }}
                 onLogTreatment={handleLogTreatment}
+                onClearFeedLedger={handleClearFeedLedger}
               />
             )}
             {activeView === 'PROCUREMENT' && (

@@ -539,6 +539,26 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                                     <input type="date" value={animalForm.purchaseDate} onChange={e => setAnimalForm({ ...animalForm, purchaseDate: e.target.value })} className="w-full border-b-2 border-gray-100 focus:border-emerald-500 py-2 outline-none" />
                                 </div>
                             </div>
+                            <div className="grid grid-cols-2 gap-6">
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Dam (Mother) ID (Optional)</label>
+                                    <select value={animalForm.damId || ''} onChange={e => setAnimalForm({ ...animalForm, damId: e.target.value })} className="w-full border-b-2 border-gray-100 focus:border-emerald-500 py-2 outline-none bg-white">
+                                        <option value="">Unknown / Skip</option>
+                                        {livestock.filter(l => l.gender === 'FEMALE').map(i => (
+                                            <option key={i.id} value={i.id}>{i.tagId} ({i.breed})</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Sire (Father) ID (Optional)</label>
+                                    <select value={animalForm.sireId || ''} onChange={e => setAnimalForm({ ...animalForm, sireId: e.target.value })} className="w-full border-b-2 border-gray-100 focus:border-emerald-500 py-2 outline-none bg-white">
+                                        <option value="">Unknown / Skip</option>
+                                        {livestock.filter(l => l.gender === 'MALE').map(i => (
+                                            <option key={i.id} value={i.id}>{i.tagId} ({i.breed})</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            </div>
                             <div>
                                 <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Purchase Price (PKR)</label>
                                 <input type="number" value={animalForm.purchasePrice} onChange={e => setAnimalForm({ ...animalForm, purchasePrice: parseFloat(e.target.value) })} className="w-full border-b-2 border-gray-100 focus:border-emerald-500 py-2 outline-none" />
@@ -827,17 +847,30 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                                 <div className="lg:col-span-2 space-y-10">
                                     <div>
                                         <h4 className="text-sm font-black text-gray-400 uppercase tracking-widest mb-6 border-b border-gray-50 pb-2">Vitals & Lineage</h4>
-                                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-8">
-                                            <div><p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Current Weight</p><p className="text-xl font-black text-gray-800">{selectedAnimal.weight} kg</p></div>
-                                            <div><p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Age</p><p className="text-xl font-black text-gray-800">{getAgeDisplay(selectedAnimal.dob)}</p></div>
-                                            <div><p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Entry Price</p><p className="text-xl font-black text-slate-600">PKR {(selectedAnimal.purchasePrice || 0).toLocaleString()}</p></div>
-                                            <div><p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Location</p><p className="text-xl font-black text-gray-800">{selectedAnimal.location}</p></div>
-                                        </div>
-                                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-8 mt-6 pt-6 border-t border-slate-100">
-                                            <div><p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Acc. Feed Cost</p><p className="text-xl font-black text-amber-600">PKR {Math.round(selectedAnimal.accumulatedFeedCost || 0).toLocaleString()}</p></div>
-                                            <div><p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Acc. Medical Cost</p><p className="text-xl font-black text-sky-600">PKR {Math.round(selectedAnimal.accumulatedMedicalCost || 0).toLocaleString()}</p></div>
-                                            <div className="sm:col-span-2"><p className="text-[10px] font-bold text-emerald-600 uppercase mb-1 tracking-widest bg-emerald-50 w-fit px-2 rounded">Total COGS (Break-even)</p><p className="text-2xl font-black text-emerald-700">PKR {Math.round((selectedAnimal.purchasePrice || 0) + (selectedAnimal.accumulatedFeedCost || 0) + (selectedAnimal.accumulatedMedicalCost || 0)).toLocaleString()}</p></div>
-                                        </div>
+                                        {(() => {
+                                            const latestWeight = selectedAnimal.weightHistory?.length > 0 ? selectedAnimal.weightHistory[selectedAnimal.weightHistory.length - 1].weight : selectedAnimal.weight;
+                                            const displayWeight = latestWeight > 0 ? `${latestWeight} kg` : 'Not Recorded';
+                                            const displayPrice = selectedAnimal.purchasePrice && selectedAnimal.purchasePrice > 0 ? `PKR ${selectedAnimal.purchasePrice.toLocaleString()}` : 'Not Recorded';
+                                            const accMedCost = selectedAnimal.accumulatedMedicalCost || selectedAnimal.medicalHistory?.reduce((sum, m) => sum + (m.cost || 0), 0) || 0;
+                                            const accFeedCost = selectedAnimal.accumulatedFeedCost || 0;
+                                            const totalCogs = (selectedAnimal.purchasePrice || 0) + accFeedCost + accMedCost;
+
+                                            return (
+                                                <>
+                                                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-8">
+                                                        <div><p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Current Weight</p><p className={`text-xl font-black ${latestWeight > 0 ? 'text-gray-800' : 'text-gray-300'}`}>{displayWeight}</p></div>
+                                                        <div><p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Age</p><p className={`text-xl font-black ${selectedAnimal.dob ? 'text-gray-800' : 'text-gray-300'}`}>{getAgeDisplay(selectedAnimal.dob)}</p></div>
+                                                        <div><p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Entry Price</p><p className={`text-xl font-black ${selectedAnimal.purchasePrice && selectedAnimal.purchasePrice > 0 ? 'text-slate-600' : 'text-gray-300'}`}>{displayPrice}</p></div>
+                                                        <div><p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Location</p><p className={`text-xl font-black ${selectedAnimal.location ? 'text-gray-800' : 'text-gray-300'}`}>{selectedAnimal.location || 'Not Assigned'}</p></div>
+                                                    </div>
+                                                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-8 mt-6 pt-6 border-t border-slate-100">
+                                                        <div><p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Acc. Feed Cost</p><p className={`text-xl font-black ${accFeedCost > 0 ? 'text-amber-600' : 'text-gray-300'}`}>PKR {Math.round(accFeedCost).toLocaleString()}</p></div>
+                                                        <div><p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Acc. Medical Cost</p><p className={`text-xl font-black ${accMedCost > 0 ? 'text-sky-600' : 'text-gray-300'}`}>PKR {Math.round(accMedCost).toLocaleString()}</p></div>
+                                                        <div className="sm:col-span-2"><p className="text-[10px] font-bold text-emerald-600 uppercase mb-1 tracking-widest bg-emerald-50 w-fit px-2 rounded">Total COGS (Break-even)</p><p className={`text-2xl font-black ${totalCogs > 0 ? 'text-emerald-700' : 'text-gray-400'}`}>PKR {Math.round(totalCogs).toLocaleString()}</p></div>
+                                                    </div>
+                                                </>
+                                            );
+                                        })()}
                                     </div>
                                     <div className="bg-gray-50 rounded-3xl p-8 border border-gray-100">
                                         <h5 className="font-black text-gray-800 mb-6 flex items-center gap-2"><ScrollText size={18} className="text-emerald-600" /> Pedigree Tree</h5>
@@ -1262,52 +1295,77 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-                {filteredLivestock.map((animal) => (
-                    <div key={animal.id} onClick={() => {
-                        if (isBatchMode) {
-                            setSelectedBatchIds(prev => prev.includes(animal.id) ? prev.filter(id => id !== animal.id) : [...prev, animal.id]);
-                        } else {
-                            setSelectedAnimalId(animal.id); setCurrentView('DETAILS'); setDetailTab('INFO');
-                        }
-                    }} className={`bg-white rounded-2xl border overflow-hidden premium-card cursor-pointer group relative transition-all duration-300 ${isBatchMode && selectedBatchIds.includes(animal.id) ? 'border-2 border-emerald-500 bg-emerald-50/50' : 'border-slate-100 hover:border-emerald-200'}`}>
-                        <div className="p-5">
-                            <div className="flex justify-between items-start mb-5">
-                                <div className="flex items-center gap-4">
-                                    <div className="w-14 h-14 rounded-xl overflow-hidden border border-slate-100 shadow-sm bg-slate-50 group-hover:scale-105 transition-transform duration-300">
-                                        {animal.imageUrl ? <img src={animal.imageUrl} className="w-full h-full object-cover" /> : getPlaceholderVisual(animal.category)}
+                {filteredLivestock.map((animal) => {
+                    const isGoat = species === 'GOAT';
+                    const themeText = isGoat ? 'text-amber-600' : 'text-emerald-600';
+                    const hoverBorder = isGoat ? 'hover:border-amber-300' : 'hover:border-emerald-300';
+                    const kids = livestock.filter(l => l.damId === animal.id || l.sireId === animal.id);
+                    const dam = animal.damId ? livestock.find(l => l.id === animal.damId) : null;
+                    const sire = animal.sireId ? livestock.find(l => l.id === animal.sireId) : null;
+
+                    return (
+                        <div key={animal.id} onClick={() => {
+                            if (isBatchMode) {
+                                setSelectedBatchIds(prev => prev.includes(animal.id) ? prev.filter(id => id !== animal.id) : [...prev, animal.id]);
+                            } else {
+                                setSelectedAnimalId(animal.id); setCurrentView('DETAILS'); setDetailTab('INFO');
+                            }
+                        }} className={`bg-white rounded-[2rem] border overflow-hidden premium-card cursor-pointer group relative transition-all duration-300 ${isBatchMode && selectedBatchIds.includes(animal.id) ? (isGoat ? 'border-4 border-amber-500 bg-amber-50' : 'border-4 border-emerald-500 bg-emerald-50') : `border-slate-100 shadow-sm ${hoverBorder} hover:shadow-xl hover:-translate-y-1`}`}>
+                            <div className="p-6 relative">
+                                <div className="flex justify-between items-start mb-6">
+                                    <div className="flex gap-4 items-center">
+                                        <div className="relative">
+                                            <div className={`w-16 h-16 rounded-2xl overflow-hidden border-2 border-white shadow-md bg-slate-50 group-hover:scale-105 transition-transform duration-300 z-10 relative`}>
+                                                {animal.imageUrl ? <img src={animal.imageUrl} className="w-full h-full object-cover" /> : getPlaceholderVisual(animal.category)}
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <h3 className={`font-black text-slate-800 text-xl tracking-tight group-hover:${themeText} transition-colors flex items-center gap-2`}>
+                                                {animal.tagId}
+                                            </h3>
+                                            <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">{animal.breed} <span className="opacity-50 mx-1">•</span> {animal.gender}</p>
+                                        </div>
                                     </div>
-                                    <div>
-                                        <h3 className="font-extrabold text-slate-800 text-lg tracking-tight font-display group-hover:text-emerald-700 transition-colors">{animal.tagId}</h3>
-                                        <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">{animal.breed}</p>
+                                    <div className="flex items-center gap-2">
+                                        <button onClick={(e) => { e.stopPropagation(); if (!confirm(`Remove ${animal.tagId}?`)) return; onDeleteLivestock(animal.id); }} className="p-2 rounded-xl text-slate-300 hover:bg-red-50 hover:text-red-600 transition-colors opacity-0 group-hover:opacity-100" title="Delete"><Trash2 size={16} /></button>
+                                        <span className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest ${getStatusColor(animal.status)} shadow-sm`}>{animal.status}</span>
                                     </div>
                                 </div>
-                                <div className="flex items-center gap-2">
-                                    <button
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            if (!confirm(`Remove ${animal.tagId} from records?`)) return;
-                                            onDeleteLivestock(animal.id);
-                                        }}
-                                        className="p-1.5 rounded-lg text-slate-300 hover:bg-red-50 hover:text-red-600 transition-colors opacity-0 group-hover:opacity-100"
-                                        title="Delete"
-                                    >
-                                        <Trash2 size={16} />
-                                    </button>
-                                    <span className={`px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider ${getStatusColor(animal.status)}`}>{animal.status}</span>
+
+                                <div className="grid grid-cols-2 gap-4 text-xs bg-slate-50/50 p-4 rounded-2xl border border-slate-100 mb-4">
+                                    <div className="flex flex-col gap-1"><span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Weight</span><span className="font-black text-slate-700 text-sm flex items-center gap-1.5"><Scale size={14} className={themeText} /> {animal.weight} KG</span></div>
+                                    <div className="flex flex-col gap-1"><span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Age</span><span className="font-black text-slate-700 text-sm flex items-center gap-1.5"><Calendar size={14} className={themeText} /> {getAgeDisplay(animal.dob)}</span></div>
                                 </div>
+
+                                {(dam || sire) && (
+                                    <div className="flex flex-wrap gap-2 mb-4">
+                                        {dam && <div className="flex items-center gap-1.5 bg-pink-50 text-pink-700 px-3 py-1 rounded-full text-[10px] font-bold border border-pink-100"><User size={12} /> Dam: {dam.tagId}</div>}
+                                        {sire && <div className="flex items-center gap-1.5 bg-blue-50 text-blue-700 px-3 py-1 rounded-full text-[10px] font-bold border border-blue-100"><User size={12} /> Sire: {sire.tagId}</div>}
+                                    </div>
+                                )}
+
+                                {kids.length > 0 && (
+                                    <div className={`pt-4 border-t ${isGoat ? 'border-amber-100/50' : 'border-emerald-100/50'} mt-2`}>
+                                        <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2 flex justify-between items-center">
+                                            <span>Registered {isGoat ? 'Kids' : 'Calves'} ({kids.length})</span>
+                                        </div>
+                                        <div className="flex flex-wrap gap-1.5">
+                                            {kids.slice(0, 3).map(k => (
+                                                <div key={k.id} className={`text-[10px] font-bold px-2 py-0.5 rounded shadow-sm flex items-center gap-1 border ${isGoat ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}><Baby size={10} /> {k.tagId}</div>
+                                            ))}
+                                            {kids.length > 3 && <div className="text-[10px] font-bold bg-slate-100 text-slate-500 px-2 py-0.5 rounded shadow-sm border border-slate-200">+{kids.length - 3} more</div>}
+                                        </div>
+                                    </div>
+                                )}
                             </div>
-                            <div className="grid grid-cols-2 gap-y-3 gap-x-4 text-xs">
-                                <div className={`flex items-center gap-2 font-bold text-slate-600`}><Scale size={14} className={species === 'GOAT' ? 'text-amber-500' : 'text-emerald-500'} /> {animal.weight} KG</div>
-                                <div className={`flex items-center gap-2 font-bold text-slate-600`}><Calendar size={14} className={species === 'GOAT' ? 'text-amber-500' : 'text-emerald-500'} /> {getAgeDisplay(animal.dob)}</div>
-                                {animal.damId && <div className="col-span-2 flex items-center gap-2 font-bold text-slate-400"><Baby size={14} /> <span className="text-slate-500">Dam: {livestock.find(l => l.id === animal.damId)?.tagId || 'Unknown'}</span></div>}
+
+                            <div className={`px-6 py-4 border-t border-slate-100 flex justify-between items-center transition-colors ${isGoat ? 'bg-amber-50/50 group-hover:bg-amber-100' : 'bg-emerald-50/50 group-hover:bg-emerald-100'}`}>
+                                <span className={`text-[10px] font-black tracking-widest uppercase transition-colors ${isGoat ? 'text-amber-500 group-hover:text-amber-700' : 'text-emerald-500 group-hover:text-emerald-700'}`}>View Full Profile & Lineage</span>
+                                <div className={`w-8 h-8 rounded-full flex items-center justify-center ${isGoat ? 'bg-amber-200 text-amber-700 group-hover:bg-amber-500 group-hover:text-white' : 'bg-emerald-200 text-emerald-700 group-hover:bg-emerald-500 group-hover:text-white'} transition-all duration-300 shadow-sm`}><ChevronRight size={16} className={`group-hover:translate-x-0.5 transition-transform`} /></div>
                             </div>
                         </div>
-                        <div className={`bg-slate-50/50 px-5 py-3 border-t border-slate-100 flex justify-between items-center transition-colors ${species === 'GOAT' ? 'group-hover:bg-amber-50' : 'group-hover:bg-emerald-50'}`}>
-                            <span className={`text-[10px] font-bold text-slate-400 tracking-widest uppercase transition-colors ${species === 'GOAT' ? 'group-hover:text-amber-700' : 'group-hover:text-emerald-700'}`}>View Profile</span>
-                            <ChevronRight size={16} className={`text-slate-300 transition-colors ${species === 'GOAT' ? 'group-hover:text-amber-600' : 'group-hover:text-emerald-600'} group-hover:translate-x-1 duration-300`} />
-                        </div>
-                    </div>
-                ))}
+                    );
+                })}
                 {filteredLivestock.length === 0 && (
                     <div className="col-span-full py-24 text-center bg-white rounded-3xl border border-gray-100 shadow-sm border-dashed">
                         <div className="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-4 border border-gray-100"><Search size={32} className="text-gray-200" /></div>
