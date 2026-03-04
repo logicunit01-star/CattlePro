@@ -1565,12 +1565,8 @@ export const Operations: React.FC<Props> = ({
                                                                 className="bg-gray-100 text-xs px-1 border-l border-gray-200 outline-none"
                                                             >
                                                                 <option value={state.feed.find(f => f.id === item.inventoryId)?.unit || 'kg'}>{state.feed.find(f => f.id === item.inventoryId)?.unit || 'kg'}</option>
-                                                                {['BAG', 'BUNDLE'].includes((state.feed.find(f => f.id === item.inventoryId)?.unit || '').toUpperCase()) && (
-                                                                    <>
-                                                                        {state.feed.find(f => f.id === item.inventoryId)?.unit !== 'kg' && <option value="kg">kg</option>}
-                                                                        {state.feed.find(f => f.id === item.inventoryId)?.unit !== 'g' && <option value="g">g</option>}
-                                                                    </>
-                                                                )}
+                                                                {state.feed.find(f => f.id === item.inventoryId)?.unit?.toUpperCase() !== 'KG' && <option value="kg">kg</option>}
+                                                                {state.feed.find(f => f.id === item.inventoryId)?.unit?.toUpperCase() !== 'G' && <option value="g">g</option>}
                                                             </select>
                                                         </div>
                                                     </div>
@@ -1579,15 +1575,21 @@ export const Operations: React.FC<Props> = ({
                                                             let c = 0;
                                                             if (item.costPerUnit) {
                                                                 const fInv = state.feed.find(f => f.id === item.inventoryId);
-                                                                const isInvBag = ['BAG', 'BUNDLE'].includes((fInv?.unit || '').toUpperCase());
+                                                                const uiInv = (fInv?.unit || '').toUpperCase();
+                                                                const uiItem = (item.unit || '').toUpperCase();
                                                                 const wpu = fInv?.weightPerUnit || 1;
-                                                                if (isInvBag && item.unit === 'kg') {
-                                                                    c = (item.quantity / wpu) * item.costPerUnit;
-                                                                } else if (isInvBag && item.unit === 'g') {
-                                                                    c = (item.quantity / 1000 / wpu) * item.costPerUnit;
-                                                                } else {
-                                                                    c = item.quantity * item.costPerUnit;
+                                                                let nativeQty = item.quantity || 0;
+
+                                                                if (['BAG', 'BUNDLE'].includes(uiInv)) {
+                                                                    if (uiItem === 'KG') nativeQty = (item.quantity || 0) / wpu;
+                                                                    else if (uiItem === 'G') nativeQty = ((item.quantity || 0) / 1000) / wpu;
+                                                                } else if (uiInv === 'KG' && uiItem === 'G') {
+                                                                    nativeQty = (item.quantity || 0) / 1000;
+                                                                } else if (uiInv === 'G' && uiItem === 'KG') {
+                                                                    nativeQty = (item.quantity || 0) * 1000;
                                                                 }
+
+                                                                c = nativeQty * item.costPerUnit;
                                                             }
                                                             return <>Est. Cost: <span className="font-bold text-emerald-600">{c.toFixed(1)}</span></>;
                                                         })()}
@@ -1628,14 +1630,19 @@ export const Operations: React.FC<Props> = ({
                                                                 let inventoryDeductionCount = deductTotal; // in native units mapped for stock reduction
 
                                                                 const fInv = state.feed.find(f => f.id === it.inventoryId);
-                                                                const isBag = fInv ? ['BAG', 'BUNDLE'].includes((fInv.unit || '').toUpperCase()) : false;
+                                                                const uiInv = (fInv?.unit || '').toUpperCase();
+                                                                const uiItem = (it.unit || '').toUpperCase();
+                                                                const isBag = fInv ? ['BAG', 'BUNDLE'].includes(uiInv) : false;
                                                                 const wpu = fInv?.weightPerUnit || 1;
                                                                 const isMissingWpu = isBag && (!fInv?.weightPerUnit || fInv.weightPerUnit <= 0);
 
-                                                                if (isBag && it.unit === 'kg') {
-                                                                    inventoryDeductionCount = deductTotal / wpu;
-                                                                } else if (isBag && it.unit === 'g') {
-                                                                    inventoryDeductionCount = (deductTotal / 1000) / wpu;
+                                                                if (isBag) {
+                                                                    if (uiItem === 'KG') inventoryDeductionCount = deductTotal / wpu;
+                                                                    else if (uiItem === 'G') inventoryDeductionCount = (deductTotal / 1000) / wpu;
+                                                                } else if (uiInv === 'KG' && uiItem === 'G') {
+                                                                    inventoryDeductionCount = deductTotal / 1000;
+                                                                } else if (uiInv === 'G' && uiItem === 'KG') {
+                                                                    inventoryDeductionCount = deductTotal * 1000;
                                                                 }
 
                                                                 const warn = inventoryDeductionCount > (fInv?.quantity || 0);
