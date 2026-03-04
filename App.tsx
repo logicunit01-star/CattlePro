@@ -342,8 +342,11 @@ const App: React.FC = () => {
           let deductionQty = totalRequiredForPlan;
           if (invItem) {
             const isInvBag = ['BAG', 'BUNDLE'].includes((invItem.unit || '').toUpperCase());
-            if (isInvBag && invItem.weightPerUnit && item.unit.toLowerCase() === 'kg') {
-              deductionQty = totalRequiredForPlan / invItem.weightPerUnit;
+            const wpu = invItem.weightPerUnit || 1;
+            if (isInvBag && item.unit.toLowerCase() === 'kg') {
+              deductionQty = totalRequiredForPlan / wpu;
+            } else if (isInvBag && item.unit.toLowerCase() === 'g') {
+              deductionQty = (totalRequiredForPlan / 1000) / wpu;
             }
           }
           requiredInventory.set(item.inventoryId, (requiredInventory.get(item.inventoryId) || 0) + deductionQty);
@@ -420,8 +423,11 @@ const App: React.FC = () => {
           if (invItem && totalQty > 0) {
             let deductionQty = totalQty;
             const isInvBag = ['BAG', 'BUNDLE'].includes((invItem.unit || '').toUpperCase());
-            if (isInvBag && invItem.weightPerUnit && item.unit.toLowerCase() === 'kg') {
-              deductionQty = totalQty / invItem.weightPerUnit;
+            const wpu = invItem.weightPerUnit || 1;
+            if (isInvBag && item.unit.toLowerCase() === 'kg') {
+              deductionQty = totalQty / wpu;
+            } else if (isInvBag && item.unit.toLowerCase() === 'g') {
+              deductionQty = (totalQty / 1000) / wpu;
             }
 
             invItem.quantity -= deductionQty; // Safe because of hard lock
@@ -572,6 +578,20 @@ const App: React.FC = () => {
       alert(`Transaction ${ledgerId} highly reversed. Feed inventory and animal costs accurately restored. Note: Daily unified feed expense was NOT altered; adjust manually if required.`);
     } catch (e: any) {
       alert(`Reversal failed: ${e.message}`);
+    }
+  };
+
+  const handleClearFeedLedger = async () => {
+    try {
+      const apiUrl = (import.meta as any).env?.VITE_API_URL || 'https://api.hulmsolutions.com/livestock';
+      await fetch(`${apiUrl}/operations/consumption-logs/clear`, { method: 'DELETE' }).catch(() => { });
+
+      setState(prev => ({ ...prev, consumptionLogs: [], processedFeedLedgers: [] }));
+      localStorage.removeItem('cattleops_consumption_logs');
+      localStorage.removeItem('cattleops_processed_feed_ledgers');
+      alert("Ledger history completely purged.");
+    } catch (e: any) {
+      alert(`Clear failed: ${e.message}`);
     }
   };
 
@@ -1249,6 +1269,7 @@ const App: React.FC = () => {
                 onUpdateTreatmentProtocol={async (p) => { const updated = await backendService.updateTreatmentProtocol(p.id, p); setState(s => ({ ...s, treatmentProtocols: s.treatmentProtocols.map(x => x.id === p.id ? updated : x) })); }}
                 onDeleteTreatmentProtocol={async (id) => { await backendService.deleteTreatmentProtocol(id); setState(s => ({ ...s, treatmentProtocols: s.treatmentProtocols.filter(x => x.id !== id) })); }}
                 onLogTreatment={handleLogTreatment}
+                onClearFeedLedger={handleClearFeedLedger}
               />
             )}
             {activeView === 'PROCUREMENT' && (

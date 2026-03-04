@@ -827,17 +827,30 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                                 <div className="lg:col-span-2 space-y-10">
                                     <div>
                                         <h4 className="text-sm font-black text-gray-400 uppercase tracking-widest mb-6 border-b border-gray-50 pb-2">Vitals & Lineage</h4>
-                                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-8">
-                                            <div><p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Current Weight</p><p className="text-xl font-black text-gray-800">{selectedAnimal.weight} kg</p></div>
-                                            <div><p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Age</p><p className="text-xl font-black text-gray-800">{getAgeDisplay(selectedAnimal.dob)}</p></div>
-                                            <div><p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Entry Price</p><p className="text-xl font-black text-slate-600">PKR {(selectedAnimal.purchasePrice || 0).toLocaleString()}</p></div>
-                                            <div><p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Location</p><p className="text-xl font-black text-gray-800">{selectedAnimal.location}</p></div>
-                                        </div>
-                                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-8 mt-6 pt-6 border-t border-slate-100">
-                                            <div><p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Acc. Feed Cost</p><p className="text-xl font-black text-amber-600">PKR {Math.round(selectedAnimal.accumulatedFeedCost || 0).toLocaleString()}</p></div>
-                                            <div><p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Acc. Medical Cost</p><p className="text-xl font-black text-sky-600">PKR {Math.round(selectedAnimal.accumulatedMedicalCost || 0).toLocaleString()}</p></div>
-                                            <div className="sm:col-span-2"><p className="text-[10px] font-bold text-emerald-600 uppercase mb-1 tracking-widest bg-emerald-50 w-fit px-2 rounded">Total COGS (Break-even)</p><p className="text-2xl font-black text-emerald-700">PKR {Math.round((selectedAnimal.purchasePrice || 0) + (selectedAnimal.accumulatedFeedCost || 0) + (selectedAnimal.accumulatedMedicalCost || 0)).toLocaleString()}</p></div>
-                                        </div>
+                                        {(() => {
+                                            const latestWeight = selectedAnimal.weightHistory?.length > 0 ? selectedAnimal.weightHistory[selectedAnimal.weightHistory.length - 1].weight : selectedAnimal.weight;
+                                            const displayWeight = latestWeight > 0 ? `${latestWeight} kg` : 'Not Recorded';
+                                            const displayPrice = selectedAnimal.purchasePrice && selectedAnimal.purchasePrice > 0 ? `PKR ${selectedAnimal.purchasePrice.toLocaleString()}` : 'Not Recorded';
+                                            const accMedCost = selectedAnimal.accumulatedMedicalCost || selectedAnimal.medicalHistory?.reduce((sum, m) => sum + (m.cost || 0), 0) || 0;
+                                            const accFeedCost = selectedAnimal.accumulatedFeedCost || 0;
+                                            const totalCogs = (selectedAnimal.purchasePrice || 0) + accFeedCost + accMedCost;
+
+                                            return (
+                                                <>
+                                                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-8">
+                                                        <div><p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Current Weight</p><p className={`text-xl font-black ${latestWeight > 0 ? 'text-gray-800' : 'text-gray-300'}`}>{displayWeight}</p></div>
+                                                        <div><p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Age</p><p className={`text-xl font-black ${selectedAnimal.dob ? 'text-gray-800' : 'text-gray-300'}`}>{getAgeDisplay(selectedAnimal.dob)}</p></div>
+                                                        <div><p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Entry Price</p><p className={`text-xl font-black ${selectedAnimal.purchasePrice && selectedAnimal.purchasePrice > 0 ? 'text-slate-600' : 'text-gray-300'}`}>{displayPrice}</p></div>
+                                                        <div><p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Location</p><p className={`text-xl font-black ${selectedAnimal.location ? 'text-gray-800' : 'text-gray-300'}`}>{selectedAnimal.location || 'Not Assigned'}</p></div>
+                                                    </div>
+                                                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-8 mt-6 pt-6 border-t border-slate-100">
+                                                        <div><p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Acc. Feed Cost</p><p className={`text-xl font-black ${accFeedCost > 0 ? 'text-amber-600' : 'text-gray-300'}`}>PKR {Math.round(accFeedCost).toLocaleString()}</p></div>
+                                                        <div><p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Acc. Medical Cost</p><p className={`text-xl font-black ${accMedCost > 0 ? 'text-sky-600' : 'text-gray-300'}`}>PKR {Math.round(accMedCost).toLocaleString()}</p></div>
+                                                        <div className="sm:col-span-2"><p className="text-[10px] font-bold text-emerald-600 uppercase mb-1 tracking-widest bg-emerald-50 w-fit px-2 rounded">Total COGS (Break-even)</p><p className={`text-2xl font-black ${totalCogs > 0 ? 'text-emerald-700' : 'text-gray-400'}`}>PKR {Math.round(totalCogs).toLocaleString()}</p></div>
+                                                    </div>
+                                                </>
+                                            );
+                                        })()}
                                     </div>
                                     <div className="bg-gray-50 rounded-3xl p-8 border border-gray-100">
                                         <h5 className="font-black text-gray-800 mb-6 flex items-center gap-2"><ScrollText size={18} className="text-emerald-600" /> Pedigree Tree</h5>
