@@ -640,10 +640,16 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                             </select>
                                         </div>
                                     </div>
-                                    {['BAG', 'BUNDLE'].includes(newItemForm.unit || '') && (
+                                    {newItemForm.unit === 'BAG' && (
                                         <div className="animate-fade-in-up">
-                                            <label className="block text-[11px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Standard Weight per {newItemForm.unit} (kg)</label>
-                                            <input type="number" min={0} step={0.1} value={newItemForm.weightPerUnit || ''} onChange={e => setNewItemForm({ ...newItemForm, weightPerUnit: parseFloat(e.target.value) || 0 })} className="w-full border border-emerald-200 focus:border-emerald-500 text-sm font-bold text-slate-700 rounded-xl px-4 py-3 outline-none bg-emerald-50/50 focus:bg-white transition-colors" placeholder="e.g. 40" />
+                                            <label className="block text-[11px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Standard Weight per BAG (kg) <span className="text-red-500">*</span></label>
+                                            <input type="number" min={0} step={0.1} value={newItemForm.weightPerUnit ?? ''} onChange={e => setNewItemForm({ ...newItemForm, weightPerUnit: parseFloat(e.target.value) || 0 })} className="w-full border border-emerald-200 focus:border-emerald-500 text-sm font-bold text-slate-700 rounded-xl px-4 py-3 outline-none bg-emerald-50/50 focus:bg-white transition-colors" placeholder="e.g. 40" />
+                                        </div>
+                                    )}
+                                    {newItemForm.unit === 'BUNDLE' && (
+                                        <div className="animate-fade-in-up">
+                                            <label className="block text-[11px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Standard Weight per BUNDLE (kg) <span className="text-red-500">*</span></label>
+                                            <input type="number" min={0} step={0.1} value={newItemForm.weightPerUnit ?? ''} onChange={e => setNewItemForm({ ...newItemForm, weightPerUnit: parseFloat(e.target.value) || 0 })} className="w-full border border-emerald-200 focus:border-emerald-500 text-sm font-bold text-slate-700 rounded-xl px-4 py-3 outline-none bg-emerald-50/50 focus:bg-white transition-colors" placeholder="e.g. 25" />
                                         </div>
                                     )}
                                 </div>

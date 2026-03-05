@@ -166,7 +166,7 @@ const App: React.FC = () => {
         if (companyName?.trim()) {
           await backendService.ensureTenantSetup(companyName).catch(() => { });
         }
-        const [locations, farms, apiLivestock, expenses, apiSales, feed, infra, dietPlans, entities, ledger, consumptionLogs, treatmentProtocols, treatmentLogs] = await Promise.all([
+        const [locations, farms, apiLivestock, expenses, apiSales, feed, infra, dietPlans, entities, ledger, consumptionLogs, processedFeedLedgers, treatmentProtocols, treatmentLogs] = await Promise.all([
           backendService.getLocations().catch(() => []),
           backendService.getFarms().catch(() => []),
           backendService.getLivestock(),
@@ -178,6 +178,7 @@ const App: React.FC = () => {
           backendService.getEntities(),
           backendService.getLedger(),
           backendService.getConsumptionLogs(),
+          backendService.getFeedLedgers().catch(() => []),
           backendService.getTreatmentProtocols(),
           backendService.getTreatmentLogs()
         ]);
@@ -222,6 +223,7 @@ const App: React.FC = () => {
             entities,
             ledger,
             consumptionLogs,
+            processedFeedLedgers: processedFeedLedgers ?? [],
             treatmentProtocols,
             treatmentLogs
           };
@@ -489,7 +491,10 @@ const App: React.FC = () => {
 
       if (!anyProcessed) return alert("No valid consumption to process today (No animals matched or no eligible active plans found).");
 
-      // 3. Commit: consumption logs first, then only modified feed, then expense, then animals
+      // 3. Commit: create ledgers on backend first, then logs, feed, livestock, expense, diet plan lastProcessedDate
+      for (const ledger of newLedgers) {
+        await backendService.createFeedLedger(ledger);
+      }
       await backendService.logConsumption(newLogs);
       for (const id of modifiedFeedIds) {
         const inv = invUpdates.get(id);
@@ -498,24 +503,48 @@ const App: React.FC = () => {
       for (const [id, animal] of Array.from(livestockUpdates.entries())) {
         await backendService.updateLivestock(id, animal);
       }
-      const expense: Expense = {
-        id: `exp-feed-${Date.now()}`,
-        farmId: state.currentFarmId || activePlans[0].farmId,
-        category: ExpenseCategory.FEED,
-        amount: totalGlobalCost,
-        date: today,
-        description: `Daily Auto-Feed Consumption (${newLogs.length} items)`,
-        supplier: 'Internal Inventory'
-      };
-      await backendService.createExpense(expense);
+      // One expense per ledger so REVERSE can remove the matching expense from Expense log
+      for (const ledger of newLedgers) {
+        const expense: Expense = {
+          id: `exp-feed-${ledger.id}-${Date.now()}`,
+          farmId: ledger.farmId,
+          category: ExpenseCategory.FEED,
+          amount: ledger.totalCost,
+          date: today,
+          description: `Daily feed: ${state.dietPlans.find(p => p.id === ledger.dietPlanId)?.name ?? ledger.dietPlanId} (${ledger.totalAnimalsFed} heads)`,
+          supplier: 'Internal Inventory',
+          isSystemGenerated: true,
+          referenceType: 'CONSUMPTION',
+          processedFeedLedgerId: ledger.id
+        };
+        await backendService.createExpense(expense);
+      }
 
+      // Update lastProcessedDate for each processed plan so we don't double-charge same day
+      const processedPlanIds = new Set(newLedgers.map(l => l.dietPlanId));
+      for (const plan of activePlans) {
+        if (processedPlanIds.has(plan.id)) {
+          await backendService.updateDietPlan(plan.id, { ...plan, lastProcessedDate: today });
+        }
+      }
+
+      // Refetch from backend so UI (and refresh) stays in sync with persisted data
+      const [refetchedFeed, refetchedLogs, refetchedLedgers, refetchedLivestock, refetchedPlans, refetchedExpenses] = await Promise.all([
+        backendService.getFeed(),
+        backendService.getConsumptionLogs(),
+        backendService.getFeedLedgers(),
+        backendService.getLivestock(),
+        backendService.getDietPlans(),
+        backendService.getExpenses()
+      ]);
       setState(prev => ({
         ...prev,
-        feed: Array.from(invUpdates.values()),
-        livestock: prev.livestock.map(l => livestockUpdates.get(l.id) || l),
-        expenses: [...prev.expenses, expense],
-        consumptionLogs: [...(prev.consumptionLogs || []), ...newLogs],
-        processedFeedLedgers: [...(prev.processedFeedLedgers || []), ...newLedgers]
+        feed: refetchedFeed,
+        consumptionLogs: refetchedLogs,
+        processedFeedLedgers: refetchedLedgers,
+        livestock: refetchedLivestock,
+        dietPlans: refetchedPlans,
+        expenses: refetchedExpenses
       }));
 
       alert(`Processed daily feed for ${activePlans.length} plan(s). Total cost: ${totalGlobalCost.toLocaleString()}`);
@@ -532,68 +561,27 @@ const App: React.FC = () => {
       if (!ledger) return alert("Ledger not found.");
       if (ledger.status === 'REVERSED') return alert("Already reversed.");
 
-      const logs = state.consumptionLogs?.filter(l => l.processedLedgerId === ledgerId) || [];
-      if (logs.length === 0) return alert("No consumption logs found for this ledger.");
+      // Backend restores feed stock, reduces animal COGS, marks ledger REVERSED, and removes linked expense
+      await backendService.reverseFeedLedger(ledgerId);
 
-      // 1. Recover Inventory
-      const invUpdates = new Map<string, FeedInventory>();
-      state.feed.forEach(f => invUpdates.set(f.id, { ...f }));
-      const modifiedFeedIds = new Set<string>();
-
-      for (const log of logs) {
-        const invItem = invUpdates.get(log.itemId);
-        if (invItem) {
-          invItem.quantity += Number(log.quantityUsed || 0);
-          invUpdates.set(invItem.id, invItem);
-          modifiedFeedIds.add(invItem.id);
-        }
-      }
-
-      // 2. Reduce Accumulated Cost from Animals
-      const logCostPerAnimal = ledger.totalCost / (ledger.totalAnimalsFed || 1);
-      const plan = state.dietPlans.find(p => p.id === ledger.dietPlanId);
-      const livestockUpdates = new Map<string, Livestock>();
-      const modifiedLivestockIds = new Set<string>();
-
-      if (plan) {
-        let animalsToReverse: Livestock[] = [];
-        if (plan.targetType === 'CATEGORY') {
-          animalsToReverse = state.livestock.filter(l => l.farmId === plan.farmId && l.status === 'ACTIVE' && l.category === plan.targetName);
-        } else if (plan.targetType === 'INDIVIDUAL') {
-          const ids = plan.targetIds || (plan.targetId ? [plan.targetId] : []);
-          animalsToReverse = state.livestock.filter(l => ids.includes(l.id) && l.status === 'ACTIVE');
-        } else if (plan.targetType === 'ALL' || !plan.targetType) {
-          animalsToReverse = state.livestock.filter(l => l.farmId === plan.farmId && l.status === 'ACTIVE');
-        }
-
-        for (const animal of animalsToReverse) {
-          const currentAnimal = livestockUpdates.get(animal.id) || { ...animal };
-          currentAnimal.accumulatedFeedCost = Math.max(0, (currentAnimal.accumulatedFeedCost || 0) - logCostPerAnimal);
-          livestockUpdates.set(animal.id, currentAnimal);
-          modifiedLivestockIds.add(animal.id);
-        }
-      }
-
-      // 3. Commit updates locally to backend (since backend lacks explicit batch reverse API yet)
-      for (const id of modifiedFeedIds) {
-        const inv = invUpdates.get(id);
-        if (inv) await backendService.updateFeed(id, inv);
-      }
-      for (const id of modifiedLivestockIds) {
-        const animal = livestockUpdates.get(id);
-        if (animal) await backendService.updateLivestock(id, animal);
-      }
-
+      // Refetch so UI shows updated stock, REVERSED status, and expense list without the reversed one
+      const [refetchedFeed, refetchedLedgers, refetchedLivestock, refetchedExpenses] = await Promise.all([
+        backendService.getFeed(),
+        backendService.getFeedLedgers(),
+        backendService.getLivestock(),
+        backendService.getExpenses()
+      ]);
       setState(prev => ({
         ...prev,
-        feed: prev.feed.map(f => modifiedFeedIds.has(f.id) ? invUpdates.get(f.id)! : f),
-        livestock: prev.livestock.map(l => modifiedLivestockIds.has(l.id) ? livestockUpdates.get(l.id)! : l),
-        processedFeedLedgers: (prev.processedFeedLedgers || []).map(l => l.id === ledgerId ? { ...l, status: 'REVERSED' } : l)
+        feed: refetchedFeed,
+        processedFeedLedgers: refetchedLedgers,
+        livestock: refetchedLivestock,
+        expenses: refetchedExpenses
       }));
 
-      alert(`Transaction ${ledgerId} highly reversed. Feed inventory and animal costs accurately restored. Note: Daily unified feed expense was NOT altered; adjust manually if required.`);
+      alert(`Transaction reversed. Feed stock and animal costs restored. Note: Daily feed expense was NOT altered; adjust manually if required.`);
     } catch (e: any) {
-      alert(`Reversal failed: ${e.message}`);
+      alert(`Reversal failed: ${e?.message ?? e}`);
     }
   };
 
