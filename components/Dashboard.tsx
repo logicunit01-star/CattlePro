@@ -17,6 +17,20 @@ const COLORS = ['#059669', '#10B981', '#34D399', '#6EE7B7', '#A7F3D0', '#D1FAE5'
 
 export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) => {
 
+  const [dateFilter, setDateFilter] = React.useState<'7_DAYS' | '30_DAYS' | '90_DAYS' | 'ALL'>('30_DAYS');
+
+  const isDateInRange = (dateStr: string) => {
+    if (!dateStr || dateFilter === 'ALL') return true;
+    const days = (new Date().getTime() - new Date(dateStr).getTime()) / (1000 * 60 * 60 * 24);
+    if (dateFilter === '7_DAYS') return days <= 7;
+    if (dateFilter === '30_DAYS') return days <= 30;
+    if (dateFilter === '90_DAYS') return days <= 90;
+    return true;
+  };
+
+  const filteredExpenses = state.expenses.filter(e => isDateInRange(e.date));
+  const filteredSales = state.sales.filter(s => isDateInRange(s.date));
+
   // --- KPIs ---
   const activeAnimals = state.livestock.filter(l => l.status === 'ACTIVE');
   const totalLivestock = activeAnimals.length;
@@ -24,11 +38,11 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
   const goatCount = activeAnimals.filter(l => l.species === 'GOAT').length;
   const farmCount = isGlobalView ? new Set(state.livestock.map(l => l.farmId).filter(Boolean)).size : 1;
 
-  const totalExpenses = state.expenses.reduce((acc, curr) => acc + curr.amount, 0);
-  const operatingExpenses = state.expenses.filter(e => e.category !== 'INFRASTRUCTURE');
+  const totalExpenses = filteredExpenses.reduce((acc, curr) => acc + curr.amount, 0);
+  const operatingExpenses = filteredExpenses.filter(e => e.category !== 'INFRASTRUCTURE');
   const totalOperatingExpenses = operatingExpenses.reduce((acc, curr) => acc + curr.amount, 0);
-  const totalRevenue = state.sales.reduce((acc, curr) => acc + curr.amount, 0);
-  const netProfit = totalRevenue - totalExpenses; // Still reflecting absolute cash flow
+  const totalRevenue = filteredSales.reduce((acc, curr) => acc + curr.amount, 0);
+  const netProfit = totalRevenue - totalExpenses;
 
   // --- DAIRY METRICS ---
   const todayStr = new Date().toISOString().split('T')[0];
@@ -67,8 +81,7 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
   }).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()).slice(0, 5);
 
   // --- FINANCIAL TREND (Mini) ---
-  // Simple approximation for the chart
-  const expenseByCategory = state.expenses.reduce((acc, curr) => {
+  const expenseByCategory = filteredExpenses.reduce((acc, curr) => {
     acc[curr.category] = (acc[curr.category] || 0) + curr.amount;
     return acc;
   }, {} as Record<string, number>);
@@ -83,7 +96,7 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
   const currentMonth = currentMonthDate.getMonth();
   const currentYear = currentMonthDate.getFullYear();
 
-  const currentMonthFeedExpense = state.expenses
+  const currentMonthFeedExpense = filteredExpenses
     .filter(e => e.category === 'FEED' && new Date(e.date).getMonth() === currentMonth && new Date(e.date).getFullYear() === currentYear)
     .reduce((sum, e) => sum + e.amount, 0);
 
@@ -105,11 +118,17 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
             {isGlobalView ? 'Totals across all farms — total cattle, goats, revenue, expenses, and more.' : "Welcome back, here's what's happening on the farm today."}
           </p>
         </div>
-        <div className="text-right hidden md:block">
+        <div className="text-right hidden md:flex items-center gap-4">
           {isGlobalView && (
-            <span className="inline-block px-3 py-1.5 rounded-lg bg-slate-200 text-slate-700 text-xs font-bold uppercase tracking-wider mr-2">All Farms (Global)</span>
+            <span className="inline-block px-3 py-1.5 rounded-lg bg-slate-200 text-slate-700 text-xs font-bold uppercase tracking-wider">All Farms (Global)</span>
           )}
-          <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">{new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
+          <select value={dateFilter} onChange={e => setDateFilter(e.target.value as any)} className="bg-white border text-sm font-bold text-slate-600 border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-500 shadow-sm cursor-pointer">
+            <option value="7_DAYS">Last 7 Days</option>
+            <option value="30_DAYS">Last 30 Days</option>
+            <option value="90_DAYS">Last 90 Days</option>
+            <option value="ALL">All Time</option>
+          </select>
+          <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">{new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}</p>
         </div>
       </div>
 
@@ -257,6 +276,68 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
                   ))}
                 </div>
               </div>
+            </div>
+          </div>
+
+          {/* HERD GROWTH TREND (NEW) */}
+          <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 premium-card">
+            <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2 font-display"><TrendingUp size={20} className="text-emerald-500" /> Herd Growth Dynamics</h3>
+            <div className="h-64">
+              <ResponsiveContainer width="100%" height="100%">
+                {(() => {
+                  const data = state.livestock.filter(l => isDateInRange(l.purchaseDate || l.dob || '')).reduce((acc, l) => {
+                    const d = (l.purchaseDate || l.dob || '').slice(0, 7) || 'Unknown'; // YYYY-MM
+                    if (d === 'Unknown') return acc;
+                    const existing = acc.find(x => x.month === d);
+                    if (existing) existing[l.species === 'CATTLE' ? 'cattle' : 'goats'] += 1;
+                    else acc.push({ month: d, cattle: l.species === 'CATTLE' ? 1 : 0, goats: l.species === 'GOAT' ? 1 : 0 });
+                    return acc;
+                  }, [] as any[]).sort((a, b) => a.month.localeCompare(b.month));
+
+                  return (
+                    <AreaChart data={data}>
+                      <defs>
+                        <linearGradient id="colorCattleTrend" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#3b82f6" stopOpacity={0.1} /><stop offset="95%" stopColor="#3b82f6" stopOpacity={0} /></linearGradient>
+                        <linearGradient id="colorGoatTrend" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#f59e0b" stopOpacity={0.1} /><stop offset="95%" stopColor="#f59e0b" stopOpacity={0} /></linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                      <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#94a3b8', fontWeight: 'bold' }} />
+                      <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#94a3b8', fontWeight: 'bold' }} />
+                      <Tooltip contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} />
+                      <Area type="monotone" dataKey="cattle" name="Cattle Added" stroke="#3b82f6" fillOpacity={1} fill="url(#colorCattleTrend)" strokeWidth={3} />
+                      <Area type="monotone" dataKey="goats" name="Goats Added" stroke="#f59e0b" fillOpacity={1} fill="url(#colorGoatTrend)" strokeWidth={3} />
+                    </AreaChart>
+                  );
+                })()}
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* HEALTH INCIDENT HEATMAP (MOCK) */}
+          <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 premium-card">
+            <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2 font-display"><Activity size={20} className="text-red-500" /> Health Incident Activity</h3>
+            <div className="h-48">
+              <ResponsiveContainer width="100%" height="100%">
+                {(() => {
+                  const heatData = state.livestock.flatMap(l => l.medicalHistory).filter(m => m.type === 'TREATMENT' && isDateInRange(m.date)).reduce((acc, m) => {
+                    const d = m.date.slice(5); // MM-DD
+                    const existing = acc.find(x => x.date === d);
+                    if (existing) existing.count += 1;
+                    else acc.push({ date: d, count: 1 });
+                    return acc;
+                  }, [] as any[]).sort((a, b) => a.date.localeCompare(b.date));
+
+                  return (
+                    <BarChart data={heatData}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                      <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#94a3b8', fontWeight: 'bold' }} />
+                      <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#94a3b8', fontWeight: 'bold' }} allowDecimals={false} />
+                      <Tooltip cursor={{ fill: '#fef2f2' }} contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} />
+                      <Bar dataKey="count" name="Sick Consultations" fill="#ef4444" radius={[4, 4, 0, 0]} barSize={24} />
+                    </BarChart>
+                  );
+                })()}
+              </ResponsiveContainer>
             </div>
           </div>
 

@@ -584,14 +584,31 @@ const App: React.FC = () => {
         if (animal) await backendService.updateLivestock(id, animal);
       }
 
+      // Reversal Accounting (Task 3 Fix)
+      // Find the feed expense for exactly this date that matches our unified feed expense
+      const feedExpense = state.expenses.find(e => e.date === ledger.date && e.category === 'FEED' && e.description.includes('Daily Auto-Feed Consumption'));
+      let updatedExpenses = state.expenses;
+      if (feedExpense) {
+        const remainingAmount = feedExpense.amount - ledger.totalCost;
+        if (remainingAmount <= 0) {
+          await backendService.deleteExpense(feedExpense.id);
+          updatedExpenses = state.expenses.filter(e => e.id !== feedExpense.id);
+        } else {
+          const updatedExpense = { ...feedExpense, amount: remainingAmount };
+          await backendService.updateExpense(updatedExpense.id, updatedExpense);
+          updatedExpenses = state.expenses.map(e => e.id === feedExpense.id ? updatedExpense : e);
+        }
+      }
+
       setState(prev => ({
         ...prev,
         feed: prev.feed.map(f => modifiedFeedIds.has(f.id) ? invUpdates.get(f.id)! : f),
         livestock: prev.livestock.map(l => modifiedLivestockIds.has(l.id) ? livestockUpdates.get(l.id)! : l),
-        processedFeedLedgers: (prev.processedFeedLedgers || []).map(l => l.id === ledgerId ? { ...l, status: 'REVERSED' } : l)
+        processedFeedLedgers: (prev.processedFeedLedgers || []).map(l => l.id === ledgerId ? { ...l, status: 'REVERSED' } : l),
+        expenses: updatedExpenses
       }));
 
-      alert(`Transaction ${ledgerId} highly reversed. Feed inventory and animal costs accurately restored. Note: Daily unified feed expense was NOT altered; adjust manually if required.`);
+      alert(`Transaction ${ledgerId} completely reversed. Feed inventory, animal costs, and global feed expenses successfully restored.`);
     } catch (e: any) {
       alert(`Reversal failed: ${e.message}`);
     }
@@ -798,11 +815,16 @@ const App: React.FC = () => {
     } catch (e) { alert("Failed to add milk record"); }
   };
 
-  const deleteLivestock = async (id: string) => {
+  const deleteLivestock = async (id: string, force = false) => {
     try {
-      await backendService.deleteLivestock(id);
-      setState(prev => ({ ...prev, livestock: prev.livestock.filter(l => l.id !== id) }));
-    } catch (e) { alert("Failed to delete animal."); }
+      // Call backend which may soft-delete (ARCHIVED) or hard-delete depending on financial history
+      await backendService.deleteLivestock(id, force);
+      // Re-fetch to reflect server truth (archived vs removed)
+      const updatedLivestock = await backendService.getLivestock();
+      setState(prev => ({ ...prev, livestock: updatedLivestock }));
+    } catch (e: any) {
+      alert(e?.message || "Failed to delete animal.");
+    }
   };
 
   const handleCreateExpense = async (exp: Expense) => {

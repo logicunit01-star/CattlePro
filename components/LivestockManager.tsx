@@ -3,7 +3,7 @@ import React, { useState } from 'react';
 import { Livestock, LivestockSpecies, LivestockStatus, MedicalRecord, MedicalRecordType, InseminationRecord, WeightRecord, ServiceDetails, MilkRecord, Breeder, BirthRecord, FeedInventory, Sale, Entity, Infrastructure } from '../types';
 import { COMMON_VACCINES, FEED_PLANS } from '../constants';
 import { uploadImage } from '../services/uploadService';
-import { Search, Plus, Tag, Scale, Settings, ArrowLeft, Save, Calendar, MapPin, Eye, Stethoscope, Dna, User, Phone, ScrollText, LineChart, Image as ImageIcon, Upload, Edit2, Milk, Droplets, Beef, Sprout, FileText, CheckCircle2, Baby, Info, Trash2, Clock, ChevronRight, DollarSign, Skull } from 'lucide-react';
+import { Search, Plus, Tag, Scale, Settings, ArrowLeft, Save, Calendar, MapPin, Eye, Stethoscope, Dna, User, Phone, ScrollText, LineChart, Image as ImageIcon, Upload, Edit2, Milk, Droplets, Beef, Sprout, FileText, CheckCircle2, Baby, Info, Trash2, Clock, ChevronRight, DollarSign, Skull, LayoutGrid, List, ArrowUpDown } from 'lucide-react';
 import { LineChart as RechartsLine, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
 
 interface Props {
@@ -61,6 +61,8 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
     const [currentView, setCurrentView] = useState<ViewMode>('LIST');
     const [activeCategoryTab, setActiveCategoryTab] = useState<string>(categories[0]);
     const [searchTerm, setSearchTerm] = useState('');
+    const [viewLayout, setViewLayout] = useState<'GRID' | 'TABLE'>('TABLE');
+    const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' }>({ key: 'tagId', direction: 'asc' });
 
     const [selectedAnimalId, setSelectedAnimalId] = useState<string | null>(null);
 
@@ -114,8 +116,20 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
     type CalfEntry = { gender: 'MALE' | 'FEMALE'; weight: number; ageMonths: number; name: string };
     const [calfList, setCalfList] = useState<CalfEntry[]>([{ gender: 'FEMALE', weight: 15, ageMonths: 1, name: '' }]);
 
+    // --- Form Validation ---
+    const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+    const validateAnimalForm = (): boolean => {
+        const errors: Record<string, string> = {};
+        if (!animalForm.tagId?.trim()) errors.tagId = 'Tag ID is required.';
+        if (!animalForm.breed?.trim()) errors.breed = 'Breed is required.';
+        if (!animalForm.dob?.trim()) errors.dob = 'Date of Birth is required.';
+        setFormErrors(errors);
+        return Object.keys(errors).length === 0;
+    };
+
     const handleOpenAdd = () => {
         setImageUploadError(null);
+        setFormErrors({});
         const nextTagId = generateNextTagId();
         setAnimalForm({
             tagId: nextTagId, category: categories[0], breed: '', gender: 'MALE', weight: 0, dob: '', purchaseDate: '', purchasePrice: 0, status: 'ACTIVE', location: '', notes: '', imageUrl: '', medicalHistory: [], breedingHistory: [], weightHistory: [], milkProductionHistory: [],
@@ -135,6 +149,59 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
             (c.tagId.toLowerCase().includes(searchTerm.toLowerCase()) ||
                 c.breed.toLowerCase().includes(searchTerm.toLowerCase()))
     );
+
+    const sortedLivestock = React.useMemo(() => {
+        let sortableItems = [...filteredLivestock];
+        sortableItems.sort((a, b) => {
+            let aVal: any = a[sortConfig.key as keyof Livestock];
+            let bVal: any = b[sortConfig.key as keyof Livestock];
+
+            if (sortConfig.key === 'age') {
+                aVal = a.dob ? new Date(a.dob).getTime() : 0;
+                bVal = b.dob ? new Date(b.dob).getTime() : 0;
+                // Reverse because older = smaller timestamp
+                if (aVal < bVal) return sortConfig.direction === 'asc' ? 1 : -1;
+                if (aVal > bVal) return sortConfig.direction === 'asc' ? -1 : 1;
+                return 0;
+            }
+
+            if (sortConfig.key === 'cost') {
+                const aCost = (a.purchasePrice || 0) + (a.accumulatedFeedCost || 0) + (a.accumulatedMedicalCost || 0);
+                const bCost = (b.purchasePrice || 0) + (b.accumulatedFeedCost || 0) + (b.accumulatedMedicalCost || 0);
+                aVal = aCost;
+                bVal = bCost;
+            }
+
+            if (aVal < bVal) return sortConfig.direction === 'asc' ? -1 : 1;
+            if (aVal > bVal) return sortConfig.direction === 'asc' ? 1 : -1;
+            return 0;
+        });
+        return sortableItems;
+    }, [filteredLivestock, sortConfig]);
+
+    const handleSort = (key: string) => {
+        let direction: 'asc' | 'desc' = 'asc';
+        if (sortConfig.key === key && sortConfig.direction === 'asc') direction = 'desc';
+        setSortConfig({ key, direction });
+    };
+
+    const getBadges = (animal: Livestock) => {
+        const badges = [];
+        const upcomingVax = animal.medicalHistory?.find(m => m.type === 'VACCINATION' && m.nextDueDate && new Date(m.nextDueDate) >= new Date());
+        if (upcomingVax) {
+            badges.push({ text: `💉 Next Vax: ${new Date(upcomingVax.nextDueDate).toLocaleDateString()}`, color: 'bg-sky-100 text-sky-700 border-sky-200' });
+        }
+        const activePregnancy = animal.breedingHistory?.find(b => ['CONFIRMED', 'PENDING'].includes(b.status));
+        if (activePregnancy && animal.gender === 'FEMALE') {
+            if (activePregnancy.status === 'CONFIRMED' && activePregnancy.conceiveDate) {
+                const months = Math.floor((new Date().getTime() - new Date(activePregnancy.conceiveDate).getTime()) / (1000 * 60 * 60 * 24 * 30));
+                badges.push({ text: `🍼 Pregnant: ${months} mo`, color: 'bg-pink-100 text-pink-700 border-pink-200' });
+            } else {
+                badges.push({ text: `🍼 Pregnant (Pending)`, color: 'bg-amber-100 text-amber-700 border-amber-200' });
+            }
+        }
+        return badges;
+    };
 
     const getStatusColor = (status: LivestockStatus) => {
         switch (status) {
@@ -500,8 +567,9 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                             </div>
                             <div className="grid grid-cols-2 gap-6">
                                 <div>
-                                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Breed</label>
-                                    <input type="text" value={animalForm.breed} onChange={e => setAnimalForm({ ...animalForm, breed: e.target.value })} className="w-full border-b-2 border-gray-100 focus:border-emerald-500 py-2 outline-none" placeholder={T.breedPlaceholder} />
+                                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Breed *</label>
+                                    <input type="text" value={animalForm.breed} onChange={e => { setAnimalForm({ ...animalForm, breed: e.target.value }); setFormErrors(p => ({ ...p, breed: '' })); }} className={`w-full border-b-2 py-2 outline-none ${formErrors.breed ? 'border-red-400' : 'border-gray-100 focus:border-emerald-500'}`} placeholder={T.breedPlaceholder} />
+                                    {formErrors.breed && <p className="text-xs text-red-500 mt-1 font-semibold">{formErrors.breed}</p>}
                                 </div>
                                 <div>
                                     <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Gender</label>
@@ -531,8 +599,10 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                             </div>
                             <div className="grid grid-cols-2 gap-6">
                                 <div>
-                                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">DOB</label>
-                                    <input type="date" value={animalForm.dob} onChange={e => setAnimalForm({ ...animalForm, dob: e.target.value })} className="w-full border-b-2 border-gray-100 focus:border-emerald-500 py-2 outline-none" />
+                                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">DOB *</label>
+                                    <input type="date" value={animalForm.dob} onChange={e => { setAnimalForm({ ...animalForm, dob: e.target.value }); setFormErrors(p => ({ ...p, dob: '' })); }} className={`w-full border-b-2 py-2 outline-none ${formErrors.dob ? 'border-red-400' : 'border-gray-100 focus:border-emerald-500'}`} />
+                                    {animalForm.dob && <p className="text-xs text-emerald-600 mt-1 font-semibold">Age: {getAgeDisplay(animalForm.dob)}</p>}
+                                    {formErrors.dob && <p className="text-xs text-red-500 mt-1 font-semibold">{formErrors.dob}</p>}
                                 </div>
                                 <div>
                                     <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Purchase Date</label>
@@ -663,7 +733,7 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                     <div className="mt-12 flex justify-end gap-6">
                         <button onClick={() => setCurrentView('LIST')} className="font-bold text-gray-400 hover:text-gray-600">CANCEL</button>
                         <button onClick={async () => {
-                            if (!animalForm.tagId) return alert("Tag ID Required");
+                            if (!validateAnimalForm()) return;
 
                             const motherId = isEditing ? selectedAnimal!.id : Math.random().toString(36).substr(2, 9);
                             const finalMother = { ...animalForm, id: motherId, species } as Livestock;
@@ -1031,20 +1101,64 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                             </div>
 
                             <div className="grid grid-cols-1 lg:grid-cols-3 gap-10">
-                                <div className="lg:col-span-2 bg-white border border-gray-100 rounded-3xl p-8 shadow-sm">
-                                    <div className="h-80">
-                                        <ResponsiveContainer width="100%" height="100%">
-                                            <AreaChart data={weightData}>
-                                                <defs><linearGradient id="colorWeight" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#10b981" stopOpacity={0.1} /><stop offset="95%" stopColor="#10b981" stopOpacity={0} /></linearGradient></defs>
-                                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f1f1" />
-                                                <XAxis dataKey="date" hide />
-                                                <YAxis orientation="right" />
-                                                <Tooltip />
-                                                <Area type="monotone" dataKey="weight" stroke="#10b981" fillOpacity={1} fill="url(#colorWeight)" strokeWidth={4} />
-                                            </AreaChart>
-                                        </ResponsiveContainer>
+                                <div className="lg:col-span-2 space-y-6">
+                                    <div className="bg-white border border-gray-100 rounded-3xl p-8 shadow-sm">
+                                        <div className="flex justify-between items-center mb-6">
+                                            <h4 className="font-black text-slate-400 text-[10px] uppercase tracking-widest">Growth Curve Analysis</h4>
+                                            <div className="flex gap-4 text-[10px] font-bold uppercase tracking-widest">
+                                                <span className="flex items-center gap-1.5 text-emerald-600"><span className="w-2 h-2 rounded-full bg-emerald-500"></span> Actual</span>
+                                                <span className="flex items-center gap-1.5 text-slate-400"><span className="w-2 h-2 rounded-full bg-slate-300"></span> Projected</span>
+                                            </div>
+                                        </div>
+                                        <div className="h-72">
+                                            <ResponsiveContainer width="100%" height="100%">
+                                                {(() => {
+                                                    const growthChartData = [...selectedAnimal.weightHistory].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()).map(rec => {
+                                                        const months = selectedAnimal.dob ? (new Date(rec.date).getTime() - new Date(selectedAnimal.dob).getTime()) / (1000 * 60 * 60 * 24 * 30.44) : 0;
+                                                        const initialWt = species === 'CATTLE' ? 35 : 4;
+                                                        const monthlyGain = species === 'CATTLE' ? 20 : 3.5;
+                                                        return { date: rec.date, actual: rec.weight, projected: Math.round(initialWt + Math.max(0, months * monthlyGain)) };
+                                                    });
+
+                                                    return (
+                                                        <AreaChart data={growthChartData}>
+                                                            <defs>
+                                                                <linearGradient id="colorActual" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#10b981" stopOpacity={0.2} /><stop offset="95%" stopColor="#10b981" stopOpacity={0} /></linearGradient>
+                                                                <linearGradient id="colorProj" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#94a3b8" stopOpacity={0.1} /><stop offset="95%" stopColor="#94a3b8" stopOpacity={0} /></linearGradient>
+                                                            </defs>
+                                                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f1f1" />
+                                                            <XAxis dataKey="date" hide />
+                                                            <YAxis orientation="right" tick={{ fontSize: 10, fill: '#94a3b8', fontWeight: 800 }} tickLine={false} axisLine={false} />
+                                                            <Tooltip contentStyle={{ borderRadius: '16px', borderColor: '#f1f1f1', fontWeight: 'bold', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)' }} />
+                                                            <Area type="monotone" name="Actual Weight" dataKey="actual" stroke="#10b981" fillOpacity={1} fill="url(#colorActual)" strokeWidth={4} activeDot={{ r: 6, strokeWidth: 0, fill: '#10b981' }} />
+                                                            <Area type="monotone" name="Proj. Biological" dataKey="projected" stroke="#94a3b8" strokeDasharray="5 5" fillOpacity={1} fill="url(#colorProj)" strokeWidth={2} />
+                                                        </AreaChart>
+                                                    );
+                                                })()}
+                                            </ResponsiveContainer>
+                                        </div>
+                                    </div>
+
+                                    <div className="bg-slate-50 border border-slate-100 rounded-3xl p-6">
+                                        <h4 className="font-black text-slate-400 text-[10px] uppercase mb-4 tracking-widest flex items-center gap-2"><Sprout size={14} /> CURRENT ASSIGNED DIET PLAN</h4>
+                                        <div className="flex items-center gap-4 bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
+                                            <div className="w-12 h-12 rounded-xl bg-amber-100 text-amber-600 flex items-center justify-center shrink-0">
+                                                <Sprout size={24} />
+                                            </div>
+                                            <div>
+                                                <h5 className="font-black text-slate-800 text-lg">{selectedAnimal.serviceDetails?.feedPlan || 'BASIC NUTRITION'}</h5>
+                                                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mt-1">Maintenance Ration & Minerals</p>
+                                            </div>
+                                            <div className="ml-auto flex items-center gap-6">
+                                                <div className="text-right">
+                                                    <p className="text-[10px] uppercase font-black text-slate-400 tracking-widest">Est. Daily Intake</p>
+                                                    <p className="text-sm font-black text-slate-800">{species === 'CATTLE' ? '12.5 KG' : '2.5 KG'}</p>
+                                                </div>
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
+
                                 <div className="space-y-4">
                                     {isAddingWeight && (
                                         <div className="bg-emerald-50 border border-emerald-100 rounded-3xl p-6 animate-slide-up">
@@ -1055,15 +1169,16 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                                             </div>
                                         </div>
                                     )}
-                                    <div className="bg-gray-50 rounded-3xl p-6 border border-gray-100 max-h-96 overflow-y-auto custom-scrollbar">
+                                    <div className="bg-gray-50 rounded-3xl p-6 border border-gray-100 max-h-[500px] overflow-y-auto custom-scrollbar">
                                         <h5 className="font-black text-gray-400 text-[10px] uppercase mb-4 tracking-widest">Weight Log History</h5>
                                         <div className="space-y-4">
                                             {selectedAnimal.weightHistory.slice().reverse().map(rec => (
-                                                <div key={rec.id} className="flex justify-between items-center border-b border-gray-200 pb-3">
-                                                    <div><p className="text-xs font-black text-gray-800">{rec.date}</p><p className="text-[10px] text-gray-400">{rec.notes || 'Routine weigh'}</p></div>
+                                                <div key={rec.id} className="flex justify-between items-center bg-white p-3 rounded-xl border border-gray-100 shadow-sm">
+                                                    <div><p className="text-xs font-black text-gray-800">{rec.date}</p><p className="text-[10px] text-gray-400 font-bold uppercase">{rec.notes || 'Routine Check'}</p></div>
                                                     <div className="text-right"><p className="text-lg font-black text-emerald-600">{rec.weight} <span className="text-[10px] text-gray-400">kg</span></p></div>
                                                 </div>
                                             ))}
+                                            {selectedAnimal.weightHistory.length === 0 && <p className="text-xs text-gray-400 font-bold uppercase text-center py-4">No logged records</p>}
                                         </div>
                                     </div>
                                 </div>
@@ -1290,90 +1405,178 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                 </div>
             )}
 
-            <div className="flex justify-end px-2 mb-4">
+            <div className="flex justify-between px-2 mb-4 items-center">
+                <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
+                    <button onClick={() => setViewLayout('GRID')} className={`p-2 rounded-lg transition-all ${viewLayout === 'GRID' ? 'bg-white shadow-sm text-emerald-600' : 'text-slate-400 hover:text-slate-600'}`}><LayoutGrid size={18} /></button>
+                    <button onClick={() => setViewLayout('TABLE')} className={`p-2 rounded-lg transition-all ${viewLayout === 'TABLE' ? 'bg-white shadow-sm text-emerald-600' : 'text-slate-400 hover:text-slate-600'}`}><List size={18} /></button>
+                </div>
                 <button onClick={() => setIsBatchMode(!isBatchMode)} className={`text-xs font-bold px-4 py-2 rounded-lg transition-all ${isBatchMode ? 'bg-gray-800 text-white shadow-lg' : 'bg-white text-gray-500 border border-gray-200 hover:bg-gray-50'}`}>{isBatchMode ? 'EXIT BATCH MODE' : 'ENABLE BATCH ACTIONS'}</button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-                {filteredLivestock.map((animal) => {
-                    const isGoat = species === 'GOAT';
-                    const themeText = isGoat ? 'text-amber-600' : 'text-emerald-600';
-                    const hoverBorder = isGoat ? 'hover:border-amber-300' : 'hover:border-emerald-300';
-                    const kids = livestock.filter(l => l.damId === animal.id || l.sireId === animal.id);
-                    const dam = animal.damId ? livestock.find(l => l.id === animal.damId) : null;
-                    const sire = animal.sireId ? livestock.find(l => l.id === animal.sireId) : null;
+            {viewLayout === 'GRID' ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+                    {sortedLivestock.map((animal) => {
+                        const isGoat = species === 'GOAT';
+                        const themeText = isGoat ? 'text-amber-600' : 'text-emerald-600';
+                        const hoverBorder = isGoat ? 'hover:border-amber-300' : 'hover:border-emerald-300';
+                        const kids = livestock.filter(l => l.damId === animal.id || l.sireId === animal.id);
+                        const dam = animal.damId ? livestock.find(l => l.id === animal.damId) : null;
+                        const sire = animal.sireId ? livestock.find(l => l.id === animal.sireId) : null;
+                        const badges = getBadges(animal);
 
-                    return (
-                        <div key={animal.id} onClick={() => {
-                            if (isBatchMode) {
-                                setSelectedBatchIds(prev => prev.includes(animal.id) ? prev.filter(id => id !== animal.id) : [...prev, animal.id]);
-                            } else {
-                                setSelectedAnimalId(animal.id); setCurrentView('DETAILS'); setDetailTab('INFO');
-                            }
-                        }} className={`bg-white rounded-[2rem] border overflow-hidden premium-card cursor-pointer group relative transition-all duration-300 ${isBatchMode && selectedBatchIds.includes(animal.id) ? (isGoat ? 'border-4 border-amber-500 bg-amber-50' : 'border-4 border-emerald-500 bg-emerald-50') : `border-slate-100 shadow-sm ${hoverBorder} hover:shadow-xl hover:-translate-y-1`}`}>
-                            <div className="p-6 relative">
-                                <div className="flex justify-between items-start mb-6">
-                                    <div className="flex gap-4 items-center">
-                                        <div className="relative">
-                                            <div className={`w-16 h-16 rounded-2xl overflow-hidden border-2 border-white shadow-md bg-slate-50 group-hover:scale-105 transition-transform duration-300 z-10 relative`}>
-                                                {animal.imageUrl ? <img src={animal.imageUrl} className="w-full h-full object-cover" /> : getPlaceholderVisual(animal.category)}
+                        return (
+                            <div key={animal.id} onClick={() => {
+                                if (isBatchMode) {
+                                    setSelectedBatchIds(prev => prev.includes(animal.id) ? prev.filter(id => id !== animal.id) : [...prev, animal.id]);
+                                } else {
+                                    setSelectedAnimalId(animal.id); setCurrentView('DETAILS'); setDetailTab('INFO');
+                                }
+                            }} className={`bg-white rounded-[2rem] border overflow-hidden premium-card cursor-pointer group relative transition-all duration-300 ${isBatchMode && selectedBatchIds.includes(animal.id) ? (isGoat ? 'border-4 border-amber-500 bg-amber-50' : 'border-4 border-emerald-500 bg-emerald-50') : `border-slate-100 shadow-sm ${hoverBorder} hover:shadow-xl hover:-translate-y-1`}`}>
+                                <div className="p-6 relative">
+                                    <div className="flex justify-between items-start mb-6">
+                                        <div className="flex gap-4 items-center">
+                                            <div className="relative">
+                                                <div className={`w-16 h-16 rounded-2xl overflow-hidden border-2 border-white shadow-md bg-slate-50 group-hover:scale-105 transition-transform duration-300 z-10 relative`}>
+                                                    {animal.imageUrl ? <img src={animal.imageUrl} className="w-full h-full object-cover" /> : getPlaceholderVisual(animal.category)}
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <h3 className={`font-black text-slate-800 text-xl tracking-tight group-hover:${themeText} transition-colors flex items-center gap-2`}>
+                                                    {animal.tagId}
+                                                </h3>
+                                                <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">{animal.breed} <span className="opacity-50 mx-1">•</span> {animal.gender}</p>
                                             </div>
                                         </div>
-                                        <div>
-                                            <h3 className={`font-black text-slate-800 text-xl tracking-tight group-hover:${themeText} transition-colors flex items-center gap-2`}>
-                                                {animal.tagId}
-                                            </h3>
-                                            <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">{animal.breed} <span className="opacity-50 mx-1">•</span> {animal.gender}</p>
+                                        <div className="flex items-center gap-2">
+                                            <button onClick={(e) => { e.stopPropagation(); if (!confirm(`Remove ${animal.tagId}?`)) return; onDeleteLivestock(animal.id); }} className="p-2 rounded-xl text-slate-300 hover:bg-red-50 hover:text-red-600 transition-colors opacity-0 group-hover:opacity-100" title="Delete"><Trash2 size={16} /></button>
+                                            <span className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest ${getStatusColor(animal.status)} shadow-sm`}>{animal.status}</span>
                                         </div>
                                     </div>
-                                    <div className="flex items-center gap-2">
-                                        <button onClick={(e) => { e.stopPropagation(); if (!confirm(`Remove ${animal.tagId}?`)) return; onDeleteLivestock(animal.id); }} className="p-2 rounded-xl text-slate-300 hover:bg-red-50 hover:text-red-600 transition-colors opacity-0 group-hover:opacity-100" title="Delete"><Trash2 size={16} /></button>
-                                        <span className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest ${getStatusColor(animal.status)} shadow-sm`}>{animal.status}</span>
+
+                                    {badges.length > 0 && (
+                                        <div className="flex flex-wrap gap-2 mb-4">
+                                            {badges.map((b, i) => <span key={i} className={`text-[10px] font-bold px-2 py-0.5 rounded border ${b.color}`}>{b.text}</span>)}
+                                        </div>
+                                    )}
+
+                                    <div className="grid grid-cols-2 gap-4 text-xs bg-slate-50/50 p-4 rounded-2xl border border-slate-100 mb-4">
+                                        <div className="flex flex-col gap-1"><span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Weight</span><span className="font-black text-slate-700 text-sm flex items-center gap-1.5"><Scale size={14} className={themeText} /> {animal.weight} KG</span></div>
+                                        <div className="flex flex-col gap-1"><span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Age</span><span className="font-black text-slate-700 text-sm flex items-center gap-1.5"><Calendar size={14} className={themeText} /> {getAgeDisplay(animal.dob)}</span></div>
                                     </div>
+
+                                    {(dam || sire) && (
+                                        <div className="flex flex-wrap gap-2 mb-4">
+                                            {dam && <div className="flex items-center gap-1.5 bg-pink-50 text-pink-700 px-3 py-1 rounded-full text-[10px] font-bold border border-pink-100"><User size={12} /> Dam: {dam.tagId}</div>}
+                                            {sire && <div className="flex items-center gap-1.5 bg-blue-50 text-blue-700 px-3 py-1 rounded-full text-[10px] font-bold border border-blue-100"><User size={12} /> Sire: {sire.tagId}</div>}
+                                        </div>
+                                    )}
+
+                                    {kids.length > 0 && (
+                                        <div className={`pt-4 border-t ${isGoat ? 'border-amber-100/50' : 'border-emerald-100/50'} mt-2`}>
+                                            <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2 flex justify-between items-center">
+                                                <span>Registered {isGoat ? 'Kids' : 'Calves'} ({kids.length})</span>
+                                            </div>
+                                            <div className="flex flex-wrap gap-1.5">
+                                                {kids.slice(0, 3).map(k => (
+                                                    <div key={k.id} className={`text-[10px] font-bold px-2 py-0.5 rounded shadow-sm flex items-center gap-1 border ${isGoat ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}><Baby size={10} /> {k.tagId}</div>
+                                                ))}
+                                                {kids.length > 3 && <div className="text-[10px] font-bold bg-slate-100 text-slate-500 px-2 py-0.5 rounded shadow-sm border border-slate-200">+{kids.length - 3} more</div>}
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
 
-                                <div className="grid grid-cols-2 gap-4 text-xs bg-slate-50/50 p-4 rounded-2xl border border-slate-100 mb-4">
-                                    <div className="flex flex-col gap-1"><span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Weight</span><span className="font-black text-slate-700 text-sm flex items-center gap-1.5"><Scale size={14} className={themeText} /> {animal.weight} KG</span></div>
-                                    <div className="flex flex-col gap-1"><span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Age</span><span className="font-black text-slate-700 text-sm flex items-center gap-1.5"><Calendar size={14} className={themeText} /> {getAgeDisplay(animal.dob)}</span></div>
+                                <div className={`px-6 py-4 border-t border-slate-100 flex justify-between items-center transition-colors ${isGoat ? 'bg-amber-50/50 group-hover:bg-amber-100' : 'bg-emerald-50/50 group-hover:bg-emerald-100'}`}>
+                                    <span className={`text-[10px] font-black tracking-widest uppercase transition-colors ${isGoat ? 'text-amber-500 group-hover:text-amber-700' : 'text-emerald-500 group-hover:text-emerald-700'}`}>View Full Profile & Lineage</span>
+                                    <div className={`w-8 h-8 rounded-full flex items-center justify-center ${isGoat ? 'bg-amber-200 text-amber-700 group-hover:bg-amber-500 group-hover:text-white' : 'bg-emerald-200 text-emerald-700 group-hover:bg-emerald-500 group-hover:text-white'} transition-all duration-300 shadow-sm`}><ChevronRight size={16} className={`group-hover:translate-x-0.5 transition-transform`} /></div>
                                 </div>
-
-                                {(dam || sire) && (
-                                    <div className="flex flex-wrap gap-2 mb-4">
-                                        {dam && <div className="flex items-center gap-1.5 bg-pink-50 text-pink-700 px-3 py-1 rounded-full text-[10px] font-bold border border-pink-100"><User size={12} /> Dam: {dam.tagId}</div>}
-                                        {sire && <div className="flex items-center gap-1.5 bg-blue-50 text-blue-700 px-3 py-1 rounded-full text-[10px] font-bold border border-blue-100"><User size={12} /> Sire: {sire.tagId}</div>}
-                                    </div>
-                                )}
-
-                                {kids.length > 0 && (
-                                    <div className={`pt-4 border-t ${isGoat ? 'border-amber-100/50' : 'border-emerald-100/50'} mt-2`}>
-                                        <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2 flex justify-between items-center">
-                                            <span>Registered {isGoat ? 'Kids' : 'Calves'} ({kids.length})</span>
-                                        </div>
-                                        <div className="flex flex-wrap gap-1.5">
-                                            {kids.slice(0, 3).map(k => (
-                                                <div key={k.id} className={`text-[10px] font-bold px-2 py-0.5 rounded shadow-sm flex items-center gap-1 border ${isGoat ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}><Baby size={10} /> {k.tagId}</div>
-                                            ))}
-                                            {kids.length > 3 && <div className="text-[10px] font-bold bg-slate-100 text-slate-500 px-2 py-0.5 rounded shadow-sm border border-slate-200">+{kids.length - 3} more</div>}
-                                        </div>
-                                    </div>
-                                )}
                             </div>
-
-                            <div className={`px-6 py-4 border-t border-slate-100 flex justify-between items-center transition-colors ${isGoat ? 'bg-amber-50/50 group-hover:bg-amber-100' : 'bg-emerald-50/50 group-hover:bg-emerald-100'}`}>
-                                <span className={`text-[10px] font-black tracking-widest uppercase transition-colors ${isGoat ? 'text-amber-500 group-hover:text-amber-700' : 'text-emerald-500 group-hover:text-emerald-700'}`}>View Full Profile & Lineage</span>
-                                <div className={`w-8 h-8 rounded-full flex items-center justify-center ${isGoat ? 'bg-amber-200 text-amber-700 group-hover:bg-amber-500 group-hover:text-white' : 'bg-emerald-200 text-emerald-700 group-hover:bg-emerald-500 group-hover:text-white'} transition-all duration-300 shadow-sm`}><ChevronRight size={16} className={`group-hover:translate-x-0.5 transition-transform`} /></div>
-                            </div>
+                        );
+                    })}
+                    {sortedLivestock.length === 0 && (
+                        <div className="col-span-full py-24 text-center bg-white rounded-3xl border border-gray-100 shadow-sm border-dashed">
+                            <div className="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-4 border border-gray-100"><Search size={32} className="text-gray-200" /></div>
+                            <h4 className="text-lg font-black text-gray-800 tracking-tight">No Animals Found</h4>
+                            <p className="text-sm text-gray-400 max-w-xs mx-auto">We couldn't find any {species.toLowerCase()} matching your search in the "{activeCategoryTab}" category.</p>
                         </div>
-                    );
-                })}
-                {filteredLivestock.length === 0 && (
-                    <div className="col-span-full py-24 text-center bg-white rounded-3xl border border-gray-100 shadow-sm border-dashed">
-                        <div className="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-4 border border-gray-100"><Search size={32} className="text-gray-200" /></div>
-                        <h4 className="text-lg font-black text-gray-800 tracking-tight">No Animals Found</h4>
-                        <p className="text-sm text-gray-400 max-w-xs mx-auto">We couldn't find any {species.toLowerCase()} matching your search in the "{activeCategoryTab}" category.</p>
+                    )}
+                </div>
+            ) : (
+                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden animate-fade-in premium-card">
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-left border-collapse">
+                            <thead>
+                                <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-black uppercase tracking-widest text-slate-500">
+                                    {isBatchMode && <th className="p-4 w-12 text-center">Sel</th>}
+                                    <th className="p-4 cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => handleSort('tagId')}>Tag ID <ArrowUpDown size={12} className="inline ml-1 text-slate-300" /></th>
+                                    <th className="p-4 cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => handleSort('breed')}>Details <ArrowUpDown size={12} className="inline ml-1 text-slate-300" /></th>
+                                    <th className="p-4 cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => handleSort('status')}>Status <ArrowUpDown size={12} className="inline ml-1 text-slate-300" /></th>
+                                    <th className="p-4 cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => handleSort('weight')}>Vitals <ArrowUpDown size={12} className="inline ml-1 text-slate-300" /></th>
+                                    <th className="p-4 cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => handleSort('cost')}>Cost (PKR) <ArrowUpDown size={12} className="inline ml-1 text-slate-300" /></th>
+                                    <th className="p-4 w-48">Alerts & Health</th>
+                                    <th className="p-4 text-right">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {sortedLivestock.map(animal => {
+                                    const badges = getBadges(animal);
+                                    const cost = (animal.purchasePrice || 0) + (animal.accumulatedFeedCost || 0) + (animal.accumulatedMedicalCost || 0);
+                                    const isSelected = selectedBatchIds.includes(animal.id);
+
+                                    return (
+                                        <tr key={animal.id} onClick={() => {
+                                            if (isBatchMode) {
+                                                setSelectedBatchIds(prev => prev.includes(animal.id) ? prev.filter(id => id !== animal.id) : [...prev, animal.id]);
+                                            } else {
+                                                setSelectedAnimalId(animal.id); setCurrentView('DETAILS'); setDetailTab('INFO');
+                                            }
+                                        }} className={`border-b border-slate-100 hover:bg-slate-50/80 cursor-pointer transition-colors ${isSelected ? 'bg-emerald-50/50' : ''}`}>
+                                            {isBatchMode && (
+                                                <td className="p-4 text-center" onClick={(e) => e.stopPropagation()}>
+                                                    <input type="checkbox" checked={isSelected} onChange={() => setSelectedBatchIds(prev => prev.includes(animal.id) ? prev.filter(id => id !== animal.id) : [...prev, animal.id])} className="w-4 h-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer" />
+                                                </td>
+                                            )}
+                                            <td className="p-4">
+                                                <div className="flex items-center gap-3">
+                                                    <div className="w-10 h-10 rounded-xl overflow-hidden bg-slate-100 border border-slate-200 shrink-0">
+                                                        {animal.imageUrl ? <img src={animal.imageUrl} className="w-full h-full object-cover" /> : getPlaceholderVisual(animal.category)}
+                                                    </div>
+                                                    <span className="font-extrabold text-slate-800 text-sm">{animal.tagId}</span>
+                                                </div>
+                                            </td>
+                                            <td className="p-4">
+                                                <p className="font-bold text-slate-700 text-xs">{animal.breed}</p>
+                                                <p className="text-[10px] text-slate-500 font-bold uppercase mt-0.5 tracking-wider">{animal.gender} · {animal.category}</p>
+                                            </td>
+                                            <td className="p-4">
+                                                <span className={`px-2 py-1 rounded-md text-[9px] font-black uppercase tracking-widest ${getStatusColor(animal.status)}`}>{animal.status}</span>
+                                            </td>
+                                            <td className="p-4">
+                                                <p className="font-bold text-slate-700 text-xs">{animal.weight} KG</p>
+                                                <p className="text-[10px] text-slate-500 font-bold uppercase mt-0.5 tracking-wider">{getAgeDisplay(animal.dob)}</p>
+                                            </td>
+                                            <td className="p-4">
+                                                <p className="font-black text-emerald-700 text-xs">{Math.round(cost).toLocaleString()}</p>
+                                            </td>
+                                            <td className="p-4">
+                                                <div className="flex flex-wrap gap-1.5 maxWidth-[180px]">
+                                                    {badges.map((b, i) => <span key={i} className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap ${b.color}`}>{b.text}</span>)}
+                                                </div>
+                                            </td>
+                                            <td className="p-4 text-right">
+                                                <button onClick={(e) => { e.stopPropagation(); if (confirm(`Remove ${animal.tagId}?`)) onDeleteLivestock(animal.id); }} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"><Trash2 size={16} /></button>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                                {sortedLivestock.length === 0 && (
+                                    <tr><td colSpan={8} className="p-16 text-center text-slate-400 font-bold">No animals found matching your criteria.</td></tr>
+                                )}
+                            </tbody>
+                        </table>
                     </div>
-                )}
-            </div>
+                </div>
+            )}
 
             {renderSalesModal()}
 

@@ -428,6 +428,7 @@ export const MOCK_DIET_PLANS: DietPlan[] = [
     targetId: 'Milking Cows',
     targetName: 'Milking Cows',
     status: 'ACTIVE',
+    distributionMode: 'PER_ANIMAL',
     startDate: '2023-11-01',
     items: [
       { id: 'item-1', inventoryId: 'f1', inventoryName: 'Alfalfa Hay', quantity: 15, unit: 'kg', costPerUnit: 30 },

@@ -3,7 +3,7 @@
  * POST multipart/form-data with field "file"; response contains files[].location.
  */
 
-const UPLOAD_URL = import.meta.env.VITE_UPLOAD_URL || 'https://s3.hulmsolutions.com/upload';
+const UPLOAD_URL = (import.meta as any).env.VITE_UPLOAD_URL || 'https://s3.hulmsolutions.com/upload';
 
 export interface UploadFileResult {
     fieldname: string;

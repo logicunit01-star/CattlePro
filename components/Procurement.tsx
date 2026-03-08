@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { AppState, Expense, FeedInventory, ExpenseCategory } from '../types';
 import { Truck, ShoppingCart, User, AlertTriangle, CheckCircle, Clock, Search, Layers, Archive, Activity, RefreshCw, MinusCircle, Edit2, X, Save, Plus, Package, TrendingUp, BarChart, DollarSign, ArrowRight } from 'lucide-react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart as RechartsBarChart, Bar } from 'recharts';
 
 interface Props {
     state: AppState;
@@ -68,6 +69,59 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
     const pendingBills = dashboardVendorExpenses.filter(e => e.paymentStatus === 'PENDING' || e.paymentStatus === 'PARTIAL').reduce((sum, e) => sum + e.amount, 0);
     const monthlySpend = dashboardVendorExpenses.filter(e => e.date.startsWith(new Date().toISOString().slice(0, 7))).reduce((sum, e) => sum + e.amount, 0);
 
+    const priceTrendData = useMemo(() => {
+        const grouped: Record<string, any> = {};
+        vendorExpenses.forEach(e => {
+            const item = state.feed.find(f => f.id === e.feedItemId);
+            if (!item) return;
+            const key = new Date(e.date).toLocaleDateString('en-GB', { month: 'short', year: '2-digit' }); // e.g. Oct 26
+            if (!grouped[key]) grouped[key] = { name: key };
+            const ratePerKg = e.weight > 0 ? (e.amount / e.weight) : e.rate;
+            if (!grouped[key][item.name]) grouped[key][item.name] = { sum: 0, count: 0 };
+            grouped[key][item.name].sum += ratePerKg;
+            grouped[key][item.name].count += 1;
+        });
+        return Object.values(grouped).map(g => {
+            const finalObj: any = { name: g.name };
+            Object.keys(g).forEach(k => { if (k !== 'name') finalObj[k] = Math.round(g[k].sum / g[k].count); });
+            return finalObj;
+        });
+    }, [vendorExpenses, state.feed]);
+
+    const itemVendorComparisonData = useMemo(() => {
+        const itemVendors: Record<string, any> = {};
+        const vendorsSet = new Set<string>();
+
+        vendorExpenses.forEach(e => {
+            const item = state.feed.find(f => f.id === e.feedItemId);
+            if (!item) return;
+            const vendorObj = vendorEntities.find(v => v.id === e.supplier);
+            const vendorName = vendorObj ? vendorObj.name : (e.supplier === 'CASH' ? 'Cash' : 'Unknown');
+            vendorsSet.add(vendorName);
+            const ratePerKg = e.weight > 0 ? (e.amount / e.weight) : e.rate;
+
+            if (!itemVendors[item.name]) itemVendors[item.name] = { name: item.name };
+            if (!itemVendors[item.name][`${vendorName}_sum`]) {
+                itemVendors[item.name][`${vendorName}_sum`] = 0;
+                itemVendors[item.name][`${vendorName}_count`] = 0;
+            }
+            itemVendors[item.name][`${vendorName}_sum`] += ratePerKg;
+            itemVendors[item.name][`${vendorName}_count`] += 1;
+        });
+
+        const chartData = Object.values(itemVendors).map((iv: any) => {
+            const finalObj: any = { name: iv.name };
+            vendorsSet.forEach((v: string) => {
+                if (iv[`${v}_count`]) {
+                    finalObj[v] = Math.round(iv[`${v}_sum`] / iv[`${v}_count`]);
+                }
+            });
+            return finalObj;
+        });
+
+        return { data: chartData, vendors: Array.from(vendorsSet) };
+    }, [vendorExpenses, state.feed, vendorEntities]);
+
     // Available items for procurement depending on category
     const availableProcurementItems = feedItems.filter(f => f.feedType === procurementForm.feedCategory || (!f.feedType && procurementForm.feedCategory === 'OTHER'));
 
@@ -80,15 +134,22 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
         const selectedItem = state.feed.find(f => f.id === procurementForm.feedTypeId);
         if (!selectedItem) return alert("Invalid Feed Item Selected.");
 
-        // Define unit behavior precisely based on Inventory settings, not merely the UI tab
-        const isQtyBased = ['BAG', 'BUNDLE'].includes((selectedItem.unit || '').toUpperCase());
-        const addedValue = isQtyBased ? procurementForm.quantity : procurementForm.weight;
+        // Define unit behavior precisely based on Inventory settings or legacy Feed Types
+        const isQtyBased = ['BAG', 'BUNDLE'].includes((selectedItem.unit || '').toUpperCase()) || ['WANDA', 'TMR'].includes(selectedItem.feedType || '');
+        // ALWAY Stock quantity centrally as real lowest unit equivalent (KG). 
+        const addedValue = procurementForm.weight;
+        const assumedWeightPerUnit = selectedItem.weightPerUnit || 40;
 
-        if (isQtyBased && (!procurementForm.quantity || !procurementForm.weight)) return alert("Quantity (Bags) and Total Weight are required.");
+        // If they left weight blank but filled quantity (for legacy data), auto compute it
+        if (isQtyBased && procurementForm.quantity && !procurementForm.weight) {
+            procurementForm.weight = procurementForm.quantity * assumedWeightPerUnit;
+        }
+
+        if (isQtyBased && (!procurementForm.quantity || !procurementForm.weight)) return alert("Quantity (Bags/Bundles) and Total Weight are required.");
         if (!isQtyBased && !procurementForm.weight) return alert("Total Weight is required.");
 
-        const totalCost = isQtyBased ? (procurementForm.quantity * procurementForm.rate) : (procurementForm.weight * procurementForm.rate);
-        const desc = isQtyBased ? `Purchase: ${selectedItem.name} (Qty: ${procurementForm.quantity}, Wt: ${procurementForm.weight} kg)` : `Purchase: ${selectedItem.name} (${procurementForm.weight} ${selectedItem.unit})`;
+        const totalCost = procurementForm.weight * procurementForm.rate;
+        const desc = isQtyBased ? `Purchase: ${selectedItem.name} (Qty: ${procurementForm.quantity}, Wt: ${procurementForm.weight} kg)` : `Purchase: ${selectedItem.name} (${procurementForm.weight} kg)`;
 
         const expense: Expense = {
             id: Math.random().toString(36).substr(2, 9),
@@ -114,7 +175,7 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
             onUpdateInventory({
                 ...selectedItem,
                 quantity: selectedItem.quantity + addedValue,
-                unitCost: procurementForm.rate, // update last tracking cost
+                unitCost: isQtyBased && procurementForm.weight > 0 ? (totalCost / procurementForm.weight) : procurementForm.rate, // Track precise cost per KG centrally
                 defaultSupplier: procurementForm.vendorId !== CASH_LABEL ? procurementForm.vendorId : selectedItem.defaultSupplier
             });
 
@@ -134,14 +195,19 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
         const selectedItem = state.feed.find(f => f.id === procurementForm.feedTypeId);
         if (!selectedItem) return;
 
-        const isQtyBased = ['BAG', 'BUNDLE'].includes((selectedItem.unit || '').toUpperCase());
-        const newAddedValue = isQtyBased ? procurementForm.quantity : procurementForm.weight;
+        const isQtyBased = ['BAG', 'BUNDLE'].includes((selectedItem.unit || '').toUpperCase()) || ['WANDA', 'TMR'].includes(selectedItem.feedType || '');
+        const newAddedValue = procurementForm.weight;
+        const assumedWeightPerUnit = selectedItem.weightPerUnit || 40;
+
+        if (isQtyBased && procurementForm.quantity && !procurementForm.weight) {
+            procurementForm.weight = procurementForm.quantity * assumedWeightPerUnit;
+        }
 
         if (isQtyBased && (!procurementForm.quantity || !procurementForm.weight)) return alert("Quantity and Weight missing.");
         if (!isQtyBased && !procurementForm.weight) return alert("Weight is required.");
 
-        const totalCost = isQtyBased ? (procurementForm.quantity * procurementForm.rate) : (procurementForm.weight * procurementForm.rate);
-        const desc = isQtyBased ? `Purchase: ${selectedItem.name} (Qty: ${procurementForm.quantity}, Wt: ${procurementForm.weight} kg)` : `Purchase: ${selectedItem.name} (${procurementForm.weight} ${selectedItem.unit})`;
+        const totalCost = procurementForm.weight * procurementForm.rate;
+        const desc = isQtyBased ? `Purchase: ${selectedItem.name} (Qty: ${procurementForm.quantity}, Wt: ${procurementForm.weight} kg)` : `Purchase: ${selectedItem.name} (${procurementForm.weight} kg)`;
 
         const updated: Expense = {
             ...editingExpense,
@@ -165,15 +231,15 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
             let prevAddedValue = 0;
 
             if (prevItem) {
-                const prevIsQtyBased = ['BAG', 'BUNDLE'].includes((prevItem.unit || '').toUpperCase());
-                prevAddedValue = prevIsQtyBased ? (editingExpense.quantity || 0) : (editingExpense.weight || 0);
+                prevAddedValue = editingExpense.weight || 0;
+                const newRatePerKg = isQtyBased && procurementForm.weight > 0 ? (totalCost / procurementForm.weight) : procurementForm.rate;
 
                 // If it's modifying the exact same item ID
                 if (prevItem.id === selectedItem.id) {
                     onUpdateInventory({
                         ...selectedItem,
                         quantity: selectedItem.quantity - prevAddedValue + newAddedValue,
-                        unitCost: procurementForm.rate,
+                        unitCost: newRatePerKg,
                         defaultSupplier: procurementForm.vendorId !== CASH_LABEL ? procurementForm.vendorId : selectedItem.defaultSupplier
                     });
                 } else {
@@ -182,16 +248,17 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                     onUpdateInventory({
                         ...selectedItem,
                         quantity: selectedItem.quantity + newAddedValue,
-                        unitCost: procurementForm.rate,
+                        unitCost: newRatePerKg,
                         defaultSupplier: procurementForm.vendorId !== CASH_LABEL ? procurementForm.vendorId : selectedItem.defaultSupplier
                     });
                 }
             } else {
+                const newRatePerKg = isQtyBased && procurementForm.weight > 0 ? (totalCost / procurementForm.weight) : procurementForm.rate;
                 // If it was somehow not linked accurately before, just add to the new item
                 onUpdateInventory({
                     ...selectedItem,
                     quantity: selectedItem.quantity + newAddedValue,
-                    unitCost: procurementForm.rate,
+                    unitCost: newRatePerKg,
                     defaultSupplier: procurementForm.vendorId !== CASH_LABEL ? procurementForm.vendorId : selectedItem.defaultSupplier
                 });
             }
@@ -259,14 +326,16 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
     };
 
     const handleRecordUsage = (item: FeedInventory) => {
-        const qtyStr = prompt(`Current stock: ${item.quantity.toLocaleString()} ${item.unit}\nAmount of ${item.name} consumed (in ${item.unit})?`);
+        const isQtyBased = ['BAG', 'BUNDLE'].includes((item.unit || '').toUpperCase());
+        const bagsTxt = isQtyBased && item.weightPerUnit ? ` (≈ ${(item.quantity / item.weightPerUnit).toFixed(1)} ${item.unit}s)` : '';
+        const qtyStr = prompt(`Current Extrapolated Stock: ${item.quantity.toLocaleString()} KG${bagsTxt}\n\nEnter amount of ${item.name} consumed STRICTLY IN KG:`);
         if (!qtyStr) return;
-        const consumed = parseFloat(qtyStr);
-        if (isNaN(consumed) || consumed <= 0) return alert("Invalid amount");
-        if (consumed > item.quantity) return alert("Cannot consume more than available stock!");
+        const consumedKg = parseFloat(qtyStr);
+        if (isNaN(consumedKg) || consumedKg <= 0) return alert("Invalid amount");
+        if (consumedKg > item.quantity) return alert("Cannot consume more than available stock!");
 
-        onUpdateInventory({ ...item, quantity: item.quantity - consumed });
-        alert(`Successfully deducted ${consumed} ${item.unit} of ${item.name}.`);
+        onUpdateInventory({ ...item, quantity: item.quantity - consumedKg });
+        alert(`Successfully deducted ${consumedKg} KG of ${item.name}.`);
     };
 
     // Helper: Map Vendor ID to display Name
@@ -463,16 +532,17 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                             <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 space-y-4">
                                 {(() => {
                                     const selectedItem = state.feed.find(f => f.id === procurementForm.feedTypeId);
-                                    const isQtyBased = selectedItem && ['BAG', 'BUNDLE'].includes((selectedItem.unit || '').toUpperCase());
+                                    const isQtyBased = selectedItem && (['BAG', 'BUNDLE'].includes((selectedItem.unit || '').toUpperCase()) || ['WANDA', 'TMR'].includes(selectedItem.feedType || ''));
+                                    const assumedWeightPerUnit = selectedItem?.weightPerUnit || 40;
 
                                     if (isQtyBased) {
                                         return (
                                             <div className="grid grid-cols-2 gap-3">
                                                 <div>
-                                                    <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1">Qty ({selectedItem.unit}) <span className="text-red-500">*</span></label>
+                                                    <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1">Qty ({selectedItem?.unit === 'kg' ? 'BAGs' : (selectedItem?.unit || 'BAGs')}) <span className="text-red-500">*</span></label>
                                                     <input type="number" min={0} value={procurementForm.quantity || ''} onChange={e => {
                                                         const q = parseFloat(e.target.value) || 0;
-                                                        setProcurementForm(p => ({ ...p, quantity: q, weight: selectedItem.weightPerUnit ? q * selectedItem.weightPerUnit : p.weight }));
+                                                        setProcurementForm(p => ({ ...p, quantity: q, weight: q * assumedWeightPerUnit }));
                                                     }} className="w-full border border-slate-200 focus:border-emerald-500 text-sm font-bold text-slate-700 rounded-xl px-3 py-2 outline-none" placeholder="0" />
                                                 </div>
                                                 <div>
@@ -519,7 +589,7 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                     <div className="absolute top-0 right-0 p-2 opacity-10"><DollarSign size={48} /></div>
                                     <span className="text-[10px] font-black text-emerald-600 uppercase tracking-wider">Total Value</span>
                                     <span className="text-2xl font-black text-emerald-800 mb-3 block">
-                                        PKR {(procurementForm.feedCategory === 'GRASS' ? (procurementForm.weight || 0) * (procurementForm.rate || 0) : (procurementForm.quantity || 0) * (procurementForm.rate || 0)).toLocaleString()}
+                                        PKR {((procurementForm.weight || 0) * (procurementForm.rate || 0)).toLocaleString()}
                                     </span>
                                     {editingExpense ? (
                                         <button type="button" onClick={handleUpdateExpenseSubmit} className="w-full bg-slate-800 text-white font-bold py-2.5 rounded-xl hover:bg-slate-700 flex items-center justify-center gap-2 shadow-md transition-all z-10"><Save size={16} /> Update</button>
@@ -634,16 +704,17 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                             </select>
                                         </div>
                                         <div>
-                                            <label className="block text-[11px] font-black text-slate-500 uppercase tracking-wider mb-1.5">UOM</label>
+                                            <label className="block text-[11px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Purchase Unit Format</label>
                                             <select value={newItemForm.unit} onChange={e => setNewItemForm({ ...newItemForm, unit: e.target.value })} className="w-full border border-slate-200 focus:border-emerald-500 text-sm font-bold text-slate-700 rounded-xl px-3 py-3 outline-none bg-slate-50 focus:bg-white transition-colors">
                                                 {UNIT_OPTIONS.map(u => <option key={u} value={u}>{u}</option>)}
                                             </select>
                                         </div>
                                     </div>
                                     {['BAG', 'BUNDLE'].includes(newItemForm.unit || '') && (
-                                        <div className="animate-fade-in-up">
-                                            <label className="block text-[11px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Standard Weight per {newItemForm.unit} (kg)</label>
+                                        <div className="animate-fade-in-up mt-3 relative">
+                                            <label className="block text-[11px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Weight Per {newItemForm.unit} (KG)</label>
                                             <input type="number" min={0} step={0.1} value={newItemForm.weightPerUnit || ''} onChange={e => setNewItemForm({ ...newItemForm, weightPerUnit: parseFloat(e.target.value) || 0 })} className="w-full border border-emerald-200 focus:border-emerald-500 text-sm font-bold text-slate-700 rounded-xl px-4 py-3 outline-none bg-emerald-50/50 focus:bg-white transition-colors" placeholder="e.g. 40" />
+                                            <p className="text-[10px] text-emerald-600 mt-1 font-medium">System will auto-convert stocks implicitly in KG.</p>
                                         </div>
                                     )}
                                 </div>
@@ -652,16 +723,16 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                 <div className="space-y-4">
                                     <div className="grid grid-cols-2 gap-3">
                                         <div>
-                                            <label className="block text-[11px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Limit/Alert</label>
+                                            <label className="block text-[11px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Limit/Alert (KG)</label>
                                             <input type="number" min={0} value={newItemForm.reorderLevel} onChange={e => setNewItemForm({ ...newItemForm, reorderLevel: parseInt(e.target.value) || 0 })} className="w-full border border-slate-200 focus:border-emerald-500 text-sm font-bold text-slate-700 rounded-xl px-4 py-3 outline-none bg-slate-50 focus:bg-white transition-colors" />
                                         </div>
                                         <div>
-                                            <label className="block text-[11px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Initial Qty</label>
+                                            <label className="block text-[11px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Initial Qty (KG)</label>
                                             <input type="number" min={0} value={newItemForm.quantity} onChange={e => setNewItemForm({ ...newItemForm, quantity: parseFloat(e.target.value) || 0 })} className="w-full border border-slate-200 focus:border-emerald-500 text-sm font-bold text-slate-700 rounded-xl px-4 py-3 outline-none bg-slate-50 focus:bg-white transition-colors disabled:opacity-50" disabled={!!editingItem} title={editingItem ? "Update quantity via Purchase or Usage" : ""} />
                                         </div>
                                     </div>
                                     <div>
-                                        <label className="block text-[11px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Base Rate (PKR)</label>
+                                        <label className="block text-[11px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Base Rate (PKR / KG)</label>
                                         <input type="number" min={0} value={newItemForm.unitCost} onChange={e => setNewItemForm({ ...newItemForm, unitCost: parseFloat(e.target.value) || 0 })} className="w-full border border-slate-200 focus:border-emerald-500 text-sm font-bold text-slate-700 rounded-xl px-4 py-3 outline-none bg-slate-50 focus:bg-white transition-colors" />
                                     </div>
                                 </div>
@@ -701,15 +772,22 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                     <div className="px-6 py-4 flex items-center justify-between bg-slate-50/50">
                                         <div>
                                             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Available Stock</p>
-                                            <div className="flex items-end gap-1.5 mt-0.5">
-                                                <span className={`text-2xl font-black ${isLow ? 'text-red-500' : 'text-slate-800'}`}>{item.quantity.toLocaleString()}</span>
-                                                <span className="text-sm font-bold text-slate-500 pb-0.5">{item.unit}</span>
+                                            <div className="flex flex-col mt-0.5">
+                                                <div className="flex items-end gap-1.5">
+                                                    <span className={`text-2xl font-black ${isLow ? 'text-red-500' : 'text-slate-800'}`}>{item.quantity.toLocaleString()}</span>
+                                                    <span className="text-sm font-bold text-slate-500 pb-0.5">KG</span>
+                                                </div>
+                                                {['BAG', 'BUNDLE'].includes((item.unit || '').toUpperCase()) && item.weightPerUnit && item.weightPerUnit > 0 && (
+                                                    <p className="text-xs font-bold text-slate-400 mt-1 bg-slate-100 px-2 py-0.5 rounded-md inline-block w-fit">
+                                                        ≈ {(item.quantity / item.weightPerUnit).toFixed(1)} {item.unit}s
+                                                    </p>
+                                                )}
                                             </div>
                                             {isLow && <p className="text-[10px] font-bold text-red-500 flex items-center gap-1 mt-1"><AlertTriangle size={10} /> Restock Needed</p>}
                                         </div>
                                         <div className="text-right">
                                             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Moving Cost</p>
-                                            <p className="text-sm font-black text-slate-700 mt-0.5 border border-slate-200 bg-white px-2 py-1 rounded-lg shadow-sm">PKR {item.unitCost.toLocaleString()}</p>
+                                            <p className="text-sm font-black text-slate-700 mt-0.5 border border-slate-200 bg-white px-2 py-1 rounded-lg shadow-sm">PKR {item.unitCost.toLocaleString()} / KG</p>
                                         </div>
                                     </div>
                                     <div className="px-6 py-4 flex gap-2">
@@ -795,6 +873,60 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                 <User size={32} className="mx-auto text-slate-200 mb-3" />
                                 <p className="text-sm font-medium text-slate-500">No active Vendors created in internal ledger.</p>
                                 <p className="text-xs text-slate-400 mt-1">Please create via Financials / Ledger configuration.</p>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Detailed Vendor Analytics */}
+                    <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 mt-8">
+                        {priceTrendData.length > 0 && (
+                            <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+                                <h3 className="text-lg font-black text-slate-800 mb-6 flex items-center gap-2"><TrendingUp className="text-emerald-500" /> Date Variation Analytics (Cost/KG)</h3>
+                                <div className="h-80 w-full">
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <LineChart data={priceTrendData}>
+                                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                                            <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
+                                            <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} axisLine={false} tickLine={false} tickFormatter={(val) => `PKR ${val}`} />
+                                            <Tooltip
+                                                contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                                                itemStyle={{ fontSize: '12px', fontWeight: 'bold' }}
+                                                labelStyle={{ fontSize: '10px', color: '#64748b', fontWeight: 'bold' }}
+                                            />
+                                            <Legend wrapperStyle={{ fontSize: '12px', fontWeight: 'bold', paddingTop: '10px' }} />
+                                            {Array.from(new Set(state.feed.map(f => f.name))).map((name, i) => (
+                                                <Line key={name} type="monotone" dataKey={name} name={name} stroke={`hsl(${i * 45 + 150}, 70%, 50%)`} strokeWidth={3} dot={{ r: 4, strokeWidth: 2 }} activeDot={{ r: 6 }} connectNulls />
+                                            ))}
+                                        </LineChart>
+                                    </ResponsiveContainer>
+                                </div>
+                                <p className="text-xs font-medium text-slate-500 mt-4 text-center">Averaged per-KG rates across recent invoices dynamically graphed per product.</p>
+                            </div>
+                        )}
+
+                        {itemVendorComparisonData.data.length > 0 && (
+                            <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+                                <h3 className="text-lg font-black text-slate-800 mb-6 flex items-center gap-2"><BarChart className="text-blue-500" /> Vendor Price Comparison per Item (Cost/KG)</h3>
+                                <div className="h-80 w-full">
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <RechartsBarChart data={itemVendorComparisonData.data}>
+                                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                                            <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
+                                            <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} axisLine={false} tickLine={false} tickFormatter={(val) => `PKR ${val}`} />
+                                            <Tooltip
+                                                contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                                                cursor={{ fill: '#f8fafc' }}
+                                                itemStyle={{ fontSize: '12px', fontWeight: 'bold' }}
+                                                labelStyle={{ fontSize: '10px', color: '#64748b', fontWeight: 'bold' }}
+                                            />
+                                            <Legend wrapperStyle={{ fontSize: '12px', fontWeight: 'bold', paddingTop: '10px' }} />
+                                            {itemVendorComparisonData.vendors.map((v, i) => (
+                                                <Bar key={v} dataKey={v} name={v} fill={`hsl(${i * 60 + 200}, 75%, 60%)`} radius={[4, 4, 0, 0]} maxBarSize={50} />
+                                            ))}
+                                        </RechartsBarChart>
+                                    </ResponsiveContainer>
+                                </div>
+                                <p className="text-xs font-medium text-slate-500 mt-4 text-center">Visualizes base pricing differentials to support economic purchasing.</p>
                             </div>
                         )}
                     </div>

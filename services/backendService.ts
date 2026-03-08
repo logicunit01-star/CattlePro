@@ -6,7 +6,7 @@ import { getTenantHeaders, getTenant } from './tenantContext';
 //const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5003/livestock';
 
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://api.hulmsolutions.com/livestock';
+const API_BASE_URL = (import.meta as any).env.VITE_API_URL || 'https://api.hulmsolutions.com/livestock';
 
 function apiHeaders(json = false): Record<string, string> {
     const h: Record<string, string> = { ...getTenantHeaders() };
@@ -96,8 +96,9 @@ export const backendService = {
         });
         return handleResponse(res);
     },
-    deleteLivestock: async (id: string): Promise<void> => {
-        const res = await fetch(`${API_BASE_URL}/livestock/${id}`, { method: 'DELETE', headers: apiHeaders() });
+    deleteLivestock: async (id: string, force = false): Promise<void> => {
+        const query = force ? '?force=true' : '';
+        const res = await fetch(`${API_BASE_URL}/livestock/${id}${query}`, { method: 'DELETE', headers: apiHeaders() });
         await handleDeleteResponse(res);
     },
 
