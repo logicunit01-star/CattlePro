@@ -711,10 +711,9 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                         </div>
                                     </div>
                                     {['BAG', 'BUNDLE'].includes(newItemForm.unit || '') && (
-                                        <div className="animate-fade-in-up mt-3 relative">
-                                            <label className="block text-[11px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Weight Per {newItemForm.unit} (KG)</label>
+                                        <div className="animate-fade-in-up">
+                                            <label className="block text-[11px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Standard Weight per {newItemForm.unit} (kg)</label>
                                             <input type="number" min={0} step={0.1} value={newItemForm.weightPerUnit || ''} onChange={e => setNewItemForm({ ...newItemForm, weightPerUnit: parseFloat(e.target.value) || 0 })} className="w-full border border-emerald-200 focus:border-emerald-500 text-sm font-bold text-slate-700 rounded-xl px-4 py-3 outline-none bg-emerald-50/50 focus:bg-white transition-colors" placeholder="e.g. 40" />
-                                            <p className="text-[10px] text-emerald-600 mt-1 font-medium">System will auto-convert stocks implicitly in KG.</p>
                                         </div>
                                     )}
                                 </div>

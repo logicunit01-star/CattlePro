@@ -270,6 +270,10 @@ export interface Expense {
   supplier?: string;
   paymentStatus?: 'PAID' | 'PENDING' | 'PARTIAL';
   paymentDate?: string;
+  isSystemGenerated?: boolean;
+  referenceType?: string;
+  /** When set, this expense is removed when the feed ledger is reversed. */
+  processedFeedLedgerId?: string;
   // Procurement (FEED): so edit form matches new purchase entry
   feedCategory?: string;  // GRASS, TMR, WANDA
   feedItemId?: string;    // FeedInventory id

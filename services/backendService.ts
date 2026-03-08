@@ -1,10 +1,11 @@
 
-import { Livestock, MedicalRecord, Expense, Sale, FeedInventory, Infrastructure, DietPlan, InseminationRecord, WeightRecord, MilkRecord, Entity, LedgerRecord, ConsumptionLog, TreatmentProtocol, TreatmentLog, Location, Farm } from '../types';
+import { Livestock, MedicalRecord, Expense, Sale, FeedInventory, Infrastructure, DietPlan, InseminationRecord, WeightRecord, MilkRecord, Entity, LedgerRecord, ConsumptionLog, TreatmentProtocol, TreatmentLog, Location, Farm, ProcessedFeedLedger } from '../types';
 import { getTenantHeaders, getTenant } from './tenantContext';
 
 // const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8381/api';
-//const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5003/livestock';
+// const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5003/livestock';
 
+//  const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5003/livestock';
 
 const API_BASE_URL = (import.meta as any).env.VITE_API_URL || 'https://api.hulmsolutions.com/livestock';
 
@@ -313,6 +314,25 @@ export const backendService = {
         });
         if (!res.ok) throw new Error(await res.text() || res.statusText);
         if (res.status !== 204) await res.json();
+    },
+    getFeedLedgers: async (): Promise<ProcessedFeedLedger[]> => {
+        const res = await fetch(`${API_BASE_URL}/operations/feed-ledgers`, { headers: apiHeaders() });
+        return handleResponse(res);
+    },
+    createFeedLedger: async (ledger: ProcessedFeedLedger): Promise<ProcessedFeedLedger> => {
+        const res = await fetch(`${API_BASE_URL}/operations/feed-ledgers`, {
+            method: 'POST',
+            headers: apiHeaders(true),
+            body: JSON.stringify(ledger),
+        });
+        return handleResponse(res);
+    },
+    reverseFeedLedger: async (id: string): Promise<ProcessedFeedLedger> => {
+        const res = await fetch(`${API_BASE_URL}/operations/feed-ledgers/${encodeURIComponent(id)}/reverse`, {
+            method: 'PUT',
+            headers: apiHeaders(),
+        });
+        return handleResponse(res);
     },
 
     // Medicine Module
