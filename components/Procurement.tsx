@@ -148,8 +148,13 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
         if (isQtyBased && (!procurementForm.quantity || !procurementForm.weight)) return alert("Quantity (Bags/Bundles) and Total Weight are required.");
         if (!isQtyBased && !procurementForm.weight) return alert("Total Weight is required.");
 
-        const totalCost = procurementForm.weight * procurementForm.rate;
-        const desc = isQtyBased ? `Purchase: ${selectedItem.name} (Qty: ${procurementForm.quantity}, Wt: ${procurementForm.weight} kg)` : `Purchase: ${selectedItem.name} (${procurementForm.weight} kg)`;
+        // CORRECTED COST FORMULA:
+        // If it's bag-based, the user enters Rate per Bag. If KG-based, Rate per KG.
+        const totalCost = isQtyBased && procurementForm.quantity > 0
+            ? procurementForm.quantity * procurementForm.rate
+            : procurementForm.weight * procurementForm.rate;
+
+        const desc = isQtyBased ? `Purchase: ${selectedItem.name} (Qty: ${procurementForm.quantity} ${selectedItem.unit}s, Wt: ${procurementForm.weight} kg)` : `Purchase: ${selectedItem.name} (${procurementForm.weight} kg)`;
 
         const expense: Expense = {
             id: Math.random().toString(36).substr(2, 9),
@@ -206,8 +211,12 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
         if (isQtyBased && (!procurementForm.quantity || !procurementForm.weight)) return alert("Quantity and Weight missing.");
         if (!isQtyBased && !procurementForm.weight) return alert("Weight is required.");
 
-        const totalCost = procurementForm.weight * procurementForm.rate;
-        const desc = isQtyBased ? `Purchase: ${selectedItem.name} (Qty: ${procurementForm.quantity}, Wt: ${procurementForm.weight} kg)` : `Purchase: ${selectedItem.name} (${procurementForm.weight} kg)`;
+        // CORRECTED COST FORMULA:
+        const totalCost = isQtyBased && procurementForm.quantity > 0
+            ? procurementForm.quantity * procurementForm.rate
+            : procurementForm.weight * procurementForm.rate;
+
+        const desc = isQtyBased ? `Purchase: ${selectedItem.name} (Qty: ${procurementForm.quantity} ${selectedItem.unit}s, Wt: ${procurementForm.weight} kg)` : `Purchase: ${selectedItem.name} (${procurementForm.weight} kg)`;
 
         const updated: Expense = {
             ...editingExpense,
@@ -561,7 +570,10 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                     }
                                 })()}
                                 <div>
-                                    <label className="block text-[11px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Unit Rate (PKR) <span className="text-red-500">*</span></label>
+                                    <label className="block text-[11px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Rate per {(() => {
+                                        const i = state.feed.find(f => f.id === procurementForm.feedTypeId);
+                                        return i && ['BAG', 'BUNDLE'].includes((i.unit || '').toUpperCase()) ? (i.unit || 'BAG') : 'KG';
+                                    })()} (PKR) <span className="text-red-500">*</span></label>
                                     <input type="number" min={0} value={procurementForm.rate || ''} onChange={e => setProcurementForm({ ...procurementForm, rate: parseFloat(e.target.value) || 0 })} className="w-full border border-slate-200 focus:border-emerald-500 text-sm font-bold text-slate-700 rounded-xl px-4 py-2.5 outline-none" placeholder="0.00" />
                                 </div>
                             </div>
@@ -589,7 +601,11 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                     <div className="absolute top-0 right-0 p-2 opacity-10"><DollarSign size={48} /></div>
                                     <span className="text-[10px] font-black text-emerald-600 uppercase tracking-wider">Total Value</span>
                                     <span className="text-2xl font-black text-emerald-800 mb-3 block">
-                                        PKR {((procurementForm.weight || 0) * (procurementForm.rate || 0)).toLocaleString()}
+                                        PKR {(() => {
+                                            const i = state.feed.find(f => f.id === procurementForm.feedTypeId);
+                                            const isQ = i && ['BAG', 'BUNDLE'].includes((i.unit || '').toUpperCase());
+                                            return (isQ && (procurementForm.quantity || 0) > 0) ? ((procurementForm.quantity || 0) * (procurementForm.rate || 0)).toLocaleString() : ((procurementForm.weight || 0) * (procurementForm.rate || 0)).toLocaleString();
+                                        })()}
                                     </span>
                                     {editingExpense ? (
                                         <button type="button" onClick={handleUpdateExpenseSubmit} className="w-full bg-slate-800 text-white font-bold py-2.5 rounded-xl hover:bg-slate-700 flex items-center justify-center gap-2 shadow-md transition-all z-10"><Save size={16} /> Update</button>
@@ -726,8 +742,11 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                             <input type="number" min={0} value={newItemForm.reorderLevel} onChange={e => setNewItemForm({ ...newItemForm, reorderLevel: parseInt(e.target.value) || 0 })} className="w-full border border-slate-200 focus:border-emerald-500 text-sm font-bold text-slate-700 rounded-xl px-4 py-3 outline-none bg-slate-50 focus:bg-white transition-colors" />
                                         </div>
                                         <div>
-                                            <label className="block text-[11px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Initial Qty (KG)</label>
+                                            <label className="block text-[11px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Total Initial Weight (KG)</label>
                                             <input type="number" min={0} value={newItemForm.quantity} onChange={e => setNewItemForm({ ...newItemForm, quantity: parseFloat(e.target.value) || 0 })} className="w-full border border-slate-200 focus:border-emerald-500 text-sm font-bold text-slate-700 rounded-xl px-4 py-3 outline-none bg-slate-50 focus:bg-white transition-colors disabled:opacity-50" disabled={!!editingItem} title={editingItem ? "Update quantity via Purchase or Usage" : ""} />
+                                            {['BAG', 'BUNDLE'].includes(newItemForm.unit || '') && (
+                                                <p className="text-[9px] text-amber-600 mt-1 font-bold">Enter total KGs, NOT bags. System computes bags dynamically.</p>
+                                            )}
                                         </div>
                                     </div>
                                     <div>
