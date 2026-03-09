@@ -230,6 +230,7 @@ export interface Livestock {
   sireId?: string; // Father
   accumulatedFeedCost?: number;
   accumulatedMedicalCost?: number;
+  deathDate?: string;
 }
 
 export interface AppState {

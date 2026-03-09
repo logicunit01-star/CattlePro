@@ -10,7 +10,7 @@ interface Props {
   state: AppState;
   isGlobalView?: boolean;
   /** When provided, dashboard cards navigate to the given view (and optional Operations tab). */
-  onNavigate?: (view: DashboardView, options?: { operationsTab?: string }) => void;
+  onNavigate?: (view: DashboardView, options?: { operationsTab?: string; filterCategory?: string; }) => void;
 }
 
 const COLORS = ['#059669', '#10B981', '#34D399', '#6EE7B7', '#A7F3D0', '#D1FAE5'];
@@ -18,8 +18,10 @@ const COLORS = ['#059669', '#10B981', '#34D399', '#6EE7B7', '#A7F3D0', '#D1FAE5'
 export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) => {
 
   const [dateFilter, setDateFilter] = React.useState<'7_DAYS' | '30_DAYS' | '90_DAYS' | 'ALL'>('30_DAYS');
+  const [speciesFilter, setSpeciesFilter] = React.useState<'ALL' | 'CATTLE' | 'GOAT'>('ALL');
+  const [healthSort, setHealthSort] = React.useState<'DATE' | 'COST'>('DATE');
 
-  const isDateInRange = (dateStr: string) => {
+  const isDateInRange = (dateStr: string | undefined | null) => {
     if (!dateStr || dateFilter === 'ALL') return true;
     const days = (new Date().getTime() - new Date(dateStr).getTime()) / (1000 * 60 * 60 * 24);
     if (dateFilter === '7_DAYS') return days <= 7;
@@ -28,15 +30,17 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
     return true;
   };
 
+  const filteredLivestock = state.livestock.filter(l => speciesFilter === 'ALL' || l.species === speciesFilter);
+
   const filteredExpenses = state.expenses.filter(e => isDateInRange(e.date));
   const filteredSales = state.sales.filter(s => isDateInRange(s.date));
 
   // --- KPIs ---
-  const activeAnimals = state.livestock.filter(l => l.status === 'ACTIVE');
+  const activeAnimals = filteredLivestock.filter(l => l.status === 'ACTIVE');
   const totalLivestock = activeAnimals.length;
   const cattleCount = activeAnimals.filter(l => l.species === 'CATTLE').length;
   const goatCount = activeAnimals.filter(l => l.species === 'GOAT').length;
-  const farmCount = isGlobalView ? new Set(state.livestock.map(l => l.farmId).filter(Boolean)).size : 1;
+  const farmCount = isGlobalView ? new Set(filteredLivestock.map(l => l.farmId).filter(Boolean)).size : 1;
 
   const totalExpenses = filteredExpenses.reduce((acc, curr) => acc + curr.amount, 0);
   const operatingExpenses = filteredExpenses.filter(e => e.category !== 'INFRASTRUCTURE');
@@ -46,24 +50,28 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
 
   // --- DAIRY METRICS ---
   const todayStr = new Date().toISOString().split('T')[0];
-  const last7Days = Array.from({ length: 7 }, (_, i) => {
+  const chartDaysCount = dateFilter === '7_DAYS' ? 7 : (dateFilter === '30_DAYS' ? 30 : (dateFilter === '90_DAYS' ? 90 : 30));
+  const dateRangeArray = Array.from({ length: chartDaysCount }, (_, i) => {
     const d = new Date();
-    d.setDate(d.getDate() - (6 - i));
+    d.setDate(d.getDate() - (chartDaysCount - 1 - i));
     return d.toISOString().split('T')[0];
   });
 
-  const milkData = last7Days.map(date => {
-    const dailyTotal = state.livestock.reduce((sum, animal) => {
+  const milkData = dateRangeArray.map(date => {
+    const dailyTotal = filteredLivestock.reduce((sum, animal) => {
       const record = animal.milkProductionHistory?.find(r => r.date === date);
       return sum + (record ? record.quantity : 0);
     }, 0);
     return { date: date.slice(5), liters: dailyTotal };
   });
 
-  const totalMilkToday = milkData[milkData.length - 1].liters;
+  const totalMilkToday = filteredLivestock.reduce((sum, animal) => {
+    const record = animal.milkProductionHistory?.find(r => r.date === todayStr);
+    return sum + (record ? record.quantity : 0);
+  }, 0);
 
   // --- UPCOMING TASKS (Vaccinations/Checks due) ---
-  const upcomingTasks = state.livestock.flatMap(animal => {
+  const upcomingTasks = filteredLivestock.flatMap(animal => {
     // Check medical records for nextDueDate
     const medicalTasks = (animal.medicalHistory || [])
       .filter(r => r.nextDueDate && r.nextDueDate >= todayStr)
@@ -102,8 +110,8 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
 
   const avgCostPerAnimal = totalLivestock > 0 ? (totalOperatingExpenses / totalLivestock) : 0;
 
-  const deceasedCount = state.livestock.filter(l => l.status === 'DECEASED').length;
-  const mortalityRate = state.livestock.length > 0 ? (deceasedCount / state.livestock.length) * 100 : 0;
+  const deceasedCount = filteredLivestock.filter(l => l.status === 'DECEASED' && isDateInRange(l.deathDate)).length;
+  const mortalityRate = filteredLivestock.length > 0 ? (deceasedCount / filteredLivestock.length) * 100 : 0;
 
   return (
     <div className="space-y-8 animate-fade-in pb-10">
@@ -122,6 +130,11 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
           {isGlobalView && (
             <span className="inline-block px-3 py-1.5 rounded-lg bg-slate-200 text-slate-700 text-xs font-bold uppercase tracking-wider">All Farms (Global)</span>
           )}
+          <select value={speciesFilter} onChange={e => setSpeciesFilter(e.target.value as any)} className="bg-white border text-sm font-bold text-emerald-700 border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-500 shadow-sm cursor-pointer">
+            <option value="ALL">All Species</option>
+            <option value="CATTLE">Cattle Only</option>
+            <option value="GOAT">Goats Only</option>
+          </select>
           <select value={dateFilter} onChange={e => setDateFilter(e.target.value as any)} className="bg-white border text-sm font-bold text-slate-600 border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-500 shadow-sm cursor-pointer">
             <option value="7_DAYS">Last 7 Days</option>
             <option value="30_DAYS">Last 30 Days</option>
@@ -192,7 +205,7 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex items-center justify-between premium-card relative overflow-hidden">
           <div className="relative z-10">
-            <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Avg Cost Per Animal</p>
+            <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Avg Spend Per Head (Period)</p>
             <h3 className="text-2xl font-black text-slate-800 mt-2 font-display">PKR {avgCostPerAnimal.toLocaleString(undefined, { maximumFractionDigits: 0 })}</h3>
           </div>
           <div className="bg-slate-50 p-4 rounded-xl text-slate-500 shadow-inner">
@@ -226,9 +239,9 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
         <div className="lg:col-span-2 space-y-6">
 
           {/* Milk Production Trend */}
-          <div role="button" tabIndex={0} onClick={() => onNavigate?.('OPERATIONS', { operationsTab: 'FEED' })} onKeyDown={e => e.key === 'Enter' && onNavigate?.('OPERATIONS', { operationsTab: 'FEED' })} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 premium-card cursor-pointer hover:shadow-md transition-shadow">
+          <div role="button" tabIndex={0} onClick={() => onNavigate?.('CATTLE_MANAGER', { filterCategory: 'Dairy' })} onKeyDown={e => e.key === 'Enter' && onNavigate?.('CATTLE_MANAGER', { filterCategory: 'Dairy' })} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 premium-card cursor-pointer hover:shadow-md transition-shadow">
             <div className="flex justify-between items-center mb-6">
-              <h3 className="font-bold text-slate-800 flex items-center gap-2 font-display"><Milk size={20} className="text-sky-500" /> Milk Production Trend (7 Days)</h3>
+              <h3 className="font-bold text-slate-800 flex items-center gap-2 font-display"><Milk size={20} className="text-sky-500" /> Milk Production Trend</h3>
             </div>
             <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
@@ -285,7 +298,7 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
             <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
                 {(() => {
-                  const data = state.livestock.filter(l => isDateInRange(l.purchaseDate || l.dob || '')).reduce((acc, l) => {
+                  const data = filteredLivestock.filter(l => isDateInRange(l.purchaseDate || l.dob || '')).reduce((acc, l) => {
                     const d = (l.purchaseDate || l.dob || '').slice(0, 7) || 'Unknown'; // YYYY-MM
                     if (d === 'Unknown') return acc;
                     const existing = acc.find(x => x.month === d);
@@ -319,7 +332,7 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
             <div className="h-48">
               <ResponsiveContainer width="100%" height="100%">
                 {(() => {
-                  const heatData = state.livestock.flatMap(l => l.medicalHistory).filter(m => m.type === 'TREATMENT' && isDateInRange(m.date)).reduce((acc, m) => {
+                  const heatData = filteredLivestock.flatMap(l => l.medicalHistory).filter(m => (m.type === 'TREATMENT' || m.type === 'CHECKUP') && isDateInRange(m.date)).reduce((acc, m) => {
                     const d = m.date.slice(5); // MM-DD
                     const existing = acc.find(x => x.date === d);
                     if (existing) existing.count += 1;
@@ -374,18 +387,23 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
             </div>
 
             <div role="button" tabIndex={0} onClick={() => onNavigate?.('OPERATIONS', { operationsTab: 'FEED' })} onKeyDown={e => e.key === 'Enter' && onNavigate?.('OPERATIONS', { operationsTab: 'FEED' })} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 premium-card cursor-pointer hover:shadow-md transition-shadow">
-              <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2 font-display"><DollarSign size={20} className="text-blue-500" /> Monthly Feed Costs</h3>
+              <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2 font-display"><DollarSign size={20} className="text-blue-500" /> Filtered Feed Costs</h3>
               <div className="h-48">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={[
-                    { name: 'Last Month', cost: state.expenses.filter(e => e.category === 'FEED' && new Date(e.date).getMonth() === new Date().getMonth() - 1).reduce((a, b) => a + b.amount, 0) },
-                    { name: 'This Month', cost: state.expenses.filter(e => e.category === 'FEED' && new Date(e.date).getMonth() === new Date().getMonth()).reduce((a, b) => a + b.amount, 0) }
-                  ]}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                    <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 12 }} />
-                    <Tooltip cursor={{ fill: '#f8fafc' }} contentStyle={{ borderRadius: '8px', border: 'none' }} />
-                    <Bar dataKey="cost" fill="#3b82f6" radius={[4, 4, 0, 0]} barSize={40} />
-                  </BarChart>
+                  {(() => {
+                    const mappedData = dateRangeArray.map(date => {
+                      const dailyCost = filteredExpenses.filter(e => e.category === 'FEED' && e.date === date).reduce((sum, e) => sum + e.amount, 0);
+                      return { date: date.slice(5), FeedCost: dailyCost };
+                    });
+                    return (
+                      <BarChart data={mappedData}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                        <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#94a3b8' }} />
+                        <Tooltip cursor={{ fill: '#f8fafc' }} contentStyle={{ borderRadius: '8px', border: 'none' }} />
+                        <Bar dataKey="FeedCost" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    );
+                  })()}
                 </ResponsiveContainer>
               </div>
             </div>
@@ -428,13 +446,21 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
           </div>
 
           {/* Quick Actions (Visual Only) */}
-          <div role="button" tabIndex={0} onClick={() => onNavigate?.('CATTLE_MANAGER')} onKeyDown={e => e.key === 'Enter' && onNavigate?.('CATTLE_MANAGER')} className="bg-gradient-to-br from-emerald-600 to-teal-700 p-6 rounded-2xl shadow-lg text-white cursor-pointer hover:shadow-xl transition-shadow">
+          <div role="button" tabIndex={0} onClick={() => onNavigate?.('CATTLE_MANAGER')} onKeyDown={e => e.key === 'Enter' && onNavigate?.('CATTLE_MANAGER')} className="bg-gradient-to-br from-emerald-600 to-teal-700 p-6 rounded-2xl shadow-lg text-white cursor-pointer hover:shadow-xl transition-shadow relative overflow-hidden">
             <h3 className="font-bold text-lg mb-2">Farm Health Score</h3>
-            <div className="text-5xl font-black mb-2">98<span className="text-2xl opacity-60">%</span></div>
-            <p className="text-emerald-100 text-sm mb-6">Based on mortality, vaccination coverage, and growth rates.</p>
-            <div className="h-2 bg-black/20 rounded-full overflow-hidden">
-              <div className="h-full bg-emerald-300 w-[98%]"></div>
-            </div>
+            {(() => {
+              const sickRatio = filteredLivestock.length > 0 ? filteredLivestock.filter(l => l.status === 'SICK').length / filteredLivestock.length : 0;
+              const score = Math.max(0, Math.round(100 - (mortalityRate * 2) - (sickRatio * 100 * 1.5)));
+              return (
+                <>
+                  <div className="text-5xl font-black mb-2">{score}<span className="text-2xl opacity-60">%</span></div>
+                  <p className="text-emerald-100 text-sm mb-6">Based on mortality, illness prevalence, and vitality.</p>
+                  <div className="h-2 bg-black/20 rounded-full overflow-hidden">
+                    <div className="h-full bg-emerald-300 transition-all duration-1000" style={{ width: `${score}%` }}></div>
+                  </div>
+                </>
+              );
+            })()}
           </div>
         </div>
       </div>
@@ -453,11 +479,11 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* PRODUCTION ANALYTICS */}
-          <div role="button" tabIndex={0} onClick={() => onNavigate?.('CATTLE_MANAGER')} onKeyDown={e => e.key === 'Enter' && onNavigate?.('CATTLE_MANAGER')} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 premium-card cursor-pointer hover:shadow-md transition-shadow">
+          <div role="button" tabIndex={0} onClick={() => onNavigate?.('CATTLE_MANAGER', { filterCategory: 'Dairy' })} onKeyDown={e => e.key === 'Enter' && onNavigate?.('CATTLE_MANAGER', { filterCategory: 'Dairy' })} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 premium-card cursor-pointer hover:shadow-md transition-shadow">
             <div className="flex justify-between items-center mb-4">
               <h3 className="font-bold text-slate-800 flex items-center gap-2 font-display">
                 <Milk size={20} className="text-sky-500" />
-                Top Milk Producers (7 Days)
+                Top Milk Producers (Period)
               </h3>
             </div>
             <div className="overflow-x-auto">
@@ -471,13 +497,13 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-50">
-                  {state.livestock
+                  {filteredLivestock
                     .filter(a => a.milkProductionHistory && a.milkProductionHistory.length > 0)
                     .map(animal => {
-                      // Calculate 7 day stats
-                      const last7 = animal.milkProductionHistory?.filter(m => m.date >= last7Days[0]) || [];
-                      const total = last7.reduce((sum, r) => sum + r.quantity, 0);
-                      const avg = last7.length ? total / last7.length : 0;
+                      // Calculate stats for current period
+                      const periodRecords = animal.milkProductionHistory?.filter(m => isDateInRange(m.date)) || [];
+                      const total = periodRecords.reduce((sum, r) => sum + r.quantity, 0);
+                      const avg = periodRecords.length ? total / periodRecords.length : 0;
                       return { ...animal, stats: { total, avg } };
                     })
                     .sort((a, b) => b.stats.total - a.stats.total)
@@ -497,17 +523,22 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
           </div>
 
           {/* HEALTH ANALYTICS */}
-          <div role="button" tabIndex={0} onClick={() => onNavigate?.('CATTLE_MANAGER')} onKeyDown={e => e.key === 'Enter' && onNavigate?.('CATTLE_MANAGER')} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 premium-card cursor-pointer hover:shadow-md transition-shadow">
+          <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 premium-card">
             <div className="flex justify-between items-center mb-4">
               <h3 className="font-bold text-slate-800 flex items-center gap-2 font-display">
                 <Activity size={20} className="text-red-500" />
                 Recent Health Events
               </h3>
+              <select value={healthSort} onChange={e => setHealthSort(e.target.value as any)} className="bg-slate-50 border border-slate-200 text-xs font-bold text-slate-600 rounded drop-shadow-sm px-2 py-1 focus:outline-none">
+                <option value="DATE">Latest</option>
+                <option value="COST">Highest Cost</option>
+              </select>
             </div>
             <div className="space-y-3">
-              {state.livestock
+              {filteredLivestock
                 .flatMap(l => l.medicalHistory.map(m => ({ ...m, animalTag: l.tagId, animalId: l.id })))
-                .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+                .filter(m => isDateInRange(m.date))
+                .sort((a, b) => healthSort === 'DATE' ? (new Date(b.date).getTime() - new Date(a.date).getTime()) : ((b.cost || 0) - (a.cost || 0)))
                 .slice(0, 5)
                 .map((event, idx) => (
                   <div key={idx} className="flex items-start gap-3 p-3 rounded-xl border border-slate-100 hover:bg-slate-50 transition-colors">
