@@ -327,10 +327,11 @@ export const backendService = {
         });
         return handleResponse(res);
     },
-    reverseFeedLedger: async (id: string): Promise<ProcessedFeedLedger> => {
-        const res = await fetch(`${API_BASE_URL}/operations/feed-ledgers/${encodeURIComponent(id)}/reverse`, {
+    updateFeedLedger: async (id: string, ledger: ProcessedFeedLedger): Promise<ProcessedFeedLedger> => {
+        const res = await fetch(`${API_BASE_URL}/operations/feed-ledgers/${id}`, {
             method: 'PUT',
-            headers: apiHeaders(),
+            headers: apiHeaders(true),
+            body: JSON.stringify(ledger),
         });
         return handleResponse(res);
     },

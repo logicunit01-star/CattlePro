@@ -612,6 +612,7 @@ const App: React.FC = () => {
         const animal = livestockUpdates.get(id);
         if (animal) await backendService.updateLivestock(id, animal);
       }
+      await backendService.updateFeedLedger(ledgerId, { ...ledger, status: 'REVERSED' });
 
       // Reversal Accounting (Task 3 Fix)
       // Find the feed expense for exactly this date that matches our unified feed expense
