@@ -176,11 +176,11 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
         try {
             await onAddExpense(expense);
 
-            // Auto-update inventory
+            // Auto-update inventory (Keep unitCost native to the Unit e.g. Per Bag)
             onUpdateInventory({
                 ...selectedItem,
-                quantity: selectedItem.quantity + addedValue,
-                unitCost: isQtyBased && procurementForm.weight > 0 ? (totalCost / procurementForm.weight) : procurementForm.rate, // Track precise cost per KG centrally
+                quantity: selectedItem.quantity + (isQtyBased ? procurementForm.quantity : addedValue),
+                unitCost: procurementForm.rate,
                 defaultSupplier: procurementForm.vendorId !== CASH_LABEL ? procurementForm.vendorId : selectedItem.defaultSupplier
             });
 
@@ -240,15 +240,14 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
             let prevAddedValue = 0;
 
             if (prevItem) {
-                prevAddedValue = editingExpense.weight || 0;
-                const newRatePerKg = isQtyBased && procurementForm.weight > 0 ? (totalCost / procurementForm.weight) : procurementForm.rate;
+                prevAddedValue = isQtyBased ? (editingExpense.quantity || 0) : (editingExpense.weight || 0);
 
                 // If it's modifying the exact same item ID
                 if (prevItem.id === selectedItem.id) {
                     onUpdateInventory({
                         ...selectedItem,
-                        quantity: selectedItem.quantity - prevAddedValue + newAddedValue,
-                        unitCost: newRatePerKg,
+                        quantity: selectedItem.quantity - prevAddedValue + (isQtyBased ? procurementForm.quantity : newAddedValue),
+                        unitCost: procurementForm.rate,
                         defaultSupplier: procurementForm.vendorId !== CASH_LABEL ? procurementForm.vendorId : selectedItem.defaultSupplier
                     });
                 } else {
@@ -256,18 +255,17 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                     onUpdateInventory({ ...prevItem, quantity: prevItem.quantity - prevAddedValue });
                     onUpdateInventory({
                         ...selectedItem,
-                        quantity: selectedItem.quantity + newAddedValue,
-                        unitCost: newRatePerKg,
+                        quantity: selectedItem.quantity + (isQtyBased ? procurementForm.quantity : newAddedValue),
+                        unitCost: procurementForm.rate,
                         defaultSupplier: procurementForm.vendorId !== CASH_LABEL ? procurementForm.vendorId : selectedItem.defaultSupplier
                     });
                 }
             } else {
-                const newRatePerKg = isQtyBased && procurementForm.weight > 0 ? (totalCost / procurementForm.weight) : procurementForm.rate;
                 // If it was somehow not linked accurately before, just add to the new item
                 onUpdateInventory({
                     ...selectedItem,
-                    quantity: selectedItem.quantity + newAddedValue,
-                    unitCost: newRatePerKg,
+                    quantity: selectedItem.quantity + (isQtyBased ? procurementForm.quantity : newAddedValue),
+                    unitCost: procurementForm.rate,
                     defaultSupplier: procurementForm.vendorId !== CASH_LABEL ? procurementForm.vendorId : selectedItem.defaultSupplier
                 });
             }
@@ -742,15 +740,12 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                             <input type="number" min={0} value={newItemForm.reorderLevel} onChange={e => setNewItemForm({ ...newItemForm, reorderLevel: parseInt(e.target.value) || 0 })} className="w-full border border-slate-200 focus:border-emerald-500 text-sm font-bold text-slate-700 rounded-xl px-4 py-3 outline-none bg-slate-50 focus:bg-white transition-colors" />
                                         </div>
                                         <div>
-                                            <label className="block text-[11px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Total Initial Weight (KG)</label>
+                                            <label className="block text-[11px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Initial Stock ({newItemForm.unit})</label>
                                             <input type="number" min={0} value={newItemForm.quantity} onChange={e => setNewItemForm({ ...newItemForm, quantity: parseFloat(e.target.value) || 0 })} className="w-full border border-slate-200 focus:border-emerald-500 text-sm font-bold text-slate-700 rounded-xl px-4 py-3 outline-none bg-slate-50 focus:bg-white transition-colors disabled:opacity-50" disabled={!!editingItem} title={editingItem ? "Update quantity via Purchase or Usage" : ""} />
-                                            {['BAG', 'BUNDLE'].includes(newItemForm.unit || '') && (
-                                                <p className="text-[9px] text-amber-600 mt-1 font-bold">Enter total KGs, NOT bags. System computes bags dynamically.</p>
-                                            )}
                                         </div>
                                     </div>
                                     <div>
-                                        <label className="block text-[11px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Base Rate (PKR / KG)</label>
+                                        <label className="block text-[11px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Base Rate (PKR / {newItemForm.unit})</label>
                                         <input type="number" min={0} value={newItemForm.unitCost} onChange={e => setNewItemForm({ ...newItemForm, unitCost: parseFloat(e.target.value) || 0 })} className="w-full border border-slate-200 focus:border-emerald-500 text-sm font-bold text-slate-700 rounded-xl px-4 py-3 outline-none bg-slate-50 focus:bg-white transition-colors" />
                                     </div>
                                 </div>
@@ -793,11 +788,11 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                             <div className="flex flex-col mt-0.5">
                                                 <div className="flex items-end gap-1.5">
                                                     <span className={`text-2xl font-black ${isLow ? 'text-red-500' : 'text-slate-800'}`}>{item.quantity.toLocaleString()}</span>
-                                                    <span className="text-sm font-bold text-slate-500 pb-0.5">KG</span>
+                                                    <span className="text-sm font-bold text-slate-500 pb-0.5 uppercase">{item.unit || 'KG'}</span>
                                                 </div>
                                                 {['BAG', 'BUNDLE'].includes((item.unit || '').toUpperCase()) && item.weightPerUnit && item.weightPerUnit > 0 && (
                                                     <p className="text-xs font-bold text-slate-400 mt-1 bg-slate-100 px-2 py-0.5 rounded-md inline-block w-fit">
-                                                        ≈ {(item.quantity / item.weightPerUnit).toFixed(1)} {item.unit}s
+                                                        ≈ {(item.quantity * item.weightPerUnit).toLocaleString()} KG Total
                                                     </p>
                                                 )}
                                             </div>
