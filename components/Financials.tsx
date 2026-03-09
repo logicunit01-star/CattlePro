@@ -1,7 +1,7 @@
-
 import React, { useState, useMemo } from 'react';
 import { Expense, ExpenseCategory, Sale, Livestock, Entity, Farm, Infrastructure } from '../types';
-import { Plus, DollarSign, Truck, Wrench, Syringe, Briefcase, Home, Stethoscope, Dna, ArrowLeft, Trash2, Store, User, Share2, AlertTriangle, Building2, BookOpen, Activity } from 'lucide-react';
+import { Plus, DollarSign, Truck, Wrench, Syringe, Briefcase, Home, Stethoscope, Dna, ArrowLeft, Trash2, Store, User, Share2, AlertTriangle, Building2, BookOpen, Activity, Search, Filter, ArrowUpDown, PieChart as PieChartIcon, LineChart as LineChartIcon, CheckCircle2 } from 'lucide-react';
+import { PieChart, Pie, Cell, Tooltip as RechartsTooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
 
 interface Props {
     expenses: Expense[];
@@ -14,6 +14,7 @@ interface Props {
     currentFarmId?: string | null;
     currentLocationId?: string | null;
     onAddExpense: (e: Expense) => void | Promise<void>;
+    onUpdateExpense?: (e: Expense) => void | Promise<void>;
     onAddSale: (s: Sale) => void;
     onDeleteExpense: (id: string) => void;
     onDeleteSale: (id: string) => void;
@@ -21,9 +22,44 @@ interface Props {
 
 type FinancialView = 'LIST' | 'ADD_EXPENSE' | 'ADD_SALE';
 
-export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [], entities, infrastructure = [], farms = [], locations = [], currentFarmId, currentLocationId, onAddExpense, onAddSale, onDeleteExpense, onDeleteSale }) => {
+export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [], entities, infrastructure = [], farms = [], locations = [], currentFarmId, currentLocationId, onAddExpense, onUpdateExpense, onAddSale, onDeleteExpense, onDeleteSale }) => {
     const [activeTab, setActiveTab] = useState<'EXPENSES' | 'SALES' | 'LEDGER'>('EXPENSES');
+    const [expenseTab, setExpenseTab] = useState<'LIST' | 'DASHBOARD' | 'VENDOR_BILLS'>('LIST');
     const [viewMode, setViewMode] = useState<FinancialView>('LIST');
+    const [dateFilter, setDateFilter] = useState<'7_DAYS' | '30_DAYS' | '90_DAYS' | 'THIS_MONTH' | 'LAST_MONTH' | 'ALL'>('ALL');
+    const [searchTerm, setSearchTerm] = useState('');
+    const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' }>({ key: 'date', direction: 'desc' });
+    const [expandedVendors, setExpandedVendors] = useState<string[]>([]);
+
+    const toggleVendor = (id: string) => setExpandedVendors(prev => prev.includes(id) ? prev.filter(v => v !== id) : [...prev, id]);
+
+    const isDateInRange = (dateStr: string | undefined | null) => {
+        if (!dateStr || dateFilter === 'ALL') return true;
+        const days = (new Date().getTime() - new Date(dateStr).getTime()) / (1000 * 60 * 60 * 24);
+        if (dateFilter === '7_DAYS') return days <= 7;
+        if (dateFilter === '30_DAYS') return days <= 30;
+        if (dateFilter === '90_DAYS') return days <= 90;
+        if (dateFilter === 'THIS_MONTH') {
+            const d = new Date(dateStr);
+            const today = new Date();
+            return d.getMonth() === today.getMonth() && d.getFullYear() === today.getFullYear();
+        }
+        if (dateFilter === 'LAST_MONTH') {
+            const d = new Date(dateStr);
+            const today = new Date();
+            const lastMonth = today.getMonth() === 0 ? 11 : today.getMonth() - 1;
+            const year = today.getMonth() === 0 ? today.getFullYear() - 1 : today.getFullYear();
+            return d.getMonth() === lastMonth && d.getFullYear() === year;
+        }
+        return true;
+    };
+
+    const handleSort = (key: string) => {
+        setSortConfig(prev => ({
+            key,
+            direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc'
+        }));
+    };
 
     const ledgerEntries = useMemo(() => {
         const entries = [
@@ -47,11 +83,11 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
             }))
         ];
 
-        // Sort by date chronological (oldest to newest for running balance)
+        // Sort by date chronological (oldest to newest for running balance calculation)
         entries.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
         let balance = 0;
-        return entries.map(entry => {
+        const fullyCalculated = entries.map(entry => {
             if (entry.type === 'SALE') {
                 balance += entry.amount;
             } else {
@@ -59,7 +95,38 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
             }
             return { ...entry, balance };
         }).reverse(); // Reverse back for latest first
-    }, [expenses, sales]);
+
+        // Filter the pre-calculated ledger for display based on search and date
+        return fullyCalculated.filter(entry => {
+            const matchesDate = isDateInRange(entry.date);
+            const matchesSearch = searchTerm ? entry.description.toLowerCase().includes(searchTerm.toLowerCase()) || entry.type.toLowerCase().includes(searchTerm.toLowerCase()) : true;
+            return matchesDate && matchesSearch;
+        });
+    }, [expenses, sales, dateFilter, searchTerm]);
+
+    const filteredExpenses = useMemo(() => {
+        return expenses.filter(e => {
+            const matchesDate = isDateInRange(e.date);
+            const matchesSearch = searchTerm ? (e.description?.toLowerCase().includes(searchTerm.toLowerCase()) || e.supplier?.toLowerCase().includes(searchTerm.toLowerCase()) || e.category.toLowerCase().includes(searchTerm.toLowerCase())) : true;
+            return matchesDate && matchesSearch;
+        }).sort((a, b) => {
+            if (sortConfig.key === 'date') return sortConfig.direction === 'asc' ? new Date(a.date).getTime() - new Date(b.date).getTime() : new Date(b.date).getTime() - new Date(a.date).getTime();
+            if (sortConfig.key === 'amount') return sortConfig.direction === 'asc' ? a.amount - b.amount : b.amount - a.amount;
+            return 0;
+        });
+    }, [expenses, dateFilter, searchTerm, sortConfig]);
+
+    const filteredSales = useMemo(() => {
+        return sales.filter(s => {
+            const matchesDate = isDateInRange(s.date);
+            const matchesSearch = searchTerm ? (s.buyer?.toLowerCase().includes(searchTerm.toLowerCase()) || s.description?.toLowerCase().includes(searchTerm.toLowerCase()) || s.itemType.toLowerCase().includes(searchTerm.toLowerCase())) : true;
+            return matchesDate && matchesSearch;
+        }).sort((a, b) => {
+            if (sortConfig.key === 'date') return sortConfig.direction === 'asc' ? new Date(a.date).getTime() - new Date(b.date).getTime() : new Date(b.date).getTime() - new Date(a.date).getTime();
+            if (sortConfig.key === 'amount') return sortConfig.direction === 'asc' ? a.amount - b.amount : b.amount - a.amount;
+            return 0;
+        });
+    }, [sales, dateFilter, searchTerm, sortConfig]);
 
     const scopeLabel = currentFarmId
         ? farms.find(f => f.id === currentFarmId)?.name || 'Selected farm'
@@ -104,7 +171,9 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
             description: newExpense.description,
             location: newExpense.location,
             relatedAnimalId: newExpense.relatedAnimalId,
-            supplier: newExpense.supplier
+            supplier: newExpense.supplier,
+            paymentStatus: newExpense.supplier ? 'PENDING' : 'PAID', // Default to pending if vendor selected
+            amountPaid: 0
         };
         try {
             await onAddExpense(expense);
@@ -172,8 +241,8 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
         setLivestockSaleMode('SINGLE');
     };
 
-    const totalExpenses = expenses.reduce((sum, e) => sum + e.amount, 0);
-    const totalSales = sales.reduce((sum, s) => sum + s.amount, 0);
+    const totalExpensesCalc = filteredExpenses.reduce((sum, e) => sum + e.amount, 0);
+    const totalSalesCalc = filteredSales.reduce((sum, s) => sum + s.amount, 0);
 
     const saleTypeLabel = (itemType: string) => {
         switch (itemType) {
@@ -202,6 +271,8 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
         if (type === 'MILK') return sale.quantity != null ? `${sale.quantity} L` : '—';
         return '—';
     };
+
+    const COLORS = ['#059669', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316'];
 
     // RENDER
     if (viewMode === 'ADD_EXPENSE') {
@@ -403,49 +474,76 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                 <h2 className="text-3xl font-extrabold text-slate-800 tracking-tight font-display">Financial Management</h2>
                 <div className="flex gap-4 w-full md:w-auto">
                     <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex-1 md:w-40 premium-card">
-                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Total Revenue</p>
-                        <p className="text-xl font-extrabold text-emerald-600">PKR {totalSales.toLocaleString()}</p>
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Filtered Revenue</p>
+                        <p className="text-xl font-extrabold text-emerald-600">PKR {totalSalesCalc.toLocaleString()}</p>
                     </div>
                     <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex-1 md:w-40 premium-card">
-                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Total Expenses</p>
-                        <p className="text-xl font-extrabold text-red-500">PKR {totalExpenses.toLocaleString()}</p>
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Filtered Expenses</p>
+                        <p className="text-xl font-extrabold text-red-500">PKR {totalExpensesCalc.toLocaleString()}</p>
                     </div>
-                    <div className={`p-4 rounded-2xl shadow-lg flex-1 md:w-48 text-white ${(totalSales - totalExpenses) >= 0 ? 'bg-gradient-to-br from-emerald-500 to-teal-600 shadow-emerald-200' : 'bg-gradient-to-br from-red-500 to-pink-600 shadow-red-200'}`}>
-                        <p className="text-[10px] font-bold text-white/80 uppercase tracking-widest mb-1">Net Profit</p>
-                        <p className="text-2xl font-extrabold">PKR {(totalSales - totalExpenses).toLocaleString()}</p>
+                    <div className={`p-4 rounded-2xl shadow-lg flex-1 md:w-48 text-white ${(totalSalesCalc - totalExpensesCalc) >= 0 ? 'bg-gradient-to-br from-emerald-500 to-teal-600 shadow-emerald-200' : 'bg-gradient-to-br from-red-500 to-pink-600 shadow-red-200'}`}>
+                        <p className="text-[10px] font-bold text-white/80 uppercase tracking-widest mb-1">Filtered Profit</p>
+                        <p className="text-2xl font-extrabold">PKR {(totalSalesCalc - totalExpensesCalc).toLocaleString()}</p>
                     </div>
                 </div>
             </div>
 
-            {/* Navigation Tabs */}
-            <div className="flex bg-slate-100/50 p-1.5 rounded-xl gap-2 w-full md:w-fit mb-6">
-                <button
-                    onClick={() => setActiveTab('EXPENSES')}
-                    className={`flex-1 md:flex-none px-6 py-2.5 rounded-lg text-sm font-bold transition-all ${activeTab === 'EXPENSES'
-                        ? 'bg-white text-slate-800 shadow-sm ring-1 ring-slate-200'
-                        : 'text-slate-400 hover:text-slate-600 hover:bg-slate-200/50'
-                        }`}
-                >
-                    Expenses & Operations
-                </button>
-                <button
-                    onClick={() => setActiveTab('SALES')}
-                    className={`flex-1 md:flex-none px-6 py-2.5 rounded-lg text-sm font-bold transition-all ${activeTab === 'SALES'
-                        ? 'bg-white text-slate-800 shadow-sm ring-1 ring-slate-200'
-                        : 'text-slate-400 hover:text-slate-600 hover:bg-slate-200/50'
-                        }`}
-                >
-                    Sales & Revenue
-                </button>
-                <button
-                    onClick={() => setActiveTab('LEDGER')}
-                    className={`flex-1 md:flex-none px-6 py-2.5 rounded-lg text-sm font-bold transition-all flex items-center justify-center gap-2 ${activeTab === 'LEDGER'
-                        ? 'bg-white text-slate-800 shadow-sm ring-1 ring-slate-200'
-                        : 'text-slate-400 hover:text-slate-600 hover:bg-slate-200/50'
-                        }`}
-                >
-                    <BookOpen size={16} /> Ledger View
-                </button>
+            {/* Advanced Filters and Navigation */}
+            <div className="flex flex-col md:flex-row justify-between items-center gap-4 bg-white p-4 rounded-2xl shadow-sm border border-slate-100 mb-6">
+                <div className="flex bg-slate-100/50 p-1.5 rounded-xl gap-2 w-full md:w-fit">
+                    <button
+                        onClick={() => setActiveTab('EXPENSES')}
+                        className={`flex-1 md:flex-none px-6 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'EXPENSES'
+                            ? 'bg-white text-slate-800 shadow-sm ring-1 ring-slate-200'
+                            : 'text-slate-400 hover:text-slate-600 hover:bg-slate-200/50'
+                            }`}
+                    >
+                        Expenses
+                    </button>
+                    <button
+                        onClick={() => setActiveTab('SALES')}
+                        className={`flex-1 md:flex-none px-6 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'SALES'
+                            ? 'bg-white text-slate-800 shadow-sm ring-1 ring-slate-200'
+                            : 'text-slate-400 hover:text-slate-600 hover:bg-slate-200/50'
+                            }`}
+                    >
+                        Sales
+                    </button>
+                    <button
+                        onClick={() => setActiveTab('LEDGER')}
+                        className={`flex-1 md:flex-none px-6 py-2 rounded-lg text-sm font-bold transition-all flex items-center justify-center gap-2 ${activeTab === 'LEDGER'
+                            ? 'bg-white text-slate-800 shadow-sm ring-1 ring-slate-200'
+                            : 'text-slate-400 hover:text-slate-600 hover:bg-slate-200/50'
+                            }`}
+                    >
+                        <BookOpen size={16} /> Ledger
+                    </button>
+                </div>
+
+                <div className="flex items-center gap-3 w-full md:w-auto">
+                    <div className="relative flex-1 md:w-64">
+                        <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                        <input
+                            type="text"
+                            placeholder="Search records..."
+                            value={searchTerm}
+                            onChange={e => setSearchTerm(e.target.value)}
+                            className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white transition-all font-medium"
+                        />
+                    </div>
+                    <select
+                        value={dateFilter}
+                        onChange={e => setDateFilter(e.target.value as any)}
+                        className="bg-slate-50 border border-slate-200 text-sm font-bold text-slate-600 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer"
+                    >
+                        <option value="ALL">All Time</option>
+                        <option value="THIS_MONTH">This Month</option>
+                        <option value="LAST_MONTH">Last Month</option>
+                        <option value="7_DAYS">Last 7 Days</option>
+                        <option value="30_DAYS">Last 30 Days</option>
+                        <option value="90_DAYS">Last 90 Days</option>
+                    </select>
+                </div>
             </div>
 
             {activeTab === 'SALES' && !currentFarmId && !currentLocationId && (
@@ -457,7 +555,12 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
 
             {activeTab === 'EXPENSES' ? (
                 <div className="space-y-4 animate-fade-in">
-                    <div className="flex justify-end">
+                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-2">
+                        <div className="flex bg-white border border-slate-200 p-1 rounded-xl shadow-sm text-sm">
+                            <button onClick={() => setExpenseTab('LIST')} className={`px-4 py-1.5 rounded-lg font-bold transition-all ${expenseTab === 'LIST' ? 'bg-slate-100 text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}>Records</button>
+                            <button onClick={() => setExpenseTab('DASHBOARD')} className={`px-4 py-1.5 rounded-lg font-bold transition-all flex items-center gap-1 ${expenseTab === 'DASHBOARD' ? 'bg-emerald-50 text-emerald-700' : 'text-slate-500 hover:text-slate-700'}`}><PieChartIcon size={16} /> Reports</button>
+                            <button onClick={() => setExpenseTab('VENDOR_BILLS')} className={`px-4 py-1.5 rounded-lg font-bold transition-all flex items-center gap-1 ${expenseTab === 'VENDOR_BILLS' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:text-slate-700'}`}><Store size={16} /> Payables & Bills</button>
+                        </div>
                         <button
                             onClick={() => setViewMode('ADD_EXPENSE')}
                             className="flex items-center gap-2 text-sm font-bold text-white bg-gradient-to-r from-emerald-500 to-teal-600 px-5 py-2.5 rounded-xl hover:shadow-lg hover:-translate-y-0.5 transition-all shadow-emerald-200 shadow-md"
@@ -465,58 +568,267 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                             <Plus size={18} /> Log Expense
                         </button>
                     </div>
-                    <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-                        <div className="overflow-x-auto">
-                            <table className="min-w-full divide-y divide-gray-200">
-                                <thead className="bg-gray-50">
-                                    <tr>
-                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
-                                        {showFarmColumn && <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Farm</th>}
-                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Category</th>
-                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Description</th>
-                                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Amount</th>
-                                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="bg-white divide-y divide-gray-200">
-                                    {expenses.map((expense) => (
-                                        <tr key={expense.id} className="hover:bg-gray-50">
-                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{expense.date}</td>
-                                            {showFarmColumn && <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-700">{getFarmName(expense.farmId)}</td>}
-                                            <td className="px-6 py-4 whitespace-nowrap text-sm">
-                                                <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium ${expense.category === ExpenseCategory.VACCINE ? 'bg-blue-100 text-blue-800' : expense.category === ExpenseCategory.MEDICAL ? 'bg-orange-100 text-orange-800' : expense.category === ExpenseCategory.BREEDING ? 'bg-pink-100 text-pink-800' : 'bg-gray-100 text-gray-800'}`}>
-                                                    {getCategoryIcon(expense.category)}
-                                                    {expense.category}
-                                                </span>
-                                            </td>
-                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-800">{expense.description}</td>
-                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-right font-bold text-gray-800">
-                                                PKR {expense.amount.toLocaleString()}
-                                            </td>
-                                            <td className="px-6 py-4 whitespace-nowrap text-right">
-                                                <button
-                                                    onClick={() => { if (confirm('Delete this expense?')) onDeleteExpense(expense.id); }}
-                                                    className="p-1.5 rounded-lg text-gray-400 hover:bg-red-50 hover:text-red-600 transition-colors"
-                                                    title="Delete"
-                                                >
-                                                    <Trash2 size={16} />
-                                                </button>
-                                            </td>
-                                        </tr>
+
+                    {expenseTab === 'DASHBOARD' && (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-fade-in">
+                            {/* Expense By Category */}
+                            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 premium-card">
+                                <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2 font-display"><PieChartIcon size={20} className="text-emerald-500" /> Expenses by Category (Filtered)</h3>
+                                <div className="h-64 mb-4">
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        {(() => {
+                                            const categoryData = filteredExpenses.reduce((acc, curr) => {
+                                                const existing = acc.find(x => x.name === curr.category);
+                                                if (existing) existing.value += curr.amount;
+                                                else acc.push({ name: curr.category, value: curr.amount });
+                                                return acc;
+                                            }, [] as any[]).sort((a, b) => b.value - a.value);
+
+                                            return (
+                                                <PieChart>
+                                                    <Pie data={categoryData} cx="50%" cy="50%" innerRadius={60} outerRadius={80} paddingAngle={5} dataKey="value" stroke="none">
+                                                        {categoryData.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />)}
+                                                    </Pie>
+                                                    <RechartsTooltip formatter={(value: number) => `PKR ${value.toLocaleString()}`} contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} />
+                                                </PieChart>
+                                            )
+                                        })()}
+                                    </ResponsiveContainer>
+                                </div>
+                                <div className="grid grid-cols-2 gap-2 text-xs">
+                                    {filteredExpenses.reduce((acc, curr) => {
+                                        const existing = acc.find(x => x.name === curr.category);
+                                        if (existing) existing.value += curr.amount;
+                                        else acc.push({ name: curr.category, value: curr.amount });
+                                        return acc;
+                                    }, [] as any[]).sort((a, b) => b.value - a.value).slice(0, 6).map((cat, idx) => (
+                                        <div key={idx} className="flex justify-between p-1">
+                                            <span className="text-slate-600 font-bold flex items-center gap-1"><div className="w-2 h-2 rounded-full" style={{ backgroundColor: COLORS[idx % COLORS.length] }}></div> {cat.name}</span>
+                                            <span className="font-black">{(cat.value / totalExpensesCalc * 100).toFixed(1)}%</span>
+                                        </div>
                                     ))}
-                                    {expenses.length === 0 && (
-                                        <tr>
-                                            <td colSpan={showFarmColumn ? 6 : 5} className="text-center py-16 bg-slate-50/50">
-                                                <Activity className="mx-auto mb-4 opacity-30 text-red-500" size={48} />
-                                                <p className="font-bold text-slate-600 text-lg">No expenses recorded yet</p>
-                                                <p className="text-sm text-slate-400 mt-1">Click the 'Log Expense' button to register an expense.</p>
-                                            </td>
-                                        </tr>
-                                    )}
-                                </tbody>
-                            </table>
+                                </div>
+                            </div>
+
+                            {/* Expenses Trend Date-Wise */}
+                            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 premium-card">
+                                <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2 font-display"><LineChartIcon size={20} className="text-blue-500" /> Daily Expense Trend</h3>
+                                <div className="h-64">
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        {(() => {
+                                            const dateData = filteredExpenses.reduce((acc, curr) => {
+                                                const existing = acc.find(x => x.date === curr.date.substring(5)); // MM-DD
+                                                if (existing) existing.cost += curr.amount;
+                                                else acc.push({ date: curr.date.substring(5), fullDate: curr.date, cost: curr.amount });
+                                                return acc;
+                                            }, [] as any[]).sort((a, b) => new Date(a.fullDate).getTime() - new Date(b.fullDate).getTime());
+
+                                            return (
+                                                <BarChart data={dateData}>
+                                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                                                    <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#94a3b8', fontWeight: 'bold' }} />
+                                                    <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#94a3b8', fontWeight: 'bold' }} />
+                                                    <RechartsTooltip cursor={{ fill: '#f8fafc' }} contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} />
+                                                    <Bar dataKey="cost" name="Total Expense" fill="#3b82f6" radius={[4, 4, 0, 0]} maxBarSize={40} />
+                                                </BarChart>
+                                            )
+                                        })()}
+                                    </ResponsiveContainer>
+                                </div>
+                            </div>
                         </div>
-                    </div>
+                    )}
+
+                    {expenseTab === 'VENDOR_BILLS' && (
+                        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden animate-fade-in premium-card">
+                            <div className="p-4 border-b border-gray-100 flex items-center justify-between bg-slate-50">
+                                <h3 className="font-bold text-slate-800 flex items-center gap-2 font-display">
+                                    <Store className="text-indigo-600" size={20} />
+                                    Vendor Payables & Credit Bills
+                                </h3>
+                                <p className="text-xs text-slate-500 font-medium">To log a bill, select a Vendor when adding an expense.</p>
+                            </div>
+                            <div className="overflow-x-auto">
+                                <table className="min-w-full divide-y divide-gray-200">
+                                    <thead className="bg-white">
+                                        <tr>
+                                            <th className="px-6 py-3 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest">Date</th>
+                                            <th className="px-6 py-3 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest">Vendor</th>
+                                            <th className="px-6 py-3 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest">Bill Info</th>
+                                            <th className="px-6 py-3 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest">Status</th>
+                                            <th className="px-6 py-3 text-right text-[10px] font-bold text-slate-400 uppercase tracking-widest">Total Billed</th>
+                                            <th className="px-6 py-3 text-right text-[10px] font-bold text-slate-400 uppercase tracking-widest">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="bg-white divide-y divide-gray-100">
+                                        {(() => {
+                                            const vendorBills = filteredExpenses.filter(e => e.supplier);
+                                            const billsByVendor = vendorBills.reduce((acc, exp) => {
+                                                if (!acc[exp.supplier!]) acc[exp.supplier!] = { vendorId: exp.supplier!, bills: [], total: 0, pending: 0, paid: 0 };
+                                                acc[exp.supplier!].bills.push(exp);
+                                                acc[exp.supplier!].total += exp.amount;
+                                                if (exp.paymentStatus === 'PAID') acc[exp.supplier!].paid += exp.amount;
+                                                else acc[exp.supplier!].pending += exp.amount;
+                                                return acc;
+                                            }, {} as Record<string, { vendorId: string, bills: Expense[], total: number, pending: number, paid: number }>);
+
+                                            if (Object.keys(billsByVendor).length === 0) {
+                                                return (
+                                                    <tr>
+                                                        <td colSpan={6} className="px-6 py-12 text-center text-slate-400">
+                                                            <Store className="mx-auto mb-3 opacity-30 text-indigo-500" size={40} />
+                                                            <p className="font-bold text-slate-600">No vendor bills found</p>
+                                                            <p className="text-xs text-slate-400 mt-1">When adding an expense, select a Vendor to see it here as a payable bill.</p>
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            }
+
+                                            return Object.values(billsByVendor).map(({ vendorId, bills, pending, paid, total }) => {
+                                                const vendor = entities.find(v => v.id === vendorId);
+                                                const vendorName = vendor ? vendor.name : 'Unknown Vendor';
+                                                const isExpanded = expandedVendors.includes(vendorId);
+
+                                                return (
+                                                    <React.Fragment key={vendorId}>
+                                                        {/* Vendor Summary Row */}
+                                                        <tr onClick={() => toggleVendor(vendorId)} className="hover:bg-indigo-50/50 transition-colors cursor-pointer bg-slate-50/80 border-b-2 border-slate-100 group">
+                                                            <td className="px-6 py-4 whitespace-nowrap text-sm font-bold text-slate-800 flex items-center gap-2">
+                                                                <div className={`p-1.5 rounded-md transition-colors ${isExpanded ? 'bg-indigo-600 text-white shadow-md shadow-indigo-200' : 'bg-white shadow-sm text-slate-500 group-hover:bg-indigo-100'}`}>
+                                                                    <Store size={16} />
+                                                                </div>
+                                                                {vendorName}
+                                                            </td>
+                                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500 font-bold">
+                                                                {bills.length} Invoices
+                                                            </td>
+                                                            <td className="px-6 py-4 whitespace-nowrap text-sm">
+                                                                <span className="text-emerald-600 font-extrabold bg-emerald-100/50 border border-emerald-100 px-3 py-1.5 rounded-full text-[10px] uppercase tracking-wider">Paid: PKR {paid.toLocaleString()}</span>
+                                                            </td>
+                                                            <td className="px-6 py-4 whitespace-nowrap">
+                                                                {pending > 0 ? <span className="text-rose-600 font-extrabold bg-rose-100/50 border border-rose-100 px-3 py-1.5 rounded-full text-[10px] uppercase tracking-wider animate-pulse transition-none">Pending: PKR {pending.toLocaleString()}</span> : <span className="text-slate-400 font-bold text-xs p-1"><CheckCircle2 size={14} className="inline mr-1 text-emerald-500" />Settled</span>}
+                                                            </td>
+                                                            <td className="px-6 py-4 whitespace-nowrap text-right text-sm">
+                                                                <div><span className="text-slate-400 text-[10px] uppercase font-bold block mb-0.5 mt-[-4px]">Total</span> <span className="font-extrabold text-indigo-700 text-lg">PKR {total.toLocaleString()}</span></div>
+                                                            </td>
+                                                            <td className="px-6 py-4 whitespace-nowrap text-right text-[11px] font-black uppercase tracking-widest text-indigo-500 group-hover:text-indigo-700 transition-colors">
+                                                                {isExpanded ? 'Hide Details' : 'View Details'}
+                                                            </td>
+                                                        </tr>
+                                                        {/* Expended Bills list */}
+                                                        {isExpanded && bills.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map((exp, idx) => {
+                                                            const isPaid = exp.paymentStatus === 'PAID';
+                                                            return (
+                                                                <tr key={exp.id} className={`bg-white hover:bg-slate-50 transition-colors border-l-4 ${isPaid ? 'border-l-emerald-400' : 'border-l-indigo-500'} ${idx === bills.length - 1 ? 'border-b-4 border-b-slate-100' : 'border-b border-b-gray-50'}`}>
+                                                                    <td className="px-6 py-3 whitespace-nowrap text-xs font-bold text-slate-500 pl-10 border-b border-gray-50">{exp.date}</td>
+                                                                    <td colSpan={2} className="px-6 py-3 text-sm text-slate-600 border-b border-gray-50">
+                                                                        <span className="font-extrabold text-slate-800 bg-slate-100 px-2 py-0.5 rounded text-xs mr-2">{exp.category}</span>
+                                                                        <span className="text-sm font-medium text-slate-500">{exp.description}</span>
+                                                                    </td>
+                                                                    <td className="px-6 py-3 whitespace-nowrap border-b border-gray-50">
+                                                                        <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider ${isPaid ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700 shadow-sm'}`}>
+                                                                            {isPaid ? <CheckCircle2 size={12} /> : <AlertTriangle size={12} />}
+                                                                            {exp.paymentStatus || 'PENDING'}
+                                                                        </span>
+                                                                    </td>
+                                                                    <td className="px-6 py-3 whitespace-nowrap text-right text-sm font-extrabold text-slate-700 border-b border-gray-50">
+                                                                        PKR {exp.amount.toLocaleString()}
+                                                                    </td>
+                                                                    <td className="px-6 py-3 whitespace-nowrap text-right text-sm border-b border-gray-50">
+                                                                        {!isPaid && onUpdateExpense && (
+                                                                            <button
+                                                                                onClick={(e) => {
+                                                                                    e.stopPropagation();
+                                                                                    if (confirm(`Mark bill from ${vendorName} as fully PAID in cash/bank?`)) {
+                                                                                        onUpdateExpense({ ...exp, paymentStatus: 'PAID', amountPaid: exp.amount, paymentDate: new Date().toISOString().split('T')[0] });
+                                                                                    }
+                                                                                }}
+                                                                                className="px-4 py-1.5 bg-indigo-50 border border-indigo-200 hover:bg-indigo-600 hover:border-indigo-600 hover:text-white text-indigo-700 font-extrabold text-[11px] uppercase tracking-wider rounded-lg transition-all shadow-sm"
+                                                                            >
+                                                                                Pay
+                                                                            </button>
+                                                                        )}
+                                                                        {isPaid && onUpdateExpense && (
+                                                                            <button
+                                                                                onClick={(e) => {
+                                                                                    e.stopPropagation();
+                                                                                    if (confirm(`Revert bill payment status to UNPAID?`)) {
+                                                                                        onUpdateExpense({ ...exp, paymentStatus: 'PENDING', amountPaid: 0, paymentDate: undefined });
+                                                                                    }
+                                                                                }}
+                                                                                className="px-2 py-1 text-slate-400 hover:text-slate-600 font-bold text-[10px] uppercase underline transition-colors"
+                                                                            >
+                                                                                Revert
+                                                                            </button>
+                                                                        )}
+                                                                    </td>
+                                                                </tr>
+                                                            )
+                                                        })}
+                                                    </React.Fragment>
+                                                )
+                                            })
+                                        })()}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    )}
+
+                    {expenseTab === 'LIST' && (
+                        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                            <div className="overflow-x-auto">
+                                <table className="min-w-full divide-y divide-gray-200">
+                                    <thead className="bg-gray-50">
+                                        <tr>
+                                            <th onClick={() => handleSort('date')} className="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"><div className="flex items-center gap-1">Date <ArrowUpDown size={12} /></div></th>
+                                            {showFarmColumn && <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Farm</th>}
+                                            <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Category</th>
+                                            <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Description</th>
+                                            <th onClick={() => handleSort('amount')} className="px-6 py-3 text-right text-xs font-bold text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"><div className="flex items-center justify-end gap-1">Amount <ArrowUpDown size={12} /></div></th>
+                                            <th className="px-6 py-3 text-right text-xs font-bold text-gray-500 uppercase tracking-wider">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="bg-white divide-y divide-gray-200">
+                                        {filteredExpenses.map((expense) => (
+                                            <tr key={expense.id} className="hover:bg-gray-50">
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{expense.date}</td>
+                                                {showFarmColumn && <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-700">{getFarmName(expense.farmId)}</td>}
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm">
+                                                    <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium ${expense.category === ExpenseCategory.VACCINE ? 'bg-blue-100 text-blue-800' : expense.category === ExpenseCategory.MEDICAL ? 'bg-orange-100 text-orange-800' : expense.category === ExpenseCategory.BREEDING ? 'bg-pink-100 text-pink-800' : 'bg-gray-100 text-gray-800'}`}>
+                                                        {getCategoryIcon(expense.category)}
+                                                        {expense.category}
+                                                    </span>
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-800">{expense.description}</td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-right font-bold text-gray-800">
+                                                    PKR {expense.amount.toLocaleString()}
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-right">
+                                                    <button
+                                                        onClick={() => { if (confirm('Delete this expense?')) onDeleteExpense(expense.id); }}
+                                                        className="p-1.5 rounded-lg text-gray-400 hover:bg-red-50 hover:text-red-600 transition-colors"
+                                                        title="Delete"
+                                                    >
+                                                        <Trash2 size={16} />
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                        {filteredExpenses.length === 0 && (
+                                            <tr>
+                                                <td colSpan={showFarmColumn ? 6 : 5} className="text-center py-16 bg-slate-50/50">
+                                                    <Activity className="mx-auto mb-4 opacity-30 text-red-500" size={48} />
+                                                    <p className="font-bold text-slate-600 text-lg">No expenses recorded yet</p>
+                                                    <p className="text-sm text-slate-400 mt-1">Click the 'Log Expense' button to register an expense.</p>
+                                                </td>
+                                            </tr>
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    )}
                 </div>
             ) : activeTab === 'SALES' ? (
                 <div className="space-y-4 animate-fade-in">
@@ -533,18 +845,18 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                             <table className="min-w-full divide-y divide-gray-200">
                                 <thead className="bg-gray-50">
                                     <tr>
-                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
-                                        {showFarmColumn && <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Farm</th>}
-                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
-                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Buyer</th>
-                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Item / Reference</th>
-                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Qty / Weight</th>
-                                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Amount</th>
-                                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                                        <th onClick={() => handleSort('date')} className="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"><div className="flex items-center gap-1">Date <ArrowUpDown size={12} /></div></th>
+                                        {showFarmColumn && <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Farm</th>}
+                                        <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Type</th>
+                                        <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Buyer</th>
+                                        <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Item / Reference</th>
+                                        <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Qty / Weight</th>
+                                        <th onClick={() => handleSort('amount')} className="px-6 py-3 text-right text-xs font-bold text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"><div className="flex items-center justify-end gap-1">Amount <ArrowUpDown size={12} /></div></th>
+                                        <th className="px-6 py-3 text-right text-xs font-bold text-gray-500 uppercase tracking-wider">Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody className="bg-white divide-y divide-gray-200">
-                                    {sales.map((sale) => (
+                                    {filteredSales.map((sale) => (
                                         <tr key={sale.id} className="hover:bg-gray-50">
                                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{sale.date}</td>
                                             {showFarmColumn && <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-700">{getFarmName(sale.farmId)}</td>}
@@ -583,7 +895,7 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                             </td>
                                         </tr>
                                     ))}
-                                    {sales.length === 0 && (
+                                    {filteredSales.length === 0 && (
                                         <tr>
                                             <td colSpan={showFarmColumn ? 8 : 7} className="text-center py-16 bg-slate-50/50">
                                                 <DollarSign className="mx-auto mb-4 opacity-30 text-emerald-600" size={48} />

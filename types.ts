@@ -271,6 +271,7 @@ export interface Expense {
   supplier?: string;
   paymentStatus?: 'PAID' | 'PENDING' | 'PARTIAL';
   paymentDate?: string;
+  amountPaid?: number;
   isSystemGenerated?: boolean;
   referenceType?: string;
   /** When set, this expense is removed when the feed ledger is reversed. */

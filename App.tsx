@@ -875,6 +875,17 @@ const App: React.FC = () => {
     }
   };
 
+  const handleUpdateExpense = async (exp: Expense) => {
+    try {
+      const updated = await backendService.updateExpense(exp.id, exp);
+      setState(p => ({ ...p, expenses: p.expenses.map(e => e.id === updated.id ? updated : e) }));
+    } catch (e) {
+      console.error(e);
+      alert('Failed to update expense.');
+      throw e;
+    }
+  };
+
 
   const handleCreateSale = async (sale: Sale & { animalId?: string }) => {
     let targetFarmId = state.currentFarmId;
@@ -1282,6 +1293,7 @@ const App: React.FC = () => {
                 currentFarmId={state.currentFarmId}
                 currentLocationId={state.currentLocationId}
                 onAddExpense={handleCreateExpense}
+                onUpdateExpense={handleUpdateExpense}
                 onAddSale={handleCreateSale}
                 onDeleteExpense={handleDeleteExpense}
                 onDeleteSale={handleDeleteSale}

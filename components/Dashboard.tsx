@@ -147,7 +147,7 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
 
       {/* HEADER STATS */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <div role="button" tabIndex={0} onClick={() => onNavigate?.('CATTLE_MANAGER')} onKeyDown={e => e.key === 'Enter' && onNavigate?.('CATTLE_MANAGER')} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex items-center justify-between premium-card group cursor-pointer relative overflow-hidden hover:shadow-md transition-shadow">
+        <div role="button" tabIndex={0} onClick={() => onNavigate?.(speciesFilter === 'GOAT' ? 'GOAT_MANAGER' : 'CATTLE_MANAGER')} onKeyDown={e => e.key === 'Enter' && onNavigate?.(speciesFilter === 'GOAT' ? 'GOAT_MANAGER' : 'CATTLE_MANAGER')} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex items-center justify-between premium-card group cursor-pointer relative overflow-hidden hover:shadow-md transition-shadow">
           <div className="bg-gradient-to-br from-blue-500/10 to-blue-600/10 absolute -right-6 -top-6 w-32 h-32 rounded-full blur-2xl group-hover:scale-150 transition-all duration-500"></div>
           <div className="relative z-10">
             <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Total Animals{isGlobalView && farmCount > 0 ? ` (${farmCount} farm${farmCount !== 1 ? 's' : ''})` : ''}</p>
@@ -188,7 +188,7 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
           </div>
         </div>
 
-        <div role="button" tabIndex={0} onClick={() => onNavigate?.('CATTLE_MANAGER')} onKeyDown={e => e.key === 'Enter' && onNavigate?.('CATTLE_MANAGER')} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex items-center justify-between premium-card group cursor-pointer relative overflow-hidden hover:shadow-md transition-shadow">
+        <div role="button" tabIndex={0} onClick={() => onNavigate?.(speciesFilter === 'GOAT' ? 'GOAT_MANAGER' : 'CATTLE_MANAGER')} onKeyDown={e => e.key === 'Enter' && onNavigate?.(speciesFilter === 'GOAT' ? 'GOAT_MANAGER' : 'CATTLE_MANAGER')} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex items-center justify-between premium-card group cursor-pointer relative overflow-hidden hover:shadow-md transition-shadow">
           <div className="bg-gradient-to-br from-amber-500/10 to-orange-600/10 absolute -right-6 -top-6 w-32 h-32 rounded-full blur-2xl group-hover:scale-150 transition-all duration-500"></div>
           <div className="relative z-10">
             <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Pending Alerts</p>
@@ -239,7 +239,7 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
         <div className="lg:col-span-2 space-y-6">
 
           {/* Milk Production Trend */}
-          <div role="button" tabIndex={0} onClick={() => onNavigate?.('CATTLE_MANAGER', { filterCategory: 'Dairy' })} onKeyDown={e => e.key === 'Enter' && onNavigate?.('CATTLE_MANAGER', { filterCategory: 'Dairy' })} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 premium-card cursor-pointer hover:shadow-md transition-shadow">
+          <div role="button" tabIndex={0} onClick={() => onNavigate?.(speciesFilter === 'GOAT' ? 'GOAT_MANAGER' : 'CATTLE_MANAGER', { filterCategory: 'Dairy' })} onKeyDown={e => e.key === 'Enter' && onNavigate?.(speciesFilter === 'GOAT' ? 'GOAT_MANAGER' : 'CATTLE_MANAGER', { filterCategory: 'Dairy' })} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 premium-card cursor-pointer hover:shadow-md transition-shadow">
             <div className="flex justify-between items-center mb-6">
               <h3 className="font-bold text-slate-800 flex items-center gap-2 font-display"><Milk size={20} className="text-sky-500" /> Milk Production Trend</h3>
             </div>
@@ -440,13 +440,13 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
               )}
             </div>
 
-            <button type="button" onClick={() => onNavigate?.('CATTLE_MANAGER')} className="w-full mt-6 py-3.5 text-xs font-bold text-slate-500 border border-slate-200 rounded-xl hover:bg-slate-50 hover:text-slate-800 transition-all flex items-center justify-center gap-2 uppercase tracking-widest">
+            <button type="button" onClick={() => onNavigate?.(speciesFilter === 'GOAT' ? 'GOAT_MANAGER' : 'CATTLE_MANAGER')} className="w-full mt-6 py-3.5 text-xs font-bold text-slate-500 border border-slate-200 rounded-xl hover:bg-slate-50 hover:text-slate-800 transition-all flex items-center justify-center gap-2 uppercase tracking-widest">
               View All Tasks <ArrowRight size={14} />
             </button>
           </div>
 
           {/* Quick Actions (Visual Only) */}
-          <div role="button" tabIndex={0} onClick={() => onNavigate?.('CATTLE_MANAGER')} onKeyDown={e => e.key === 'Enter' && onNavigate?.('CATTLE_MANAGER')} className="bg-gradient-to-br from-emerald-600 to-teal-700 p-6 rounded-2xl shadow-lg text-white cursor-pointer hover:shadow-xl transition-shadow relative overflow-hidden">
+          <div role="button" tabIndex={0} onClick={() => onNavigate?.(speciesFilter === 'GOAT' ? 'GOAT_MANAGER' : 'CATTLE_MANAGER')} onKeyDown={e => e.key === 'Enter' && onNavigate?.(speciesFilter === 'GOAT' ? 'GOAT_MANAGER' : 'CATTLE_MANAGER')} className="bg-gradient-to-br from-emerald-600 to-teal-700 p-6 rounded-2xl shadow-lg text-white cursor-pointer hover:shadow-xl transition-shadow relative overflow-hidden">
             <h3 className="font-bold text-lg mb-2">Farm Health Score</h3>
             {(() => {
               const sickRatio = filteredLivestock.length > 0 ? filteredLivestock.filter(l => l.status === 'SICK').length / filteredLivestock.length : 0;
@@ -479,7 +479,7 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* PRODUCTION ANALYTICS */}
-          <div role="button" tabIndex={0} onClick={() => onNavigate?.('CATTLE_MANAGER', { filterCategory: 'Dairy' })} onKeyDown={e => e.key === 'Enter' && onNavigate?.('CATTLE_MANAGER', { filterCategory: 'Dairy' })} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 premium-card cursor-pointer hover:shadow-md transition-shadow">
+          <div role="button" tabIndex={0} onClick={() => onNavigate?.(speciesFilter === 'GOAT' ? 'GOAT_MANAGER' : 'CATTLE_MANAGER', { filterCategory: 'Dairy' })} onKeyDown={e => e.key === 'Enter' && onNavigate?.(speciesFilter === 'GOAT' ? 'GOAT_MANAGER' : 'CATTLE_MANAGER', { filterCategory: 'Dairy' })} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 premium-card cursor-pointer hover:shadow-md transition-shadow">
             <div className="flex justify-between items-center mb-4">
               <h3 className="font-bold text-slate-800 flex items-center gap-2 font-display">
                 <Milk size={20} className="text-sky-500" />
