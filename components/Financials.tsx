@@ -1,7 +1,8 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Expense, ExpenseCategory, Sale, Livestock, Entity, Farm, Infrastructure } from '../types';
-import { Plus, DollarSign, Truck, Wrench, Syringe, Briefcase, Home, Stethoscope, Dna, ArrowLeft, Trash2, Store, User, Share2, AlertTriangle, Building2, BookOpen, Activity, Search, Filter, ArrowUpDown, PieChart as PieChartIcon, LineChart as LineChartIcon, CheckCircle2 } from 'lucide-react';
+import { Plus, DollarSign, Truck, Wrench, Syringe, Briefcase, Home, Stethoscope, Dna, ArrowLeft, Trash2, Store, User, Share2, AlertTriangle, Building2, BookOpen, Activity, Search, Filter, ArrowUpDown, PieChart as PieChartIcon, LineChart as LineChartIcon, CheckCircle2, FileText } from 'lucide-react';
 import { PieChart, Pie, Cell, Tooltip as RechartsTooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
+import { backendService } from '../services/backendService';
 
 interface Props {
     expenses: Expense[];
@@ -30,8 +31,104 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
     const [searchTerm, setSearchTerm] = useState('');
     const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' }>({ key: 'date', direction: 'desc' });
     const [expandedVendors, setExpandedVendors] = useState<string[]>([]);
+    const [financialsKpis, setFinancialsKpis] = useState<{ totalRevenue: number; totalExpenses: number; netProfit: number } | null>(null);
+    const [expensesPage, setExpensesPage] = useState<{ content: Expense[]; totalElements: number; totalPages: number; number: number; size: number } | null>(null);
+    const [salesPage, setSalesPage] = useState<{ content: Sale[]; totalElements: number; totalPages: number; number: number; size: number } | null>(null);
+    const [ledgerPage, setLedgerPage] = useState<{ content: { id: string; date: string; description: string; type: string; amount: number; balanceAfter: number; refId: string }[]; totalElements: number; totalPages: number; number: number; size: number } | null>(null);
+    const [expensesPageNum, setExpensesPageNum] = useState(0);
+    const [salesPageNum, setSalesPageNum] = useState(0);
+    const [ledgerPageNum, setLedgerPageNum] = useState(0);
+    const [customCategories, setCustomCategories] = useState<{ id: string; name: string; type: string }[]>([]);
+    const [vendorSummary, setVendorSummary] = useState<{ supplierId: string; supplierName: string; totalBills: number; totalAmount: number; paidAmount: number; balanceDue: number }[] | null>(null);
+    const [expenseAnalytics, setExpenseAnalytics] = useState<{ byCategory: { category: string; totalCost: number }[]; byDay: { date: string; totalCost: number }[] } | null>(null);
+    const pageSize = 50;
 
     const toggleVendor = (id: string) => setExpandedVendors(prev => prev.includes(id) ? prev.filter(v => v !== id) : [...prev, id]);
+
+    const dateRangeFromFilter = useMemo(() => {
+        const now = new Date();
+        let start: string | undefined;
+        let end: string | undefined;
+        const endStr = now.toISOString().split('T')[0];
+        if (dateFilter === '7_DAYS') {
+            const d = new Date(now); d.setDate(d.getDate() - 7);
+            start = d.toISOString().split('T')[0];
+        } else if (dateFilter === '30_DAYS') {
+            const d = new Date(now); d.setDate(d.getDate() - 30);
+            start = d.toISOString().split('T')[0];
+        } else if (dateFilter === '90_DAYS') {
+            const d = new Date(now); d.setDate(d.getDate() - 90);
+            start = d.toISOString().split('T')[0];
+        } else if (dateFilter === 'THIS_MONTH') {
+            start = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+        } else if (dateFilter === 'LAST_MONTH') {
+            const m = now.getMonth() === 0 ? 11 : now.getMonth() - 1;
+            const y = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
+            start = new Date(y, m, 1).toISOString().split('T')[0];
+            end = new Date(y, m + 1, 0).toISOString().split('T')[0];
+        }
+        if (!end) end = endStr;
+        return { startDate: start, endDate: end };
+    }, [dateFilter]);
+
+    useEffect(() => {
+        backendService.getFinancialsKpis({ farmId: currentFarmId || undefined, ...dateRangeFromFilter })
+            .then(setFinancialsKpis)
+            .catch(() => setFinancialsKpis(null));
+    }, [currentFarmId, dateRangeFromFilter.startDate, dateRangeFromFilter.endDate]);
+
+    useEffect(() => { setExpensesPageNum(0); }, [dateFilter, searchTerm]);
+    useEffect(() => { setSalesPageNum(0); }, [dateFilter, searchTerm]);
+    useEffect(() => { setLedgerPageNum(0); }, [dateFilter]);
+
+    useEffect(() => {
+        backendService.getFinancialsExpenses({
+            farmId: currentFarmId || undefined,
+            ...dateRangeFromFilter,
+            search: searchTerm || undefined,
+            page: expensesPageNum,
+            limit: pageSize,
+            sortBy: sortConfig.key,
+            sortDirection: sortConfig.direction,
+        }).then(setExpensesPage).catch(() => setExpensesPage(null));
+    }, [currentFarmId, dateRangeFromFilter.startDate, dateRangeFromFilter.endDate, searchTerm, expensesPageNum, sortConfig.key, sortConfig.direction]);
+
+    useEffect(() => {
+        backendService.getFinancialsSales({
+            farmId: currentFarmId || undefined,
+            ...dateRangeFromFilter,
+            search: searchTerm || undefined,
+            page: salesPageNum,
+            limit: pageSize,
+            sortBy: sortConfig.key,
+            sortDirection: sortConfig.direction,
+        }).then(setSalesPage).catch(() => setSalesPage(null));
+    }, [currentFarmId, dateRangeFromFilter.startDate, dateRangeFromFilter.endDate, searchTerm, salesPageNum, sortConfig.key, sortConfig.direction]);
+
+    useEffect(() => {
+        backendService.getFinancialsLedger({
+            farmId: currentFarmId || undefined,
+            ...dateRangeFromFilter,
+            page: ledgerPageNum,
+            limit: pageSize,
+        }).then(setLedgerPage).catch(() => setLedgerPage(null));
+    }, [currentFarmId, dateRangeFromFilter.startDate, dateRangeFromFilter.endDate, ledgerPageNum]);
+
+    useEffect(() => {
+        backendService.getCategories('EXPENSE').then(setCustomCategories).catch(() => setCustomCategories([]));
+    }, []);
+
+    useEffect(() => {
+        const params: { farmId?: string; startDate?: string; endDate?: string; dateFilter?: string } = { farmId: currentFarmId || undefined, ...dateRangeFromFilter };
+        if (dateFilter !== 'ALL') params.dateFilter = dateFilter;
+        backendService.getVendorSummary(params).then(setVendorSummary).catch(() => setVendorSummary(null));
+    }, [currentFarmId, dateRangeFromFilter.startDate, dateRangeFromFilter.endDate, dateFilter]);
+
+    useEffect(() => {
+        const params: { farmId?: string; startDate?: string; endDate?: string; dateFilter?: string } = { farmId: currentFarmId || undefined, ...dateRangeFromFilter };
+        if (dateFilter !== 'ALL') params.dateFilter = dateFilter;
+        backendService.getExpenseAnalytics(params).then(setExpenseAnalytics).catch(() => setExpenseAnalytics(null));
+    }, [currentFarmId, dateRangeFromFilter.startDate, dateRangeFromFilter.endDate, dateFilter]);
 
     const isDateInRange = (dateStr: string | undefined | null) => {
         if (!dateStr || dateFilter === 'ALL') return true;
@@ -162,10 +259,11 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
 
     const handleSaveExpense = async () => {
         if (!newExpense.amount || !newExpense.description) return alert("Amount and Description required");
+        const categoryValue = newExpense.category && Object.values(ExpenseCategory).includes(newExpense.category as ExpenseCategory) ? newExpense.category : ExpenseCategory.OTHER;
         const expense: Expense = {
             id: Math.random().toString(36).substr(2, 9),
             farmId: currentFarmId || '',
-            category: newExpense.category || ExpenseCategory.OTHER,
+            category: categoryValue as ExpenseCategory,
             amount: Number(newExpense.amount),
             date: newExpense.date || new Date().toISOString().split('T')[0],
             description: newExpense.description,
@@ -241,8 +339,16 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
         setLivestockSaleMode('SINGLE');
     };
 
-    const totalExpensesCalc = filteredExpenses.reduce((sum, e) => sum + e.amount, 0);
-    const totalSalesCalc = filteredSales.reduce((sum, s) => sum + s.amount, 0);
+    const totalExpensesCalc = financialsKpis != null ? financialsKpis.totalExpenses : filteredExpenses.reduce((sum, e) => sum + e.amount, 0);
+    const totalSalesCalc = financialsKpis != null ? financialsKpis.totalRevenue : filteredSales.reduce((sum, s) => sum + s.amount, 0);
+    const expensesForList = expensesPage?.content ?? filteredExpenses;
+    const salesForList = salesPage?.content ?? filteredSales;
+    const ledgerForList = ledgerPage?.content ?? ledgerEntries;
+    const expenseCategoriesForDropdown = useMemo(() => {
+        const builtIn = Object.values(ExpenseCategory);
+        const custom = customCategories.filter(c => c.type === 'EXPENSE').map(c => c.name);
+        return [...builtIn, ...custom];
+    }, [customCategories]);
 
     const saleTypeLabel = (itemType: string) => {
         switch (itemType) {
@@ -292,8 +398,8 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div>
                             <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
-                            <select className="w-full border border-gray-300 rounded-lg px-4 py-2 outline-none focus:ring-2 focus:ring-emerald-500" value={newExpense.category} onChange={e => setNewExpense({ ...newExpense, category: e.target.value as ExpenseCategory })}>
-                                {Object.values(ExpenseCategory).map(c => <option key={c} value={c}>{c}</option>)}
+                            <select className="w-full border border-gray-300 rounded-lg px-4 py-2 outline-none focus:ring-2 focus:ring-emerald-500" value={newExpense.category ?? ''} onChange={e => setNewExpense({ ...newExpense, category: (e.target.value as ExpenseCategory) || ExpenseCategory.OTHER })}>
+                                {expenseCategoriesForDropdown.map(c => <option key={c} value={c}>{c}</option>)}
                             </select>
                         </div>
                         <div>
@@ -577,12 +683,14 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                 <div className="h-64 mb-4">
                                     <ResponsiveContainer width="100%" height="100%">
                                         {(() => {
-                                            const categoryData = filteredExpenses.reduce((acc, curr) => {
-                                                const existing = acc.find(x => x.name === curr.category);
-                                                if (existing) existing.value += curr.amount;
-                                                else acc.push({ name: curr.category, value: curr.amount });
-                                                return acc;
-                                            }, [] as any[]).sort((a, b) => b.value - a.value);
+                                            const categoryData = expenseAnalytics?.byCategory?.length
+                                                ? expenseAnalytics.byCategory.map(c => ({ name: c.category, value: c.totalCost }))
+                                                : filteredExpenses.reduce((acc, curr) => {
+                                                    const existing = acc.find(x => x.name === curr.category);
+                                                    if (existing) existing.value += curr.amount;
+                                                    else acc.push({ name: curr.category, value: curr.amount });
+                                                    return acc;
+                                                }, [] as any[]).sort((a, b) => b.value - a.value);
 
                                             return (
                                                 <PieChart>
@@ -596,17 +704,20 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                     </ResponsiveContainer>
                                 </div>
                                 <div className="grid grid-cols-2 gap-2 text-xs">
-                                    {filteredExpenses.reduce((acc, curr) => {
+                                    {(expenseAnalytics?.byCategory ?? filteredExpenses.reduce((acc, curr) => {
                                         const existing = acc.find(x => x.name === curr.category);
                                         if (existing) existing.value += curr.amount;
                                         else acc.push({ name: curr.category, value: curr.amount });
                                         return acc;
-                                    }, [] as any[]).sort((a, b) => b.value - a.value).slice(0, 6).map((cat, idx) => (
+                                    }, [] as any[]).map(c => ({ category: c.name, totalCost: c.value }))).slice(0, 6).map((cat: { category?: string; name?: string; totalCost?: number; value?: number }, idx: number) => {
+                                        const name = cat.category ?? cat.name ?? '';
+                                        const cost = cat.totalCost ?? cat.value ?? 0;
+                                        return (
                                         <div key={idx} className="flex justify-between p-1">
-                                            <span className="text-slate-600 font-bold flex items-center gap-1"><div className="w-2 h-2 rounded-full" style={{ backgroundColor: COLORS[idx % COLORS.length] }}></div> {cat.name}</span>
-                                            <span className="font-black">{(cat.value / totalExpensesCalc * 100).toFixed(1)}%</span>
+                                            <span className="text-slate-600 font-bold flex items-center gap-1"><div className="w-2 h-2 rounded-full" style={{ backgroundColor: COLORS[idx % COLORS.length] }}></div> {name}</span>
+                                            <span className="font-black">{(totalExpensesCalc > 0 ? (cost / totalExpensesCalc * 100) : 0).toFixed(1)}%</span>
                                         </div>
-                                    ))}
+                                    ); })}
                                 </div>
                             </div>
 
@@ -616,12 +727,14 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                 <div className="h-64">
                                     <ResponsiveContainer width="100%" height="100%">
                                         {(() => {
-                                            const dateData = filteredExpenses.reduce((acc, curr) => {
-                                                const existing = acc.find(x => x.date === curr.date.substring(5)); // MM-DD
-                                                if (existing) existing.cost += curr.amount;
-                                                else acc.push({ date: curr.date.substring(5), fullDate: curr.date, cost: curr.amount });
-                                                return acc;
-                                            }, [] as any[]).sort((a, b) => new Date(a.fullDate).getTime() - new Date(b.fullDate).getTime());
+                                            const dateData = expenseAnalytics?.byDay?.length
+                                                ? expenseAnalytics.byDay.map(d => ({ date: d.date.slice(5), fullDate: d.date, cost: d.totalCost })).sort((a, b) => a.fullDate.localeCompare(b.fullDate))
+                                                : filteredExpenses.reduce((acc, curr) => {
+                                                    const existing = acc.find(x => x.date === curr.date?.substring(5));
+                                                    if (existing) existing.cost += curr.amount;
+                                                    else acc.push({ date: (curr.date || '').substring(5), fullDate: curr.date || '', cost: curr.amount });
+                                                    return acc;
+                                                }, [] as any[]).sort((a, b) => new Date(a.fullDate).getTime() - new Date(b.fullDate).getTime());
 
                                             return (
                                                 <BarChart data={dateData}>
@@ -662,17 +775,21 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                     </thead>
                                     <tbody className="bg-white divide-y divide-gray-100">
                                         {(() => {
+                                            const useServerSummary = vendorSummary && vendorSummary.length > 0;
                                             const vendorBills = filteredExpenses.filter(e => e.supplier);
-                                            const billsByVendor = vendorBills.reduce((acc, exp) => {
-                                                if (!acc[exp.supplier!]) acc[exp.supplier!] = { vendorId: exp.supplier!, bills: [], total: 0, pending: 0, paid: 0 };
-                                                acc[exp.supplier!].bills.push(exp);
-                                                acc[exp.supplier!].total += exp.amount;
-                                                if (exp.paymentStatus === 'PAID') acc[exp.supplier!].paid += exp.amount;
-                                                else acc[exp.supplier!].pending += exp.amount;
-                                                return acc;
-                                            }, {} as Record<string, { vendorId: string, bills: Expense[], total: number, pending: number, paid: number }>);
+                                            const billsByVendor = useServerSummary
+                                                ? null
+                                                : vendorBills.reduce((acc, exp) => {
+                                                    if (!acc[exp.supplier!]) acc[exp.supplier!] = { vendorId: exp.supplier!, bills: [], total: 0, pending: 0, paid: 0 };
+                                                    acc[exp.supplier!].bills.push(exp);
+                                                    acc[exp.supplier!].total += exp.amount;
+                                                    if (exp.paymentStatus === 'PAID') acc[exp.supplier!].paid += exp.amount;
+                                                    else acc[exp.supplier!].pending += exp.amount;
+                                                    return acc;
+                                                }, {} as Record<string, { vendorId: string, bills: Expense[], total: number, pending: number, paid: number }>);
 
-                                            if (Object.keys(billsByVendor).length === 0) {
+                                            const hasVendors = useServerSummary || (billsByVendor && Object.keys(billsByVendor).length > 0);
+                                            if (!hasVendors) {
                                                 return (
                                                     <tr>
                                                         <td colSpan={6} className="px-6 py-12 text-center text-slate-400">
@@ -684,15 +801,22 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                                 );
                                             }
 
-                                            return Object.values(billsByVendor).map(({ vendorId, bills, pending, paid, total }) => {
+                                            return (useServerSummary ? vendorSummary!.map((v) => ({
+                                                vendorId: v.supplierId,
+                                                bills: [] as Expense[],
+                                                totalBills: v.totalBills,
+                                                total: v.totalAmount,
+                                                pending: v.balanceDue,
+                                                paid: v.paidAmount,
+                                            })) : Object.values(billsByVendor!).map(({ vendorId, bills, total, pending, paid }) => ({ vendorId, bills, totalBills: bills.length, total, pending, paid }))).map(({ vendorId, bills, totalBills, pending, paid, total }) => {
                                                 const vendor = entities.find(v => v.id === vendorId);
-                                                const vendorName = vendor ? vendor.name : 'Unknown Vendor';
+                                                const vendorName = (useServerSummary ? (vendorSummary!.find(v => v.supplierId === vendorId)?.supplierName ?? vendor?.name) : (vendor ? vendor.name : 'Unknown Vendor')) ?? vendorId;
                                                 const isExpanded = expandedVendors.includes(vendorId);
 
                                                 return (
                                                     <React.Fragment key={vendorId}>
                                                         {/* Vendor Summary Row */}
-                                                        <tr onClick={() => toggleVendor(vendorId)} className="hover:bg-indigo-50/50 transition-colors cursor-pointer bg-slate-50/80 border-b-2 border-slate-100 group">
+                                                        <tr onClick={() => !useServerSummary && toggleVendor(vendorId)} className={`hover:bg-indigo-50/50 transition-colors ${!useServerSummary ? 'cursor-pointer' : ''} bg-slate-50/80 border-b-2 border-slate-100 group`}>
                                                             <td className="px-6 py-4 whitespace-nowrap text-sm font-bold text-slate-800 flex items-center gap-2">
                                                                 <div className={`p-1.5 rounded-md transition-colors ${isExpanded ? 'bg-indigo-600 text-white shadow-md shadow-indigo-200' : 'bg-white shadow-sm text-slate-500 group-hover:bg-indigo-100'}`}>
                                                                     <Store size={16} />
@@ -700,7 +824,7 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                                                 {vendorName}
                                                             </td>
                                                             <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500 font-bold">
-                                                                {bills.length} Invoices
+                                                                {totalBills ?? bills.length} Invoices
                                                             </td>
                                                             <td className="px-6 py-4 whitespace-nowrap text-sm">
                                                                 <span className="text-emerald-600 font-extrabold bg-emerald-100/50 border border-emerald-100 px-3 py-1.5 rounded-full text-[10px] uppercase tracking-wider">Paid: PKR {paid.toLocaleString()}</span>
@@ -715,8 +839,8 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                                                 {isExpanded ? 'Hide Details' : 'View Details'}
                                                             </td>
                                                         </tr>
-                                                        {/* Expended Bills list */}
-                                                        {isExpanded && bills.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map((exp, idx) => {
+                                                        {/* Expanded Bills list (client-side only; when using server vendor-summary no per-bill list) */}
+                                                        {isExpanded && bills.length > 0 && bills.slice().sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map((exp, idx) => {
                                                             const isPaid = exp.paymentStatus === 'PAID';
                                                             return (
                                                                 <tr key={exp.id} className={`bg-white hover:bg-slate-50 transition-colors border-l-4 ${isPaid ? 'border-l-emerald-400' : 'border-l-indigo-500'} ${idx === bills.length - 1 ? 'border-b-4 border-b-slate-100' : 'border-b border-b-gray-50'}`}>
@@ -790,7 +914,7 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                         </tr>
                                     </thead>
                                     <tbody className="bg-white divide-y divide-gray-200">
-                                        {filteredExpenses.map((expense) => (
+                                        {expensesForList.map((expense) => (
                                             <tr key={expense.id} className="hover:bg-gray-50">
                                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{expense.date}</td>
                                                 {showFarmColumn && <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-700">{getFarmName(expense.farmId)}</td>}
@@ -815,7 +939,7 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                                 </td>
                                             </tr>
                                         ))}
-                                        {filteredExpenses.length === 0 && (
+                                        {expensesForList.length === 0 && (
                                             <tr>
                                                 <td colSpan={showFarmColumn ? 6 : 5} className="text-center py-16 bg-slate-50/50">
                                                     <Activity className="mx-auto mb-4 opacity-30 text-red-500" size={48} />
@@ -827,6 +951,15 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                     </tbody>
                                 </table>
                             </div>
+                            {expensesPage && expensesPage.totalPages > 1 && (
+                                <div className="px-6 py-3 border-t border-gray-100 flex items-center justify-between bg-gray-50">
+                                    <span className="text-sm text-gray-600">Page {expensesPage.number + 1} of {expensesPage.totalPages} ({expensesPage.totalElements} total)</span>
+                                    <div className="flex gap-2">
+                                        <button type="button" disabled={expensesPage.number === 0} onClick={() => setExpensesPageNum(p => Math.max(0, p - 1))} className="px-3 py-1 rounded border border-gray-200 text-sm font-medium disabled:opacity-50">Prev</button>
+                                        <button type="button" disabled={expensesPage.number >= expensesPage.totalPages - 1} onClick={() => setExpensesPageNum(p => p + 1)} className="px-3 py-1 rounded border border-gray-200 text-sm font-medium disabled:opacity-50">Next</button>
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     )}
                 </div>
@@ -856,7 +989,7 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                     </tr>
                                 </thead>
                                 <tbody className="bg-white divide-y divide-gray-200">
-                                    {filteredSales.map((sale) => (
+                                    {salesForList.map((sale) => (
                                         <tr key={sale.id} className="hover:bg-gray-50">
                                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{sale.date}</td>
                                             {showFarmColumn && <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-700">{getFarmName(sale.farmId)}</td>}
@@ -873,11 +1006,11 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                             </td>
                                             <td className="px-6 py-4 whitespace-nowrap text-right">
                                                 <button
-                                                    onClick={() => {
-                                                        const typeLabel = saleTypeLabel(sale.itemType || 'ANIMAL');
-                                                        const itemDetail = saleItemDisplay(sale);
-                                                        const qtyWeight = saleQtyWeightDisplay(sale);
-                                                        const text = `*INVOICE RECEIPT*\n\nDate: ${sale.date}\nType: ${typeLabel}\nItem: ${itemDetail}\n${qtyWeight !== '—' ? `Qty/Weight: ${qtyWeight}\n` : ''}Amount: PKR ${sale.amount.toLocaleString()}\nStatus: ${(sale.amountReceived ?? 0) >= sale.amount ? 'PAID' : 'PENDING'}\n\nThank you for your business!`;
+                                                    onClick={async () => {
+                                                        const inv = await backendService.getSaleInvoice(sale.id);
+                                                        const text = inv
+                                                            ? `*INVOICE ${inv.invoiceNumber}*\n\nDate: ${inv.date}\nBuyer: ${inv.buyer}\nType: ${inv.itemType}\n${inv.description ? `Details: ${inv.description}\n` : ''}Amount: PKR ${inv.amount.toLocaleString()}\nPaid: PKR ${inv.amountPaid.toLocaleString()}\nBalance: PKR ${inv.balanceDue.toLocaleString()}\nStatus: ${inv.paymentStatus}\n\nThank you for your business!`
+                                                            : `*INVOICE*\n\nDate: ${sale.date}\nBuyer: ${sale.buyer}\nAmount: PKR ${sale.amount.toLocaleString()}\nStatus: ${(sale.amountReceived ?? 0) >= sale.amount ? 'PAID' : 'PENDING'}\n\nThank you!`;
                                                         window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
                                                     }}
                                                     className="p-1.5 rounded-lg text-gray-400 hover:bg-green-50 hover:text-green-600 transition-colors mr-2"
@@ -895,7 +1028,7 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                             </td>
                                         </tr>
                                     ))}
-                                    {filteredSales.length === 0 && (
+                                    {salesForList.length === 0 && (
                                         <tr>
                                             <td colSpan={showFarmColumn ? 8 : 7} className="text-center py-16 bg-slate-50/50">
                                                 <DollarSign className="mx-auto mb-4 opacity-30 text-emerald-600" size={48} />
@@ -907,6 +1040,15 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                 </tbody>
                             </table>
                         </div>
+                        {salesPage && salesPage.totalPages > 1 && (
+                            <div className="px-6 py-3 border-t border-gray-100 flex items-center justify-between bg-gray-50">
+                                <span className="text-sm text-gray-600">Page {salesPage.number + 1} of {salesPage.totalPages} ({salesPage.totalElements} total)</span>
+                                <div className="flex gap-2">
+                                    <button type="button" disabled={salesPage.number === 0} onClick={() => setSalesPageNum(p => Math.max(0, p - 1))} className="px-3 py-1 rounded border border-gray-200 text-sm font-medium disabled:opacity-50">Prev</button>
+                                    <button type="button" disabled={salesPage.number >= salesPage.totalPages - 1} onClick={() => setSalesPageNum(p => p + 1)} className="px-3 py-1 rounded border border-gray-200 text-sm font-medium disabled:opacity-50">Next</button>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
             ) : activeTab === 'LEDGER' ? (
@@ -931,7 +1073,7 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                     </tr>
                                 </thead>
                                 <tbody className="bg-white divide-y divide-gray-100">
-                                    {ledgerEntries.map((entry) => (
+                                    {ledgerForList.map((entry) => (
                                         <tr key={entry.id} className="hover:bg-slate-50 transition-colors">
                                             <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-600">{entry.date}</td>
                                             <td className="px-6 py-4 text-sm text-slate-800 font-medium">
@@ -948,11 +1090,11 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                                 {entry.type === 'EXPENSE' ? `- PKR ${entry.amount.toLocaleString()}` : '—'}
                                             </td>
                                             <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-black text-slate-800">
-                                                PKR {entry.balance.toLocaleString()}
+                                                PKR {(entry.balance ?? (entry as any).balanceAfter ?? 0).toLocaleString()}
                                             </td>
                                         </tr>
                                     ))}
-                                    {ledgerEntries.length === 0 && (
+                                    {ledgerForList.length === 0 && (
                                         <tr>
                                             <td colSpan={showFarmColumn ? 6 : 5} className="px-6 py-12 text-center text-slate-400">
                                                 <BookOpen className="mx-auto mb-3 opacity-50" size={32} />
@@ -963,6 +1105,15 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                 </tbody>
                             </table>
                         </div>
+                        {ledgerPage && ledgerPage.totalPages > 1 && (
+                            <div className="px-6 py-3 border-t border-gray-100 flex items-center justify-between bg-gray-50">
+                                <span className="text-sm text-gray-600">Page {ledgerPage.number + 1} of {ledgerPage.totalPages} ({ledgerPage.totalElements} total)</span>
+                                <div className="flex gap-2">
+                                    <button type="button" disabled={ledgerPage.number === 0} onClick={() => setLedgerPageNum(p => Math.max(0, p - 1))} className="px-3 py-1 rounded border border-gray-200 text-sm font-medium disabled:opacity-50">Prev</button>
+                                    <button type="button" disabled={ledgerPage.number >= ledgerPage.totalPages - 1} onClick={() => setLedgerPageNum(p => p + 1)} className="px-3 py-1 rounded border border-gray-200 text-sm font-medium disabled:opacity-50">Next</button>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
             ) : null}

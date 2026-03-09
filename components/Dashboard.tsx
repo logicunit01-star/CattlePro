@@ -1,8 +1,8 @@
-
 import React from 'react';
 import { AppState, Livestock } from '../types';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, LineChart, Line, AreaChart, Area } from 'recharts';
 import { DollarSign, TrendingUp, AlertTriangle, Activity, Milk, Calendar, ArrowRight, CheckCircle, Syringe, Stethoscope } from 'lucide-react';
+import { backendService } from '../services/backendService';
 
 type DashboardView = 'CATTLE_MANAGER' | 'GOAT_MANAGER' | 'FINANCE' | 'OPERATIONS' | 'SALES' | 'PROCUREMENT' | 'REPORTS' | 'ENTITIES';
 
@@ -20,6 +20,32 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
   const [dateFilter, setDateFilter] = React.useState<'7_DAYS' | '30_DAYS' | '90_DAYS' | 'ALL'>('30_DAYS');
   const [speciesFilter, setSpeciesFilter] = React.useState<'ALL' | 'CATTLE' | 'GOAT'>('ALL');
   const [healthSort, setHealthSort] = React.useState<'DATE' | 'COST'>('DATE');
+  const [summaryData, setSummaryData] = React.useState<{ totalExpenses: number; totalRevenue: number; netProfit: number } | null>(null);
+  const [kpisData, setKpisData] = React.useState<{ totalLivestock: number; activeAnimals: number; deceasedCount: number; sickCount: number; totalExpenses: number; totalRevenue: number; netProfit: number } | null>(null);
+  const [milkTrendData, setMilkTrendData] = React.useState<{ date: string; liters: number }[] | null>(null);
+  const [feedCostsData, setFeedCostsData] = React.useState<{ date: string; amount: number }[] | null>(null);
+
+  React.useEffect(() => {
+    const range = dateFilter === 'ALL' ? 'ALL' : dateFilter;
+    backendService.getDashboardSummary(range).then((s) => setSummaryData({ totalExpenses: s.totalExpenses, totalRevenue: s.totalRevenue, netProfit: s.netProfit })).catch(() => setSummaryData(null));
+  }, [dateFilter]);
+
+  React.useEffect(() => {
+    const range = dateFilter === 'ALL' ? 'ALL' : dateFilter;
+    const species = speciesFilter === 'ALL' ? 'ALL' : speciesFilter;
+    backendService.getDashboardKpis(range, species).then(setKpisData).catch(() => setKpisData(null));
+  }, [dateFilter, speciesFilter]);
+
+  React.useEffect(() => {
+    const range = dateFilter === 'ALL' ? 'ALL' : dateFilter;
+    const species = speciesFilter === 'ALL' ? 'ALL' : speciesFilter;
+    backendService.getDashboardMilkTrend(range, species).then(setMilkTrendData).catch(() => setMilkTrendData(null));
+  }, [dateFilter, speciesFilter]);
+
+  React.useEffect(() => {
+    const range = dateFilter === 'ALL' ? 'ALL' : dateFilter;
+    backendService.getDashboardFeedCosts(range).then(setFeedCostsData).catch(() => setFeedCostsData(null));
+  }, [dateFilter]);
 
   const isDateInRange = (dateStr: string | undefined | null) => {
     if (!dateStr || dateFilter === 'ALL') return true;
@@ -35,18 +61,18 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
   const filteredExpenses = state.expenses.filter(e => isDateInRange(e.date));
   const filteredSales = state.sales.filter(s => isDateInRange(s.date));
 
-  // --- KPIs ---
+  // --- KPIs (server when available) ---
+  const totalLivestock = kpisData?.totalLivestock ?? filteredLivestock.length;
   const activeAnimals = filteredLivestock.filter(l => l.status === 'ACTIVE');
-  const totalLivestock = activeAnimals.length;
-  const cattleCount = activeAnimals.filter(l => l.species === 'CATTLE').length;
-  const goatCount = activeAnimals.filter(l => l.species === 'GOAT').length;
+  const cattleCount = speciesFilter === 'CATTLE' ? totalLivestock : (speciesFilter === 'GOAT' ? 0 : filteredLivestock.filter(l => l.species === 'CATTLE').length);
+  const goatCount = speciesFilter === 'GOAT' ? totalLivestock : (speciesFilter === 'CATTLE' ? 0 : filteredLivestock.filter(l => l.species === 'GOAT').length);
   const farmCount = isGlobalView ? new Set(filteredLivestock.map(l => l.farmId).filter(Boolean)).size : 1;
 
-  const totalExpenses = filteredExpenses.reduce((acc, curr) => acc + curr.amount, 0);
+  const totalExpenses = summaryData?.totalExpenses ?? filteredExpenses.reduce((acc, curr) => acc + curr.amount, 0);
   const operatingExpenses = filteredExpenses.filter(e => e.category !== 'INFRASTRUCTURE');
   const totalOperatingExpenses = operatingExpenses.reduce((acc, curr) => acc + curr.amount, 0);
-  const totalRevenue = filteredSales.reduce((acc, curr) => acc + curr.amount, 0);
-  const netProfit = totalRevenue - totalExpenses;
+  const totalRevenue = summaryData?.totalRevenue ?? filteredSales.reduce((acc, curr) => acc + curr.amount, 0);
+  const netProfit = summaryData?.netProfit ?? (totalRevenue - totalExpenses);
 
   // --- DAIRY METRICS ---
   const todayStr = new Date().toISOString().split('T')[0];
@@ -57,13 +83,15 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
     return d.toISOString().split('T')[0];
   });
 
-  const milkData = dateRangeArray.map(date => {
-    const dailyTotal = filteredLivestock.reduce((sum, animal) => {
-      const record = animal.milkProductionHistory?.find(r => r.date === date);
-      return sum + (record ? record.quantity : 0);
-    }, 0);
-    return { date: date.slice(5), liters: dailyTotal };
-  });
+  const milkData = milkTrendData && milkTrendData.length > 0
+    ? milkTrendData.map(d => ({ date: d.date, liters: d.liters }))
+    : dateRangeArray.map(date => {
+        const dailyTotal = filteredLivestock.reduce((sum, animal) => {
+          const record = animal.milkProductionHistory?.find(r => r.date === date);
+          return sum + (record ? record.quantity : 0);
+        }, 0);
+        return { date: date.slice(5), liters: dailyTotal };
+      });
 
   const totalMilkToday = filteredLivestock.reduce((sum, animal) => {
     const record = animal.milkProductionHistory?.find(r => r.date === todayStr);
@@ -110,8 +138,11 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
 
   const avgCostPerAnimal = totalLivestock > 0 ? (totalOperatingExpenses / totalLivestock) : 0;
 
-  const deceasedCount = filteredLivestock.filter(l => l.status === 'DECEASED' && isDateInRange(l.deathDate)).length;
-  const mortalityRate = filteredLivestock.length > 0 ? (deceasedCount / filteredLivestock.length) * 100 : 0;
+  const deceasedCount = kpisData?.deceasedCount ?? filteredLivestock.filter(l => l.status === 'DECEASED' && isDateInRange(l.deathDate)).length;
+  const sickCountForScore = kpisData?.sickCount ?? filteredLivestock.filter(l => l.status === 'SICK').length;
+  const mortalityRate = totalLivestock > 0 ? (deceasedCount / totalLivestock) * 100 : 0;
+  const sickRatio = totalLivestock > 0 ? sickCountForScore / totalLivestock : 0;
+  const farmHealthScore = Math.max(0, 100 - (mortalityRate * 2) - (sickRatio * 100 * 1.5));
 
   return (
     <div className="space-y-8 animate-fade-in pb-10">
@@ -162,7 +193,7 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
           </div>
         </div>
 
-        <div role="button" tabIndex={0} onClick={() => onNavigate?.('OPERATIONS', { operationsTab: 'FEED' })} onKeyDown={e => e.key === 'Enter' && onNavigate?.('OPERATIONS', { operationsTab: 'FEED' })} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex items-center justify-between premium-card group cursor-pointer relative overflow-hidden hover:shadow-md transition-shadow">
+        <div role="button" tabIndex={0} onClick={() => onNavigate?.(speciesFilter === 'GOAT' ? 'GOAT_MANAGER' : 'CATTLE_MANAGER', { filterCategory: 'Dairy' })} onKeyDown={e => e.key === 'Enter' && onNavigate?.(speciesFilter === 'GOAT' ? 'GOAT_MANAGER' : 'CATTLE_MANAGER', { filterCategory: 'Dairy' })} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex items-center justify-between premium-card group cursor-pointer relative overflow-hidden hover:shadow-md transition-shadow">
           <div className="bg-gradient-to-br from-sky-500/10 to-cyan-600/10 absolute -right-6 -top-6 w-32 h-32 rounded-full blur-2xl group-hover:scale-150 transition-all duration-500"></div>
           <div className="relative z-10">
             <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Milk Today</p>
@@ -390,20 +421,12 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
               <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2 font-display"><DollarSign size={20} className="text-blue-500" /> Filtered Feed Costs</h3>
               <div className="h-48">
                 <ResponsiveContainer width="100%" height="100%">
-                  {(() => {
-                    const mappedData = dateRangeArray.map(date => {
-                      const dailyCost = filteredExpenses.filter(e => e.category === 'FEED' && e.date === date).reduce((sum, e) => sum + e.amount, 0);
-                      return { date: date.slice(5), FeedCost: dailyCost };
-                    });
-                    return (
-                      <BarChart data={mappedData}>
-                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                        <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#94a3b8' }} />
-                        <Tooltip cursor={{ fill: '#f8fafc' }} contentStyle={{ borderRadius: '8px', border: 'none' }} />
-                        <Bar dataKey="FeedCost" fill="#3b82f6" radius={[4, 4, 0, 0]} />
-                      </BarChart>
-                    );
-                  })()}
+                  <BarChart data={feedCostsData && feedCostsData.length > 0 ? feedCostsData.map(d => ({ date: d.date.slice(5), FeedCost: d.amount })) : dateRangeArray.map(date => ({ date: date.slice(5), FeedCost: filteredExpenses.filter(e => e.category === 'FEED' && e.date === date).reduce((sum, e) => sum + e.amount, 0) }))}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                    <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#94a3b8' }} />
+                    <Tooltip cursor={{ fill: '#f8fafc' }} contentStyle={{ borderRadius: '8px', border: 'none' }} />
+                    <Bar dataKey="FeedCost" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+                  </BarChart>
                 </ResponsiveContainer>
               </div>
             </div>
@@ -448,19 +471,11 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
           {/* Quick Actions (Visual Only) */}
           <div role="button" tabIndex={0} onClick={() => onNavigate?.(speciesFilter === 'GOAT' ? 'GOAT_MANAGER' : 'CATTLE_MANAGER')} onKeyDown={e => e.key === 'Enter' && onNavigate?.(speciesFilter === 'GOAT' ? 'GOAT_MANAGER' : 'CATTLE_MANAGER')} className="bg-gradient-to-br from-emerald-600 to-teal-700 p-6 rounded-2xl shadow-lg text-white cursor-pointer hover:shadow-xl transition-shadow relative overflow-hidden">
             <h3 className="font-bold text-lg mb-2">Farm Health Score</h3>
-            {(() => {
-              const sickRatio = filteredLivestock.length > 0 ? filteredLivestock.filter(l => l.status === 'SICK').length / filteredLivestock.length : 0;
-              const score = Math.max(0, Math.round(100 - (mortalityRate * 2) - (sickRatio * 100 * 1.5)));
-              return (
-                <>
-                  <div className="text-5xl font-black mb-2">{score}<span className="text-2xl opacity-60">%</span></div>
-                  <p className="text-emerald-100 text-sm mb-6">Based on mortality, illness prevalence, and vitality.</p>
-                  <div className="h-2 bg-black/20 rounded-full overflow-hidden">
-                    <div className="h-full bg-emerald-300 transition-all duration-1000" style={{ width: `${score}%` }}></div>
-                  </div>
-                </>
-              );
-            })()}
+            <div className="text-5xl font-black mb-2">{Math.round(farmHealthScore)}<span className="text-2xl opacity-60">%</span></div>
+            <p className="text-emerald-100 text-sm mb-6">Based on mortality, illness prevalence, and vitality.</p>
+            <div className="h-2 bg-black/20 rounded-full overflow-hidden">
+              <div className="h-full bg-emerald-300 transition-all duration-1000" style={{ width: `${Math.round(farmHealthScore)}%` }}></div>
+            </div>
           </div>
         </div>
       </div>

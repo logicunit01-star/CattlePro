@@ -18,6 +18,10 @@ import { Truck, Home, LogOut, FileText, BadgeDollarSign, Activity, Stethoscope, 
 
 import { backendService } from './services/backendService';
 import { setTenant as setTenantContext, getTenantFromUrl, getPersistedSales, setPersistedSales, getPersistedLivestockStatus, setPersistedLivestockStatus } from './services/tenantContext';
+
+function toLivestockArray(r: Livestock[] | { content?: Livestock[] }): Livestock[] {
+  return Array.isArray(r) ? r : (r?.content ?? []);
+}
 import { setTenant as setTenantRedux } from './store/tenantSlice';
 import type { RootState } from './store';
 
@@ -129,6 +133,11 @@ const App: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Server-side pagination for livestock grid (CATTLE_MANAGER / GOAT_MANAGER); category/status for deep-link from Dashboard
+  const [livestockPageRequest, setLivestockPageRequest] = useState({ number: 0, size: 20, sortBy: 'tagId', sortDirection: 'asc' as 'asc' | 'desc', q: '', category: '' as string, status: '' as string });
+  const [livestockPageResult, setLivestockPageResult] = useState<{ content: Livestock[]; totalElements: number; totalPages: number } | null>(null);
+  const [livestockGridRefresh, setLivestockGridRefresh] = useState(0);
+
   // Tenant: on first load read URL and persist companyName & instanceId to localStorage + Redux
   useEffect(() => {
     const fromUrl = getTenantFromUrl();
@@ -144,6 +153,24 @@ const App: React.FC = () => {
       setTenantContext(reduxTenant);
     }
   }, [reduxTenant.companyName, reduxTenant.instanceId, reduxTenant.appType]);
+
+  // Fetch paginated livestock when on CATTLE_MANAGER or GOAT_MANAGER
+  useEffect(() => {
+    if (activeView !== 'CATTLE_MANAGER' && activeView !== 'GOAT_MANAGER') {
+      setLivestockPageResult(null);
+      return;
+    }
+    const species = activeView === 'CATTLE_MANAGER' ? 'CATTLE' : 'GOAT';
+    const farmId = state.currentFarmId ?? undefined;
+    const { number, size, sortBy, sortDirection, q, category, status } = livestockPageRequest;
+    const categoryParam = category || (FIXED_CATEGORIES[0] ?? undefined);
+    backendService.getLivestock({ page: number, limit: size, sortBy, sortDirection, q: q || undefined, farmId, species, category: categoryParam, status: status || undefined })
+      .then((data) => {
+        const page = Array.isArray(data) ? { content: data, totalElements: data.length, totalPages: 1 } : data;
+        setLivestockPageResult({ content: page.content, totalElements: page.totalElements, totalPages: page.totalPages });
+      })
+      .catch(() => setLivestockPageResult(null));
+  }, [activeView, state.currentFarmId, livestockPageRequest.number, livestockPageRequest.size, livestockPageRequest.sortBy, livestockPageRequest.sortDirection, livestockPageRequest.q, livestockPageRequest.category, livestockPageRequest.status, livestockGridRefresh]);
 
   // Check authentication on mount
   useEffect(() => {
@@ -184,8 +211,9 @@ const App: React.FC = () => {
         ]);
 
         const salesFromApi = Array.isArray(apiSales) ? apiSales : [];
+        const livestockList = toLivestockArray(apiLivestock);
         // Enrich sales missing farmId: backend may not return it, so infer from first sold animal's farmId
-        const livestockById = new Map(apiLivestock.map(l => [l.id, l]));
+        const livestockById = new Map(livestockList.map(l => [l.id, l]));
         const enrichedApiSales: Sale[] = salesFromApi.map((s: Sale) => {
           if (s.farmId) return s;
           const firstAnimalId = s.soldAnimalIds?.[0];
@@ -204,7 +232,7 @@ const App: React.FC = () => {
         }
 
         const statusOverrides = getPersistedLivestockStatus();
-        const livestock = apiLivestock.map(l => ({
+        const livestock = livestockList.map(l => ({
           ...l,
           status: (statusOverrides[l.id] as LivestockStatus) || l.status
         }));
@@ -542,7 +570,7 @@ const App: React.FC = () => {
         feed: refetchedFeed,
         consumptionLogs: refetchedLogs,
         processedFeedLedgers: refetchedLedgers,
-        livestock: refetchedLivestock,
+        livestock: toLivestockArray(refetchedLivestock),
         dietPlans: refetchedPlans,
         expenses: refetchedExpenses
       }));
@@ -560,85 +588,20 @@ const App: React.FC = () => {
       const ledger = state.processedFeedLedgers?.find(l => l.id === ledgerId);
       if (!ledger) return alert("Ledger not found.");
       if (ledger.status === 'REVERSED') return alert("Already reversed.");
-
-      const logs = state.consumptionLogs?.filter(l => l.processedLedgerId === ledgerId) || [];
-      if (logs.length === 0) return alert("No consumption logs found for this ledger.");
-
-      // 1. Recover Inventory
-      const invUpdates = new Map<string, FeedInventory>();
-      state.feed.forEach(f => invUpdates.set(f.id, { ...f }));
-      const modifiedFeedIds = new Set<string>();
-
-      for (const log of logs) {
-        const invItem = invUpdates.get(log.itemId);
-        if (invItem) {
-          invItem.quantity += Number(log.quantityUsed || 0);
-          invUpdates.set(invItem.id, invItem);
-          modifiedFeedIds.add(invItem.id);
-        }
-      }
-
-      // 2. Reduce Accumulated Cost from Animals
-      const logCostPerAnimal = ledger.totalCost / (ledger.totalAnimalsFed || 1);
-      const plan = state.dietPlans.find(p => p.id === ledger.dietPlanId);
-      const livestockUpdates = new Map<string, Livestock>();
-      const modifiedLivestockIds = new Set<string>();
-
-      if (plan) {
-        let animalsToReverse: Livestock[] = [];
-        if (plan.targetType === 'CATEGORY') {
-          animalsToReverse = state.livestock.filter(l => l.farmId === plan.farmId && l.status === 'ACTIVE' && l.category === plan.targetName);
-        } else if (plan.targetType === 'INDIVIDUAL') {
-          const ids = plan.targetIds || (plan.targetId ? [plan.targetId] : []);
-          animalsToReverse = state.livestock.filter(l => ids.includes(l.id) && l.status === 'ACTIVE');
-        } else if (plan.targetType === 'ALL' || !plan.targetType) {
-          animalsToReverse = state.livestock.filter(l => l.farmId === plan.farmId && l.status === 'ACTIVE');
-        }
-
-        for (const animal of animalsToReverse) {
-          const currentAnimal = livestockUpdates.get(animal.id) || { ...animal };
-          currentAnimal.accumulatedFeedCost = Math.max(0, (currentAnimal.accumulatedFeedCost || 0) - logCostPerAnimal);
-          livestockUpdates.set(animal.id, currentAnimal);
-          modifiedLivestockIds.add(animal.id);
-        }
-      }
-
-      // 3. Commit updates locally to backend (since backend lacks explicit batch reverse API yet)
-      for (const id of modifiedFeedIds) {
-        const inv = invUpdates.get(id);
-        if (inv) await backendService.updateFeed(id, inv);
-      }
-      for (const id of modifiedLivestockIds) {
-        const animal = livestockUpdates.get(id);
-        if (animal) await backendService.updateLivestock(id, animal);
-      }
-      await backendService.updateFeedLedger(ledgerId, { ...ledger, status: 'REVERSED' });
-
-      // Reversal Accounting (Task 3 Fix)
-      // Find the feed expense for exactly this date that matches our unified feed expense
-      const feedExpense = state.expenses.find(e => e.date === ledger.date && e.category === 'FEED' && e.description.includes('Daily Auto-Feed Consumption'));
-      let updatedExpenses = state.expenses;
-      if (feedExpense) {
-        const remainingAmount = feedExpense.amount - ledger.totalCost;
-        if (remainingAmount <= 0) {
-          await backendService.deleteExpense(feedExpense.id);
-          updatedExpenses = state.expenses.filter(e => e.id !== feedExpense.id);
-        } else {
-          const updatedExpense = { ...feedExpense, amount: remainingAmount };
-          await backendService.updateExpense(updatedExpense.id, updatedExpense);
-          updatedExpenses = state.expenses.map(e => e.id === feedExpense.id ? updatedExpense : e);
-        }
-      }
-
+      await backendService.reverseFeedLedger(ledgerId);
+      const getLedgers = backendService.getFeedLedgers ? backendService.getFeedLedgers() : Promise.resolve([]);
+      const [expenses, feed, processedFeedLedgers] = await Promise.all([
+        backendService.getExpenses(),
+        backendService.getFeed(),
+        getLedgers,
+      ]);
       setState(prev => ({
         ...prev,
-        feed: prev.feed.map(f => modifiedFeedIds.has(f.id) ? invUpdates.get(f.id)! : f),
-        livestock: prev.livestock.map(l => modifiedLivestockIds.has(l.id) ? livestockUpdates.get(l.id)! : l),
-        processedFeedLedgers: (prev.processedFeedLedgers || []).map(l => l.id === ledgerId ? { ...l, status: 'REVERSED' } : l),
-        expenses: updatedExpenses
+        expenses: Array.isArray(expenses) ? expenses : prev.expenses,
+        feed: Array.isArray(feed) ? feed : prev.feed,
+        processedFeedLedgers: Array.isArray(processedFeedLedgers) ? processedFeedLedgers : (prev.processedFeedLedgers || []).map(l => l.id === ledgerId ? { ...l, status: 'REVERSED' } : l),
       }));
-
-      alert(`Transaction ${ledgerId} completely reversed. Feed inventory, animal costs, and global feed expenses successfully restored.`);
+      alert(`Transaction reversed. Feed inventory, animal costs, and linked expense have been restored/removed by the server.`);
     } catch (e: any) {
       alert(`Reversal failed: ${e?.message ?? e}`);
     }
@@ -741,6 +704,7 @@ const App: React.FC = () => {
         livestock: [...prev.livestock, saved],
         expenses: [...prev.expenses, ...newExpenses]
       }));
+      setLivestockGridRefresh(r => r + 1);
     } catch (e) { alert("Failed to save livestock"); }
   };
 
@@ -752,6 +716,7 @@ const App: React.FC = () => {
         livestock: prev.livestock.map(l => l.id === saved.id ? saved : l)
       }));
       setPersistedLivestockStatus({ [saved.id]: saved.status });
+      setLivestockGridRefresh(r => r + 1);
     } catch (e) {
       setState(prev => ({
         ...prev,
@@ -784,19 +749,37 @@ const App: React.FC = () => {
         await backendService.createExpense(expense);
       }
 
-      const [updatedLivestock, expenses] = await Promise.all([
+      const [rawLivestock, expenses] = await Promise.all([
         backendService.getLivestock(),
         record.cost > 0 ? backendService.getExpenses() : Promise.resolve(state.expenses)
       ]);
-      setState(prev => ({ ...prev, livestock: updatedLivestock, expenses }));
+      setState(prev => ({ ...prev, livestock: toLivestockArray(rawLivestock), expenses }));
     } catch (e) { alert("Failed to add medical record: " + (e instanceof Error ? e.message : String(e))); }
+  };
+
+  const bulkVaccinate = async (animalIds: string[], record: MedicalRecord) => {
+    try {
+      await backendService.bulkVaccinate(animalIds, record);
+      const updatedLivestock = toLivestockArray(await backendService.getLivestock());
+      setState(prev => ({ ...prev, livestock: updatedLivestock }));
+      setLivestockGridRefresh(r => r + 1);
+    } catch (e) { alert("Failed to bulk vaccinate: " + (e instanceof Error ? e.message : String(e))); }
+  };
+
+  const bulkMove = async (animalIds: string[], location: string) => {
+    try {
+      await backendService.bulkMove(animalIds, location);
+      const updatedLivestock = toLivestockArray(await backendService.getLivestock());
+      setState(prev => ({ ...prev, livestock: updatedLivestock }));
+      setLivestockGridRefresh(r => r + 1);
+    } catch (e) { alert("Failed to bulk move: " + (e instanceof Error ? e.message : String(e))); }
   };
 
   const addBreedingRecord = async (animalId: string, record: InseminationRecord) => {
     try {
       const animal = state.livestock.find(l => l.id === animalId);
       const savedRecord = await backendService.addBreedingRecord(animalId, record);
-      const updatedLivestock = await backendService.getLivestock();
+      const updatedLivestock = toLivestockArray(await backendService.getLivestock());
 
       if (record.cost > 0) {
         const targetFarmId = state.currentFarmId || animal?.farmId;
@@ -821,7 +804,7 @@ const App: React.FC = () => {
   const updateBreedingRecord = async (animalId: string, updatedRec: InseminationRecord) => {
     try {
       await backendService.updateBreedingRecord(animalId, updatedRec);
-      const updatedLivestock = await backendService.getLivestock();
+      const updatedLivestock = toLivestockArray(await backendService.getLivestock());
       setState(prev => ({ ...prev, livestock: updatedLivestock }));
     } catch (e) {
       console.error(e);
@@ -832,7 +815,7 @@ const App: React.FC = () => {
   const addWeightRecord = async (animalId: string, record: WeightRecord) => {
     try {
       await backendService.addWeightRecord(animalId, record);
-      const updatedLivestock = await backendService.getLivestock();
+      const updatedLivestock = toLivestockArray(await backendService.getLivestock());
       setState(prev => ({ ...prev, livestock: updatedLivestock }));
     } catch (e) { alert("Failed to add weight record"); }
   };
@@ -840,7 +823,7 @@ const App: React.FC = () => {
   const addMilkRecord = async (animalId: string, record: MilkRecord) => {
     try {
       await backendService.addMilkRecord(animalId, record);
-      const updatedLivestock = await backendService.getLivestock();
+      const updatedLivestock = toLivestockArray(await backendService.getLivestock());
       setState(prev => ({ ...prev, livestock: updatedLivestock }));
     } catch (e) { alert("Failed to add milk record"); }
   };
@@ -850,8 +833,9 @@ const App: React.FC = () => {
       // Call backend which may soft-delete (ARCHIVED) or hard-delete depending on financial history
       await backendService.deleteLivestock(id, force);
       // Re-fetch to reflect server truth (archived vs removed)
-      const updatedLivestock = await backendService.getLivestock();
+      const updatedLivestock = toLivestockArray(await backendService.getLivestock());
       setState(prev => ({ ...prev, livestock: updatedLivestock }));
+      setLivestockGridRefresh(r => r + 1);
     } catch (e: any) {
       alert(e?.message || "Failed to delete animal.");
     }
@@ -916,7 +900,10 @@ const App: React.FC = () => {
     setPersistedSales(newSalesAfterAdd);
 
     try {
-      const saved = await backendService.createSale(saleWithContext);
+      const isBulk = (saleWithContext.soldAnimalIds?.length ?? 0) > 1;
+      const saved = isBulk
+        ? await backendService.createSaleBulk(saleWithContext)
+        : await backendService.createSale(saleWithContext);
       const [salesFromApi, entities, ledger] = await Promise.all([
         backendService.getSales().catch(() => []),
         backendService.getEntities(),
@@ -1220,6 +1207,9 @@ const App: React.FC = () => {
                 onNavigate={(view, options) => {
                   setActiveView(view);
                   if (options?.operationsTab) setOperationsTab(options.operationsTab);
+                  if ((view === 'CATTLE_MANAGER' || view === 'GOAT_MANAGER') && options?.filterCategory) {
+                    setLivestockPageRequest(prev => ({ ...prev, category: options.filterCategory ?? '', number: 0 }));
+                  }
                   setIsSidebarOpen(false);
                 }}
                 state={{
@@ -1235,24 +1225,36 @@ const App: React.FC = () => {
             {activeView === 'CATTLE_MANAGER' && (
               <LivestockManager
                 key="cattle-manager"
-                livestock={state.currentFarmId ? state.livestock.filter(l => l.farmId === state.currentFarmId) : (state.currentLocationId ? state.livestock.filter(l => state.farms.find(f => f.id === l.farmId)?.locationId === state.currentLocationId) : [])}
+                livestock={livestockPageResult ? livestockPageResult.content : (state.currentFarmId ? state.livestock.filter(l => l.farmId === state.currentFarmId && l.species === 'CATTLE') : (state.currentLocationId ? state.livestock.filter(l => l.species === 'CATTLE' && state.farms.find(f => f.id === l.farmId)?.locationId === state.currentLocationId) : state.livestock.filter(l => l.species === 'CATTLE')))}
                 breeders={state.breeders} species="CATTLE" categories={FIXED_CATEGORIES}
                 entities={state.entities}
                 onAddLivestock={addLivestock} onUpdateLivestock={updateLivestock} onDeleteLivestock={deleteLivestock}
                 onAddMedicalRecord={addMedicalRecord} onAddBreedingRecord={addBreedingRecord} onAddWeightRecord={addWeightRecord} onAddMilkRecord={addMilkRecord}
                 onUpdateBreedingRecord={updateBreedingRecord}
+                onBulkVaccinate={bulkVaccinate} onBulkMove={bulkMove}
+                pagination={livestockPageResult ? { totalElements: livestockPageResult.totalElements, totalPages: livestockPageResult.totalPages, page: livestockPageRequest.number, size: livestockPageRequest.size, sortBy: livestockPageRequest.sortBy, sortDirection: livestockPageRequest.sortDirection, searchQ: livestockPageRequest.q, category: livestockPageRequest.category } : undefined}
+                onPageChange={(page) => setLivestockPageRequest(prev => ({ ...prev, number: page }))}
+                onSortChange={(sortBy, sortDirection) => setLivestockPageRequest(prev => ({ ...prev, sortBy, sortDirection, number: 0 }))}
+                onSearchChange={(q) => setLivestockPageRequest(prev => ({ ...prev, q, number: 0 }))}
+                onCategoryChange={(category) => setLivestockPageRequest(prev => ({ ...prev, category, number: 0 }))}
                 inventory={state.feed} onAddSale={handleCreateSale}
               />
             )}
             {activeView === 'GOAT_MANAGER' && (
               <LivestockManager
                 key="goat-manager"
-                livestock={state.currentFarmId ? state.livestock.filter(l => l.farmId === state.currentFarmId) : (state.currentLocationId ? state.livestock.filter(l => state.farms.find(f => f.id === l.farmId)?.locationId === state.currentLocationId) : [])}
+                livestock={livestockPageResult ? livestockPageResult.content : (state.currentFarmId ? state.livestock.filter(l => l.farmId === state.currentFarmId && l.species === 'GOAT') : (state.currentLocationId ? state.livestock.filter(l => l.species === 'GOAT' && state.farms.find(f => f.id === l.farmId)?.locationId === state.currentLocationId) : state.livestock.filter(l => l.species === 'GOAT')))}
                 breeders={state.breeders} species="GOAT" categories={FIXED_CATEGORIES}
                 entities={state.entities}
                 onAddLivestock={addLivestock} onUpdateLivestock={updateLivestock} onDeleteLivestock={deleteLivestock}
                 onAddMedicalRecord={addMedicalRecord} onAddBreedingRecord={addBreedingRecord} onAddWeightRecord={addWeightRecord} onAddMilkRecord={addMilkRecord}
                 onUpdateBreedingRecord={updateBreedingRecord}
+                onBulkVaccinate={bulkVaccinate} onBulkMove={bulkMove}
+                pagination={livestockPageResult ? { totalElements: livestockPageResult.totalElements, totalPages: livestockPageResult.totalPages, page: livestockPageRequest.number, size: livestockPageRequest.size, sortBy: livestockPageRequest.sortBy, sortDirection: livestockPageRequest.sortDirection, searchQ: livestockPageRequest.q, category: livestockPageRequest.category } : undefined}
+                onPageChange={(page) => setLivestockPageRequest(prev => ({ ...prev, number: page }))}
+                onSortChange={(sortBy, sortDirection) => setLivestockPageRequest(prev => ({ ...prev, sortBy, sortDirection, number: 0 }))}
+                onSearchChange={(q) => setLivestockPageRequest(prev => ({ ...prev, q, number: 0 }))}
+                onCategoryChange={(category) => setLivestockPageRequest(prev => ({ ...prev, category, number: 0 }))}
                 inventory={state.feed} onAddSale={handleCreateSale}
               />
             )}

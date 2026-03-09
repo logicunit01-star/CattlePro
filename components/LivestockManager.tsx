@@ -22,13 +22,20 @@ interface Props {
 
     onAddMilkRecord: (animalId: string, record: MilkRecord) => void;
     onUpdateBreedingRecord: (animalId: string, record: InseminationRecord) => void;
+    onBulkVaccinate?: (animalIds: string[], record: MedicalRecord) => void | Promise<void>;
+    onBulkMove?: (animalIds: string[], location: string) => void | Promise<void>;
+    pagination?: { totalElements: number; totalPages: number; page: number; size: number; sortBy: string; sortDirection: string; searchQ: string; category?: string };
+    onPageChange?: (page: number) => void;
+    onSortChange?: (sortBy: string, sortDirection: 'asc' | 'desc') => void;
+    onSearchChange?: (q: string) => void;
+    onCategoryChange?: (category: string) => void;
     inventory: FeedInventory[];
     onAddSale: (sale: Sale) => Promise<void>;
 }
 
 type ViewMode = 'LIST' | 'ANIMAL_FORM' | 'DETAILS';
 
-export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species, categories, entities = [], infrastructure = [], onAddLivestock, onUpdateLivestock, onDeleteLivestock, onAddMedicalRecord, onAddBreedingRecord, onAddWeightRecord, onAddMilkRecord, onUpdateBreedingRecord, inventory, onAddSale }) => {
+export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species, categories, entities = [], infrastructure = [], onAddLivestock, onUpdateLivestock, onDeleteLivestock, onAddMedicalRecord, onAddBreedingRecord, onAddWeightRecord, onAddMilkRecord, onUpdateBreedingRecord, onBulkVaccinate, onBulkMove, pagination, onPageChange, onSortChange, onSearchChange, onCategoryChange, inventory, onAddSale }) => {
     const T = {
         animal: species === 'CATTLE' ? 'Animal' : 'Goat',
         sire: species === 'CATTLE' ? 'Bull' : 'Buck',
@@ -59,8 +66,15 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
     };
 
     const [currentView, setCurrentView] = useState<ViewMode>('LIST');
-    const [activeCategoryTab, setActiveCategoryTab] = useState<string>(categories[0]);
+    const [activeCategoryTab, setActiveCategoryTab] = useState<string>(() => (pagination?.category && categories.includes(pagination.category)) ? pagination.category : categories[0]);
+    React.useEffect(() => {
+        if (pagination?.category && categories.includes(pagination.category) && activeCategoryTab !== pagination.category) setActiveCategoryTab(pagination.category);
+    }, [pagination?.category]);
     const [searchTerm, setSearchTerm] = useState('');
+    const [serverSearchInput, setServerSearchInput] = useState('');
+    React.useEffect(() => { if (pagination?.searchQ !== undefined) setServerSearchInput(pagination.searchQ); }, [pagination?.searchQ]);
+    const searchInputValue = pagination ? serverSearchInput : searchTerm;
+    const setSearchInputValue = (v: string) => { if (pagination && onSearchChange) { setServerSearchInput(v); onSearchChange(v); } else setSearchTerm(v); };
     const [viewLayout, setViewLayout] = useState<'GRID' | 'TABLE'>('TABLE');
     const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' }>({ key: 'tagId', direction: 'asc' });
 
@@ -142,15 +156,17 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
         setCurrentView('ANIMAL_FORM');
     };
 
+    const isServerPagination = pagination != null;
     const filteredLivestock = livestock.filter(
         (c) =>
             c.species === species &&
-            c.category === activeCategoryTab &&
-            (c.tagId.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                c.breed.toLowerCase().includes(searchTerm.toLowerCase()))
+            (isServerPagination ? true : c.category === activeCategoryTab) &&
+            (isServerPagination ? true : (c.tagId.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                c.breed.toLowerCase().includes(searchTerm.toLowerCase())))
     );
 
     const sortedLivestock = React.useMemo(() => {
+        if (isServerPagination) return filteredLivestock;
         let sortableItems = [...filteredLivestock];
         sortableItems.sort((a, b) => {
             let aVal: any = a[sortConfig.key as keyof Livestock];
@@ -181,8 +197,11 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
 
     const handleSort = (key: string) => {
         let direction: 'asc' | 'desc' = 'asc';
-        if (sortConfig.key === key && sortConfig.direction === 'asc') direction = 'desc';
-        setSortConfig({ key, direction });
+        const currentKey = isServerPagination ? (pagination?.sortBy || 'tagId') : sortConfig.key;
+        const currentDir = isServerPagination ? (pagination?.sortDirection as 'asc' | 'desc') : sortConfig.direction;
+        if (currentKey === key && currentDir === 'asc') direction = 'desc';
+        if (isServerPagination && onSortChange) onSortChange(key, direction);
+        else setSortConfig({ key, direction });
     };
 
     const getBadges = (animal: Livestock) => {
@@ -870,6 +889,7 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                                     const updated = {
                                         ...selectedAnimal,
                                         status: 'DECEASED' as LivestockStatus,
+                                        deathDate: date,
                                         notes: `${selectedAnimal.notes || ''} [DECEASED: ${date} - ${cause}]`
                                     };
                                     await onUpdateLivestock(updated);
@@ -1354,14 +1374,20 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
             <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-4 flex flex-col md:flex-row gap-4 justify-between items-center premium-card">
                 <div className="flex bg-slate-50 p-1.5 rounded-xl overflow-x-auto no-scrollbar max-w-full border border-slate-100">
                     {categories.map((cat) => (
-                        <button key={cat} onClick={() => setActiveCategoryTab(cat)} className={`px-5 py-2 rounded-lg text-xs font-bold transition-all whitespace-nowrap flex items-center gap-2 ${activeCategoryTab === cat ? `bg-white shadow-sm ring-1 ring-slate-200 ${species === 'GOAT' ? 'text-amber-700' : 'text-emerald-700'}` : 'text-slate-400 hover:text-slate-700'}`}>
+                        <button key={cat} onClick={() => { setActiveCategoryTab(cat); if (isServerPagination && onCategoryChange) onCategoryChange(cat); }} className={`px-5 py-2 rounded-lg text-xs font-bold transition-all whitespace-nowrap flex items-center gap-2 ${activeCategoryTab === cat ? `bg-white shadow-sm ring-1 ring-slate-200 ${species === 'GOAT' ? 'text-amber-700' : 'text-emerald-700'}` : 'text-slate-400 hover:text-slate-700'}`}>
                             {getCategoryIcon(cat, 16)} {cat.toUpperCase()}
                         </button>
                     ))}
                 </div>
                 <div className="relative w-full md:max-w-xs group">
                     <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-emerald-500 transition-colors" size={18} />
-                    <input type="text" placeholder="Search Tag or Breed..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-transparent rounded-xl focus:bg-white focus:border-emerald-200 focus:ring-4 focus:ring-emerald-50 outline-none font-medium text-sm transition-all" />
+                    <input
+                        type="text"
+                        placeholder="Search Tag or Breed..."
+                        value={searchInputValue}
+                        onChange={(e) => setSearchInputValue(e.target.value)}
+                        className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-transparent rounded-xl focus:bg-white focus:border-emerald-200 focus:ring-4 focus:ring-emerald-50 outline-none font-medium text-sm transition-all"
+                    />
                 </div>
             </div>
 
@@ -1370,30 +1396,38 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                     <div className="flex items-center gap-4">
                         <span className="font-black text-emerald-400 text-lg px-4">{selectedBatchIds.length} Selected</span>
                         <div className="h-8 w-px bg-gray-700"></div>
-                        <button onClick={() => {
+                        <button onClick={async () => {
                             const date = prompt("Vaccination Date (YYYY-MM-DD)", new Date().toISOString().split('T')[0]);
                             const medicine = prompt("Medicine Name");
                             if (date && medicine) {
-                                selectedBatchIds.forEach(id => onAddMedicalRecord(id, {
-                                    id: Math.random().toString(36).substr(2, 9),
-                                    date, time: '09:00', type: 'VACCINATION', medicineName: medicine, doctorName: 'Self', cost: 0, notes: 'Bulk Vaccination'
-                                }));
-                                alert("Records Added");
-                                setSelectedBatchIds([]);
-                                setIsBatchMode(false);
+                                const record: MedicalRecord = { id: Math.random().toString(36).substr(2, 9), date, time: '09:00', type: 'VACCINATION', medicineName: medicine, doctorName: 'Self', cost: 0, notes: 'Bulk Vaccination' };
+                                if (onBulkVaccinate) {
+                                    await onBulkVaccinate(selectedBatchIds, record);
+                                    setSelectedBatchIds([]);
+                                    setIsBatchMode(false);
+                                } else {
+                                    selectedBatchIds.forEach(id => onAddMedicalRecord(id, record));
+                                    setSelectedBatchIds([]);
+                                    setIsBatchMode(false);
+                                }
                             }
                         }} className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg font-bold text-xs flex items-center gap-2 transition-all"><Stethoscope size={16} /> VACCINATE</button>
 
-                        <button onClick={() => {
+                        <button onClick={async () => {
                             const newLocation = prompt("Enter New Location / Barn Name:");
                             if (newLocation) {
-                                selectedBatchIds.forEach(id => {
-                                    const animal = livestock.find(l => l.id === id);
-                                    if (animal) onUpdateLivestock({ ...animal, location: newLocation });
-                                });
-                                alert("Animals Moved Successfully");
-                                setSelectedBatchIds([]);
-                                setIsBatchMode(false);
+                                if (onBulkMove) {
+                                    await onBulkMove(selectedBatchIds, newLocation);
+                                    setSelectedBatchIds([]);
+                                    setIsBatchMode(false);
+                                } else {
+                                    selectedBatchIds.forEach(id => {
+                                        const animal = livestock.find(l => l.id === id);
+                                        if (animal) onUpdateLivestock({ ...animal, location: newLocation });
+                                    });
+                                    setSelectedBatchIds([]);
+                                    setIsBatchMode(false);
+                                }
                             }
                         }} className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg font-bold text-xs flex items-center gap-2 transition-all"><MapPin size={16} /> BULK MOVE</button>
 
@@ -1500,6 +1534,16 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                             <p className="text-sm text-gray-400 max-w-xs mx-auto">We couldn't find any {species.toLowerCase()} matching your search in the "{activeCategoryTab}" category.</p>
                         </div>
                     )}
+                    {isServerPagination && pagination && pagination.totalPages > 0 && (
+                        <div className="col-span-full flex items-center justify-between px-4 py-3 mt-4 rounded-2xl bg-slate-50 border border-slate-200">
+                            <p className="text-xs font-bold text-slate-500">Showing {pagination.size * pagination.page + 1}–{Math.min(pagination.size * (pagination.page + 1), pagination.totalElements)} of {pagination.totalElements}</p>
+                            <div className="flex items-center gap-2">
+                                <button type="button" onClick={() => onPageChange?.(pagination.page - 1)} disabled={pagination.page <= 0} className="px-3 py-1.5 rounded-lg border border-slate-200 text-sm font-bold text-slate-600 hover:bg-white disabled:opacity-50 disabled:cursor-not-allowed">Prev</button>
+                                <span className="text-sm font-bold text-slate-600">Page {pagination.page + 1} of {pagination.totalPages}</span>
+                                <button type="button" onClick={() => onPageChange?.(pagination.page + 1)} disabled={pagination.page >= pagination.totalPages - 1} className="px-3 py-1.5 rounded-lg border border-slate-200 text-sm font-bold text-slate-600 hover:bg-white disabled:opacity-50 disabled:cursor-not-allowed">Next</button>
+                            </div>
+                        </div>
+                    )}
                 </div>
             ) : (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden animate-fade-in premium-card">
@@ -1575,6 +1619,18 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                             </tbody>
                         </table>
                     </div>
+                    {isServerPagination && pagination && pagination.totalPages > 0 && (
+                        <div className="flex items-center justify-between px-4 py-3 border-t border-slate-200 bg-slate-50/50">
+                            <p className="text-xs font-bold text-slate-500">
+                                Showing {pagination.size * pagination.page + 1}–{Math.min(pagination.size * (pagination.page + 1), pagination.totalElements)} of {pagination.totalElements}
+                            </p>
+                            <div className="flex items-center gap-2">
+                                <button type="button" onClick={() => onPageChange?.(pagination.page - 1)} disabled={pagination.page <= 0} className="px-3 py-1.5 rounded-lg border border-slate-200 text-sm font-bold text-slate-600 hover:bg-white disabled:opacity-50 disabled:cursor-not-allowed">Prev</button>
+                                <span className="text-sm font-bold text-slate-600">Page {pagination.page + 1} of {pagination.totalPages}</span>
+                                <button type="button" onClick={() => onPageChange?.(pagination.page + 1)} disabled={pagination.page >= pagination.totalPages - 1} className="px-3 py-1.5 rounded-lg border border-slate-200 text-sm font-bold text-slate-600 hover:bg-white disabled:opacity-50 disabled:cursor-not-allowed">Next</button>
+                            </div>
+                        </div>
+                    )}
                 </div>
             )}
 
