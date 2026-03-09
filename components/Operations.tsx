@@ -690,8 +690,11 @@ export const Operations: React.FC<Props> = ({
                                         <input type="text" value={feedForm.name} onChange={e => setFeedForm({ ...feedForm, name: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" placeholder="e.g. Alfalfa Hay" />
                                     </div>
                                     <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-1">Initial Quantity (KG)</label>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Total Initial Weight (KG)</label>
                                         <input type="number" value={feedForm.quantity} onChange={e => setFeedForm({ ...feedForm, quantity: Number(e.target.value) })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" disabled={!!editingFeed} title={editingFeed ? "Change stock via usage or procurement" : ""} />
+                                        {['BAG', 'BUNDLE'].includes(feedForm.unit || '') && (
+                                            <p className="text-[10px] text-amber-600 mt-1 font-bold leading-tight">Enter KGs, not bags. System dynamically computes bags.</p>
+                                        )}
                                     </div>
                                     <div>
                                         <label className="block text-sm font-medium text-gray-700 mb-1">Unit Format</label>
@@ -1123,7 +1126,7 @@ export const Operations: React.FC<Props> = ({
 
             {/* --- FEED & MEDICINE FORM REUSE --- */}
             {
-                ((activeTab === 'FEED' || activeTab === 'MEDICINE' || activeTab === 'SUPPLIES') && viewMode === 'FORM') && (
+                ((activeTab === 'MEDICINE' || activeTab === 'SUPPLIES') && viewMode === 'FORM') && (
                     <div className="animate-fade-in max-w-2xl mx-auto">
                         <div className="flex items-center gap-4 mb-6">
                             <button onClick={() => { setViewMode('LIST'); setEditingFeed(null); }} className="bg-white p-2 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">
@@ -1602,10 +1605,15 @@ export const Operations: React.FC<Props> = ({
                                                                 if (['BAG', 'BUNDLE'].includes(uiInv)) {
                                                                     if (uiItem === 'KG') nativeQty = (item.quantity || 0) / wpu;
                                                                     else if (uiItem === 'G') nativeQty = ((item.quantity || 0) / 1000) / wpu;
-                                                                } else if (uiInv === 'KG' && uiItem === 'G') {
-                                                                    nativeQty = (item.quantity || 0) / 1000;
-                                                                } else if (uiInv === 'G' && uiItem === 'KG') {
-                                                                    nativeQty = (item.quantity || 0) * 1000;
+                                                                } else if (uiInv === 'TON') {
+                                                                    if (uiItem === 'KG') nativeQty = (item.quantity || 0) / 1000;
+                                                                    else if (uiItem === 'G') nativeQty = (item.quantity || 0) / 1000000;
+                                                                } else if (uiInv === 'KG') {
+                                                                    if (uiItem === 'G') nativeQty = (item.quantity || 0) / 1000;
+                                                                    else if (uiItem === 'TON') nativeQty = (item.quantity || 0) * 1000;
+                                                                } else if (uiInv === 'G') {
+                                                                    if (uiItem === 'KG') nativeQty = (item.quantity || 0) * 1000;
+                                                                    else if (uiItem === 'TON') nativeQty = (item.quantity || 0) * 1000000;
                                                                 }
 
                                                                 c = nativeQty * item.costPerUnit;
@@ -1658,10 +1666,15 @@ export const Operations: React.FC<Props> = ({
                                                                 if (isBag) {
                                                                     if (uiItem === 'KG') inventoryDeductionCount = deductTotal / wpu;
                                                                     else if (uiItem === 'G') inventoryDeductionCount = (deductTotal / 1000) / wpu;
-                                                                } else if (uiInv === 'KG' && uiItem === 'G') {
-                                                                    inventoryDeductionCount = deductTotal / 1000;
-                                                                } else if (uiInv === 'G' && uiItem === 'KG') {
-                                                                    inventoryDeductionCount = deductTotal * 1000;
+                                                                } else if (uiInv === 'TON') {
+                                                                    if (uiItem === 'KG') inventoryDeductionCount = deductTotal / 1000;
+                                                                    else if (uiItem === 'G') inventoryDeductionCount = deductTotal / 1000000;
+                                                                } else if (uiInv === 'KG') {
+                                                                    if (uiItem === 'G') inventoryDeductionCount = deductTotal / 1000;
+                                                                    else if (uiItem === 'TON') inventoryDeductionCount = deductTotal * 1000;
+                                                                } else if (uiInv === 'G') {
+                                                                    if (uiItem === 'KG') inventoryDeductionCount = deductTotal * 1000;
+                                                                    else if (uiItem === 'TON') inventoryDeductionCount = deductTotal * 1000000;
                                                                 }
 
                                                                 const warn = inventoryDeductionCount > (fInv?.quantity || 0);

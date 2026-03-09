@@ -350,10 +350,15 @@ const App: React.FC = () => {
             if (['BAG', 'BUNDLE'].includes(uiInv)) {
               if (uiItem === 'KG') deductionQty = totalRequiredForPlan / wpu;
               else if (uiItem === 'G') deductionQty = (totalRequiredForPlan / 1000) / wpu;
-            } else if (uiInv === 'KG' && uiItem === 'G') {
-              deductionQty = totalRequiredForPlan / 1000;
-            } else if (uiInv === 'G' && uiItem === 'KG') {
-              deductionQty = totalRequiredForPlan * 1000;
+            } else if (uiInv === 'TON') {
+              if (uiItem === 'KG') deductionQty = totalRequiredForPlan / 1000;
+              else if (uiItem === 'G') deductionQty = totalRequiredForPlan / 1000000;
+            } else if (uiInv === 'KG') {
+              if (uiItem === 'G') deductionQty = totalRequiredForPlan / 1000;
+              else if (uiItem === 'TON') deductionQty = totalRequiredForPlan * 1000;
+            } else if (uiInv === 'G') {
+              if (uiItem === 'KG') deductionQty = totalRequiredForPlan * 1000;
+              else if (uiItem === 'TON') deductionQty = totalRequiredForPlan * 1000000;
             }
           }
           requiredInventory.set(item.inventoryId, (requiredInventory.get(item.inventoryId) || 0) + deductionQty);
@@ -436,10 +441,15 @@ const App: React.FC = () => {
             if (['BAG', 'BUNDLE'].includes(uiInv)) {
               if (uiItem === 'KG') deductionQty = totalQty / wpu;
               else if (uiItem === 'G') deductionQty = (totalQty / 1000) / wpu;
-            } else if (uiInv === 'KG' && uiItem === 'G') {
-              deductionQty = totalQty / 1000;
-            } else if (uiInv === 'G' && uiItem === 'KG') {
-              deductionQty = totalQty * 1000;
+            } else if (uiInv === 'TON') {
+              if (uiItem === 'KG') deductionQty = totalQty / 1000;
+              else if (uiItem === 'G') deductionQty = totalQty / 1000000;
+            } else if (uiInv === 'KG') {
+              if (uiItem === 'G') deductionQty = totalQty / 1000;
+              else if (uiItem === 'TON') deductionQty = totalQty * 1000;
+            } else if (uiInv === 'G') {
+              if (uiItem === 'KG') deductionQty = totalQty * 1000;
+              else if (uiItem === 'TON') deductionQty = totalQty * 1000000;
             }
 
             invItem.quantity -= deductionQty; // Safe because of hard lock
