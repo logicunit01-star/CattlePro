@@ -403,6 +403,7 @@ export const Operations: React.FC<Props> = ({
             name: dietForm.name!,
             targetType: dietForm.targetType || 'CATEGORY',
             targetId: dietForm.targetId,
+            targetIds: dietForm.targetIds || [],
             targetName: dietForm.targetName,
             status: dietForm.status || 'DRAFT',
             distributionMode: dietForm.distributionMode || 'PER_ANIMAL',
@@ -1527,8 +1528,8 @@ export const Operations: React.FC<Props> = ({
                                             ) : dietForm.targetType === 'CATEGORY' ? (
                                                 <select value={dietForm.targetId || ''} onChange={e => setDietForm({ ...dietForm, targetId: e.target.value, targetName: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none">
                                                     <option value="">Select Category...</option>
-                                                    {[{ id: 'MILKING', name: 'Milking Cows' }, { id: 'DRY', name: 'Dry Cows' }, { id: 'CALF', name: 'Calves' }, { id: 'BULL', name: 'Bulls' }].map(c => (
-                                                        <option key={c.id} value={c.name}>{c.name}</option>
+                                                    {Array.from(new Set(state.livestock.filter(l => l.status === 'ACTIVE' && (!state.currentFarmId || l.farmId === state.currentFarmId)).map(l => l.category).filter(Boolean))).map((catName) => (
+                                                        <option key={catName as string} value={catName as string}>{catName as string}</option>
                                                     ))}
                                                 </select>
                                             ) : dietForm.targetType === 'INDIVIDUAL' ? (
@@ -1670,69 +1671,77 @@ export const Operations: React.FC<Props> = ({
                                                 const aCount = previewAnimals.length;
                                                 const mode = dietForm.distributionMode || 'PER_ANIMAL';
 
+                                                let totalDailyPlanCost = 0;
+
+                                                const previewItemsJsx = dietForm.items?.map(it => {
+                                                    let deductTotal = 0;
+                                                    if (mode === 'TOTAL_DISTRIBUTED') deductTotal = it.quantity;
+                                                    else if (mode === 'PER_HUNDRED_KG_BW') deductTotal = it.quantity * (previewAnimals.reduce((s, a) => s + (a.weight || 0), 0) / 100);
+                                                    else deductTotal = it.quantity * aCount;
+
+                                                    let totalReq = deductTotal; // requested locally
+                                                    let inventoryDeductionCount = deductTotal; // in native units mapped for stock reduction
+
+                                                    const fInv = state.feed.find(f => f.id === it.inventoryId);
+                                                    const uiInv = (fInv?.unit || '').toUpperCase();
+                                                    const uiItem = (it.unit || '').toUpperCase();
+                                                    const isBag = fInv ? ['BAG', 'BUNDLE'].includes(uiInv) : false;
+                                                    const wpu = fInv?.weightPerUnit || 1;
+                                                    const isMissingWpu = isBag && (!fInv?.weightPerUnit || fInv.weightPerUnit <= 0);
+
+                                                    if (isBag) {
+                                                        if (uiItem === 'KG') inventoryDeductionCount = deductTotal / wpu;
+                                                        else if (uiItem === 'G') inventoryDeductionCount = (deductTotal / 1000) / wpu;
+                                                    } else if (uiInv === 'TON') {
+                                                        if (uiItem === 'KG') inventoryDeductionCount = deductTotal / 1000;
+                                                        else if (uiItem === 'G') inventoryDeductionCount = deductTotal / 1000000;
+                                                    } else if (uiInv === 'KG') {
+                                                        if (uiItem === 'G') inventoryDeductionCount = deductTotal / 1000;
+                                                        else if (uiItem === 'TON') inventoryDeductionCount = deductTotal * 1000;
+                                                    } else if (uiInv === 'G') {
+                                                        if (uiItem === 'KG') inventoryDeductionCount = deductTotal * 1000;
+                                                        else if (uiItem === 'TON') inventoryDeductionCount = deductTotal * 1000000;
+                                                    }
+
+                                                    const warn = inventoryDeductionCount > (fInv?.quantity || 0);
+
+                                                    totalDailyPlanCost += inventoryDeductionCount * (fInv?.unitCost || 0);
+
+                                                    return (
+                                                        <div key={it.id} className="flex flex-col text-xs text-emerald-900 border-b border-emerald-50/50 pb-1.5 mb-1.5 last:mb-0 last:pb-0 last:border-0">
+                                                            <div className="flex justify-between items-center">
+                                                                <span>{it.inventoryName || 'Unknown'} (In Stock: {fInv?.quantity?.toFixed(2)}{fInv?.unit}{wpu > 1 ? ` - ${(wpu) * (fInv?.quantity || 0)}kg` : ''}):</span>
+                                                                <span className={warn ? "text-red-500 font-bold" : "font-medium"}>Require {deductTotal.toFixed(2)} {it.unit}  =  (-{inventoryDeductionCount.toFixed(2)} {fInv?.unit || 'units'})</span>
+                                                            </div>
+                                                            {isMissingWpu && (it.unit === 'kg' || it.unit === 'g') && (
+                                                                <span className="text-red-500 block text-[10px] mt-1 font-bold italic bg-red-50 px-2 py-1 rounded inline-flex w-fit">*Warning: "Weight Per Unit" missing for {fInv?.name}. System assuming 1 {fInv?.unit} = 1 kg. Please configure in inventory to accurately convert fractions.*</span>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                });
+
                                                 return (
-                                                    <div className="border-t border-gray-200 mt-2 pt-2 bg-emerald-50 rounded-xl border border-emerald-100 p-4">
-                                                        <div className="flex justify-between items-center mb-2 border-b border-emerald-200 pb-2">
-                                                            <span className="text-sm font-bold text-emerald-800">Processing Preview (Targeting {aCount} Animals)</span>
-                                                            <span className="text-xs font-bold px-2 py-1 rounded bg-white text-emerald-700 border border-emerald-200">{mode.replace(/_/g, ' ')}</span>
+                                                    <>
+                                                        <div className="border-t border-gray-200 mt-2 pt-2 bg-emerald-50 rounded-xl border border-emerald-100 p-4">
+                                                            <div className="flex justify-between items-center mb-2 border-b border-emerald-200 pb-2">
+                                                                <span className="text-sm font-bold text-emerald-800">Processing Preview (Targeting {aCount} Animals)</span>
+                                                                <span className="text-xs font-bold px-2 py-1 rounded bg-white text-emerald-700 border border-emerald-200">{mode.replace(/_/g, ' ')}</span>
+                                                            </div>
+                                                            <div className="space-y-1">
+                                                                {previewItemsJsx}
+                                                            </div>
                                                         </div>
-                                                        <div className="space-y-1">
-                                                            {dietForm.items?.map(it => {
-                                                                let deductTotal = 0;
-                                                                if (mode === 'TOTAL_DISTRIBUTED') deductTotal = it.quantity;
-                                                                else if (mode === 'PER_HUNDRED_KG_BW') deductTotal = it.quantity * (previewAnimals.reduce((s, a) => s + (a.weight || 0), 0) / 100);
-                                                                else deductTotal = it.quantity * aCount;
 
-                                                                let totalReq = deductTotal; // requested locally
-                                                                let inventoryDeductionCount = deductTotal; // in native units mapped for stock reduction
-
-                                                                const fInv = state.feed.find(f => f.id === it.inventoryId);
-                                                                const uiInv = (fInv?.unit || '').toUpperCase();
-                                                                const uiItem = (it.unit || '').toUpperCase();
-                                                                const isBag = fInv ? ['BAG', 'BUNDLE'].includes(uiInv) : false;
-                                                                const wpu = fInv?.weightPerUnit || 1;
-                                                                const isMissingWpu = isBag && (!fInv?.weightPerUnit || fInv.weightPerUnit <= 0);
-
-                                                                if (isBag) {
-                                                                    if (uiItem === 'KG') inventoryDeductionCount = deductTotal / wpu;
-                                                                    else if (uiItem === 'G') inventoryDeductionCount = (deductTotal / 1000) / wpu;
-                                                                } else if (uiInv === 'TON') {
-                                                                    if (uiItem === 'KG') inventoryDeductionCount = deductTotal / 1000;
-                                                                    else if (uiItem === 'G') inventoryDeductionCount = deductTotal / 1000000;
-                                                                } else if (uiInv === 'KG') {
-                                                                    if (uiItem === 'G') inventoryDeductionCount = deductTotal / 1000;
-                                                                    else if (uiItem === 'TON') inventoryDeductionCount = deductTotal * 1000;
-                                                                } else if (uiInv === 'G') {
-                                                                    if (uiItem === 'KG') inventoryDeductionCount = deductTotal * 1000;
-                                                                    else if (uiItem === 'TON') inventoryDeductionCount = deductTotal * 1000000;
-                                                                }
-
-                                                                const warn = inventoryDeductionCount > (fInv?.quantity || 0);
-
-                                                                return (
-                                                                    <div key={it.id} className="flex flex-col text-xs text-emerald-900 border-b border-emerald-50/50 pb-1.5 mb-1.5 last:mb-0 last:pb-0 last:border-0">
-                                                                        <div className="flex justify-between items-center">
-                                                                            <span>{it.inventoryName || 'Unknown'} (In Stock: {fInv?.quantity?.toFixed(2)}{fInv?.unit}{wpu > 1 ? ` - ${(wpu) * (fInv?.quantity || 0)}kg` : ''}):</span>
-                                                                            <span className={warn ? "text-red-500 font-bold" : "font-medium"}>Require {deductTotal.toFixed(2)} {it.unit}  =  (-{inventoryDeductionCount.toFixed(2)} {fInv?.unit || 'units'})</span>
-                                                                        </div>
-                                                                        {isMissingWpu && (it.unit === 'kg' || it.unit === 'g') && (
-                                                                            <span className="text-red-500 block text-[10px] mt-1 font-bold italic bg-red-50 px-2 py-1 rounded inline-flex w-fit">*Warning: "Weight Per Unit" missing for {fInv?.name}. System assuming 1 {fInv?.unit} = 1 kg. Please configure in inventory to accurately convert fractions.*</span>
-                                                                        )}
-                                                                    </div>
-                                                                );
-                                                            })}
+                                                        {/* TOTALS */}
+                                                        <div className="border-t border-gray-200 mt-2 pt-2 flex justify-between items-center bg-white p-2 rounded border-emerald-100">
+                                                            <span className="text-sm font-bold text-gray-700">Total Est. Daily Cost (for {aCount} head):</span>
+                                                            <span className="text-lg font-black text-emerald-600">
+                                                                PKR {totalDailyPlanCost.toLocaleString(undefined, { maximumFractionDigits: 1 })} <span className="text-xs text-gray-400 font-medium">total plan / day</span>
+                                                            </span>
                                                         </div>
-                                                    </div>
+                                                    </>
                                                 );
                                             })()}
-
-                                            {/* TOTALS */}
-                                            <div className="border-t border-gray-200 mt-2 pt-2 flex justify-between items-center bg-white p-2 rounded border-emerald-100">
-                                                <span className="text-sm font-bold text-gray-700">Cost Baseline:</span>
-                                                <span className="text-lg font-black text-emerald-600">
-                                                    PKR {(dietForm.items?.reduce((sum, item) => sum + (item.quantity * (item.costPerUnit || 0)), 0) || 0).toLocaleString()} <span className="text-xs text-gray-400 font-medium">base value</span>
-                                                </span>
-                                            </div>
                                         </div>
                                     </div>
 
