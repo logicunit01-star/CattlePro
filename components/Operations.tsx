@@ -745,7 +745,7 @@ export const Operations: React.FC<Props> = ({
                                     <div className="lg:col-span-2 border-t border-gray-100 pt-3">
                                         <label className="block text-sm font-medium text-gray-700 mb-1">Reorder Alert Level ({feedForm.unit || 'KG'})</label>
                                         <input type="number" value={feedForm.reorderLevel} onChange={e => setFeedForm({ ...feedForm, reorderLevel: Number(e.target.value) })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" />
-                                        <p className="text-xs text-gray-400 mt-1">System flags "Low Stock" when KG quantity drops below this.</p>
+                                        <p className="text-xs text-gray-400 mt-1">System flags "Low Stock" when quantity (in selected unit) drops below this.</p>
                                     </div>
                                 </div>
                                 <div className="pt-4 flex justify-end gap-3">

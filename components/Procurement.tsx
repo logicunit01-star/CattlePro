@@ -134,10 +134,9 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
         const selectedItem = state.feed.find(f => f.id === procurementForm.feedTypeId);
         if (!selectedItem) return alert("Invalid Feed Item Selected.");
 
-        // Define unit behavior precisely based on Inventory settings or legacy Feed Types
+        // Define unit behavior: BAG/BUNDLE (or WANDA/TMR) = quantity in native unit (bags); else weight in kg.
         const isQtyBased = ['BAG', 'BUNDLE'].includes((selectedItem.unit || '').toUpperCase()) || ['WANDA', 'TMR'].includes(selectedItem.feedType || '');
-        // ALWAY Stock quantity centrally as real lowest unit equivalent (KG). 
-        const addedValue = procurementForm.weight;
+        const addedValue = isQtyBased ? procurementForm.quantity : procurementForm.weight;
         const assumedWeightPerUnit = selectedItem.weightPerUnit || 40;
 
         // If they left weight blank but filled quantity (for legacy data), auto compute it
@@ -334,15 +333,18 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
 
     const handleRecordUsage = (item: FeedInventory) => {
         const isQtyBased = ['BAG', 'BUNDLE'].includes((item.unit || '').toUpperCase());
-        const bagsTxt = isQtyBased && item.weightPerUnit ? ` (≈ ${(item.quantity / item.weightPerUnit).toFixed(1)} ${item.unit}s)` : '';
-        const qtyStr = prompt(`Current Extrapolated Stock: ${item.quantity.toLocaleString()} KG${bagsTxt}\n\nEnter amount of ${item.name} consumed STRICTLY IN KG:`);
+        const wpu = item.weightPerUnit || 40;
+        const stockDisplay = isQtyBased
+            ? `${item.quantity.toLocaleString()} ${item.unit}s (≈ ${(item.quantity * wpu).toLocaleString()} KG total)`
+            : `${item.quantity.toLocaleString()} KG`;
+        const qtyStr = prompt(`Current stock: ${stockDisplay}\n\nEnter amount of ${item.name} consumed in KG:`);
         if (!qtyStr) return;
         const consumedKg = parseFloat(qtyStr);
         if (isNaN(consumedKg) || consumedKg <= 0) return alert("Invalid amount");
-        if (consumedKg > item.quantity) return alert("Cannot consume more than available stock!");
-
-        onUpdateInventory({ ...item, quantity: item.quantity - consumedKg });
-        alert(`Successfully deducted ${consumedKg} KG of ${item.name}.`);
+        const toDeduct = isQtyBased ? consumedKg / wpu : consumedKg;
+        if (toDeduct > (item.quantity ?? 0)) return alert("Cannot consume more than available stock!");
+        onUpdateInventory({ ...item, quantity: (item.quantity ?? 0) - toDeduct });
+        alert(`Successfully deducted ${consumedKg} KG${isQtyBased ? ` (${toDeduct.toFixed(3)} ${item.unit}s)` : ''} of ${item.name}.`);
     };
 
     // Helper: Map Vendor ID to display Name
@@ -736,7 +738,7 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                 <div className="space-y-4">
                                     <div className="grid grid-cols-2 gap-3">
                                         <div>
-                                            <label className="block text-[11px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Limit/Alert (KG)</label>
+                                            <label className="block text-[11px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Limit/Alert ({newItemForm.unit || 'KG'})</label>
                                             <input type="number" min={0} value={newItemForm.reorderLevel} onChange={e => setNewItemForm({ ...newItemForm, reorderLevel: parseInt(e.target.value) || 0 })} className="w-full border border-slate-200 focus:border-emerald-500 text-sm font-bold text-slate-700 rounded-xl px-4 py-3 outline-none bg-slate-50 focus:bg-white transition-colors" />
                                         </div>
                                         <div>
@@ -800,7 +802,7 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                         </div>
                                         <div className="text-right">
                                             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Moving Cost</p>
-                                            <p className="text-sm font-black text-slate-700 mt-0.5 border border-slate-200 bg-white px-2 py-1 rounded-lg shadow-sm">PKR {item.unitCost.toLocaleString()} / KG</p>
+                                            <p className="text-sm font-black text-slate-700 mt-0.5 border border-slate-200 bg-white px-2 py-1 rounded-lg shadow-sm">PKR {item.unitCost.toLocaleString()} / {item.unit?.toUpperCase() || 'KG'}</p>
                                         </div>
                                     </div>
                                     <div className="px-6 py-4 flex gap-2">
