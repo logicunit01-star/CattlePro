@@ -713,11 +713,12 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                         const name = cat.category ?? cat.name ?? '';
                                         const cost = cat.totalCost ?? cat.value ?? 0;
                                         return (
-                                        <div key={idx} className="flex justify-between p-1">
-                                            <span className="text-slate-600 font-bold flex items-center gap-1"><div className="w-2 h-2 rounded-full" style={{ backgroundColor: COLORS[idx % COLORS.length] }}></div> {name}</span>
-                                            <span className="font-black">{(totalExpensesCalc > 0 ? (cost / totalExpensesCalc * 100) : 0).toFixed(1)}%</span>
-                                        </div>
-                                    ); })}
+                                            <div key={idx} className="flex justify-between p-1">
+                                                <span className="text-slate-600 font-bold flex items-center gap-1"><div className="w-2 h-2 rounded-full" style={{ backgroundColor: COLORS[idx % COLORS.length] }}></div> {name}</span>
+                                                <span className="font-black">{(totalExpensesCalc > 0 ? (cost / totalExpensesCalc * 100) : 0).toFixed(1)}%</span>
+                                            </div>
+                                        );
+                                    })}
                                 </div>
                             </div>
 
@@ -765,11 +766,11 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                 <table className="min-w-full divide-y divide-gray-200">
                                     <thead className="bg-white">
                                         <tr>
-                                            <th className="px-6 py-3 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest">Date</th>
-                                            <th className="px-6 py-3 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest">Vendor</th>
-                                            <th className="px-6 py-3 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest">Bill Info</th>
-                                            <th className="px-6 py-3 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest">Status</th>
-                                            <th className="px-6 py-3 text-right text-[10px] font-bold text-slate-400 uppercase tracking-widest">Total Billed</th>
+                                            <th className="px-6 py-3 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest">Vendor / Date</th>
+                                            <th className="px-6 py-3 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest">Invoices / Category</th>
+                                            <th className="px-6 py-3 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest">Settlements</th>
+                                            <th className="px-6 py-3 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest">Payment Status</th>
+                                            <th className="px-6 py-3 text-right text-[10px] font-bold text-slate-400 uppercase tracking-widest">Billed Amount</th>
                                             <th className="px-6 py-3 text-right text-[10px] font-bold text-slate-400 uppercase tracking-widest">Actions</th>
                                         </tr>
                                     </thead>
@@ -777,16 +778,14 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                         {(() => {
                                             const useServerSummary = vendorSummary && vendorSummary.length > 0;
                                             const vendorBills = filteredExpenses.filter(e => e.supplier);
-                                            const billsByVendor = useServerSummary
-                                                ? null
-                                                : vendorBills.reduce((acc, exp) => {
-                                                    if (!acc[exp.supplier!]) acc[exp.supplier!] = { vendorId: exp.supplier!, bills: [], total: 0, pending: 0, paid: 0 };
-                                                    acc[exp.supplier!].bills.push(exp);
-                                                    acc[exp.supplier!].total += exp.amount;
-                                                    if (exp.paymentStatus === 'PAID') acc[exp.supplier!].paid += exp.amount;
-                                                    else acc[exp.supplier!].pending += exp.amount;
-                                                    return acc;
-                                                }, {} as Record<string, { vendorId: string, bills: Expense[], total: number, pending: number, paid: number }>);
+                                            const billsByVendor = vendorBills.reduce((acc, exp) => {
+                                                if (!acc[exp.supplier!]) acc[exp.supplier!] = { vendorId: exp.supplier!, bills: [], total: 0, pending: 0, paid: 0 };
+                                                acc[exp.supplier!].bills.push(exp);
+                                                acc[exp.supplier!].total += exp.amount;
+                                                if (exp.paymentStatus === 'PAID') acc[exp.supplier!].paid += exp.amount;
+                                                else acc[exp.supplier!].pending += exp.amount;
+                                                return acc;
+                                            }, {} as Record<string, { vendorId: string, bills: Expense[], total: number, pending: number, paid: number }>);
 
                                             const hasVendors = useServerSummary || (billsByVendor && Object.keys(billsByVendor).length > 0);
                                             if (!hasVendors) {
@@ -803,20 +802,33 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
 
                                             return (useServerSummary ? vendorSummary!.map((v) => ({
                                                 vendorId: v.supplierId,
-                                                bills: [] as Expense[],
+                                                bills: billsByVendor[v.supplierId]?.bills || [] as Expense[],
                                                 totalBills: v.totalBills,
                                                 total: v.totalAmount,
                                                 pending: v.balanceDue,
                                                 paid: v.paidAmount,
-                                            })) : Object.values(billsByVendor!).map(({ vendorId, bills, total, pending, paid }) => ({ vendorId, bills, totalBills: bills.length, total, pending, paid }))).map(({ vendorId, bills, totalBills, pending, paid, total }) => {
+                                            })) : Object.values(billsByVendor! as any).map((v: any) => ({ vendorId: v.vendorId, bills: v.bills, totalBills: v.bills.length, total: v.total, pending: v.pending, paid: v.paid }))).map(({ vendorId, bills, totalBills, pending, paid, total }) => {
                                                 const vendor = entities.find(v => v.id === vendorId);
-                                                const vendorName = (useServerSummary ? (vendorSummary!.find(v => v.supplierId === vendorId)?.supplierName ?? vendor?.name) : (vendor ? vendor.name : 'Unknown Vendor')) ?? vendorId;
+                                                let vendorName = vendorId === 'CASH' ? 'Cash / Walk-in' : (vendor?.name);
+
+                                                if (useServerSummary) {
+                                                    const s = vendorSummary!.find(v => v.supplierId === vendorId || (v as any).vendorId === vendorId || (v as any).id === vendorId);
+                                                    if (s) {
+                                                        const sName = s.supplierName || (s as any).vendorName || (s as any).name;
+                                                        if (sName && sName.trim() !== '' && sName !== 'null') vendorName = sName;
+                                                    }
+                                                }
+
+                                                if (!vendorName) {
+                                                    vendorName = `Archived / Unlinked Vendor (${vendorId.slice(0, 6)}...)`;
+                                                }
+
                                                 const isExpanded = expandedVendors.includes(vendorId);
 
                                                 return (
                                                     <React.Fragment key={vendorId}>
                                                         {/* Vendor Summary Row */}
-                                                        <tr onClick={() => !useServerSummary && toggleVendor(vendorId)} className={`hover:bg-indigo-50/50 transition-colors ${!useServerSummary ? 'cursor-pointer' : ''} bg-slate-50/80 border-b-2 border-slate-100 group`}>
+                                                        <tr onClick={() => toggleVendor(vendorId)} className={`hover:bg-indigo-50/50 transition-colors cursor-pointer bg-slate-50/80 border-b-2 border-slate-100 group`}>
                                                             <td className="px-6 py-4 whitespace-nowrap text-sm font-bold text-slate-800 flex items-center gap-2">
                                                                 <div className={`p-1.5 rounded-md transition-colors ${isExpanded ? 'bg-indigo-600 text-white shadow-md shadow-indigo-200' : 'bg-white shadow-sm text-slate-500 group-hover:bg-indigo-100'}`}>
                                                                     <Store size={16} />
@@ -839,7 +851,7 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                                                 {isExpanded ? 'Hide Details' : 'View Details'}
                                                             </td>
                                                         </tr>
-                                                        {/* Expanded Bills list (client-side only; when using server vendor-summary no per-bill list) */}
+                                                        {/* Expanded Bills list */}
                                                         {isExpanded && bills.length > 0 && bills.slice().sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map((exp, idx) => {
                                                             const isPaid = exp.paymentStatus === 'PAID';
                                                             return (
