@@ -667,16 +667,16 @@ export const Operations: React.FC<Props> = ({
                                                     </td>
                                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 font-bold">
                                                         <div className="flex flex-col">
-                                                            <span>{item.quantity.toLocaleString()} KG</span>
+                                                            <span>{item.quantity.toLocaleString()} {item.unit?.toUpperCase() || 'KG'}</span>
                                                             {((['BAG', 'BUNDLE'].includes((item.unit || '').toUpperCase()) || ['WANDA', 'TMR'].includes(item.feedType || '')) && (item.weightPerUnit || 40) > 0) ? (
                                                                 <span className="text-[10px] text-gray-400 font-medium whitespace-nowrap">
-                                                                    ({Math.floor(item.quantity / (item.weightPerUnit || 40))} {(item.unit && item.unit !== 'kg') ? item.unit : 'BAG'}s, {Math.round(item.quantity % (item.weightPerUnit || 40))} KG)
+                                                                    (≈ {(item.quantity * (item.weightPerUnit || 40)).toLocaleString()} KG)
                                                                 </span>
                                                             ) : null}
                                                         </div>
                                                     </td>
                                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
-                                                        PKR {item.unitCost.toLocaleString()} / KG
+                                                        PKR {item.unitCost.toLocaleString()} / {item.unit?.toUpperCase() || 'KG'}
                                                     </td>
                                                     <td className="px-6 py-4 whitespace-nowrap">
                                                         {item.quantity <= item.reorderLevel ? (
@@ -723,11 +723,8 @@ export const Operations: React.FC<Props> = ({
                                         <input type="text" value={feedForm.name} onChange={e => setFeedForm({ ...feedForm, name: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" placeholder="e.g. Alfalfa Hay" />
                                     </div>
                                     <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-1">Total Initial Weight (KG)</label>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Initial Quantity ({feedForm.unit || 'KG'})</label>
                                         <input type="number" value={feedForm.quantity} onChange={e => setFeedForm({ ...feedForm, quantity: Number(e.target.value) })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" disabled={!!editingFeed} title={editingFeed ? "Change stock via usage or procurement" : ""} />
-                                        {['BAG', 'BUNDLE'].includes(feedForm.unit || '') && (
-                                            <p className="text-[10px] text-amber-600 mt-1 font-bold leading-tight">Enter KGs, not bags. System dynamically computes bags.</p>
-                                        )}
                                     </div>
                                     <div>
                                         <label className="block text-sm font-medium text-gray-700 mb-1">Unit Format</label>
@@ -742,11 +739,11 @@ export const Operations: React.FC<Props> = ({
                                         </div>
                                     )}
                                     <div className="lg:col-span-1 border-t border-gray-100 pt-3">
-                                        <label className="block text-sm font-medium text-gray-700 mb-1">Base Cost (PKR / KG)</label>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Base Cost (PKR / {feedForm.unit || 'KG'})</label>
                                         <input type="number" value={feedForm.unitCost} onChange={e => setFeedForm({ ...feedForm, unitCost: Number(e.target.value) })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" />
                                     </div>
                                     <div className="lg:col-span-2 border-t border-gray-100 pt-3">
-                                        <label className="block text-sm font-medium text-gray-700 mb-1">Reorder Alert Level (KG)</label>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Reorder Alert Level ({feedForm.unit || 'KG'})</label>
                                         <input type="number" value={feedForm.reorderLevel} onChange={e => setFeedForm({ ...feedForm, reorderLevel: Number(e.target.value) })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" />
                                         <p className="text-xs text-gray-400 mt-1">System flags "Low Stock" when KG quantity drops below this.</p>
                                     </div>
