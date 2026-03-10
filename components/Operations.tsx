@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { AppState, Livestock, FeedInventory, Infrastructure, DietPlan, TreatmentProtocol, TreatmentLog, TreatmentItem, MaintenanceRecord, ExpenseCategory } from '../types';
+import { backendService } from '../services/backendService';
 import { Warehouse, Construction, AlertCircle, Plus, Trash2, Edit2, Tag, X, Save, CheckCircle, ArrowLeft, Utensils, CalendarClock, Beef, Upload, Image as ImageIcon, Stethoscope, Pill } from 'lucide-react';
 
 export type OperationsTab = 'FEED' | 'MEDICINE' | 'SUPPLIES' | 'INFRA' | 'DIET';
@@ -23,6 +24,8 @@ interface Props {
     onUpdateTreatmentProtocol: (plan: TreatmentProtocol) => void | Promise<void>;
     onDeleteTreatmentProtocol: (id: string) => void | Promise<void>;
     onLogTreatment: (logs: TreatmentLog[]) => void | Promise<void>;
+    /** When set, protocol apply uses atomic backend bulk endpoint instead of building logs client-side. */
+    onApplyProtocol?: (protocolId: string, targetAnimalIds: string[], performedBy?: string) => Promise<void>;
     onAddExpense: (expense: any) => Promise<void>;
     onReverseFeedLedger: (ledgerId: string) => Promise<void>;
     onClearFeedLedger: () => Promise<void>;
@@ -46,6 +49,7 @@ export const Operations: React.FC<Props> = ({
     onUpdateTreatmentProtocol,
     onDeleteTreatmentProtocol,
     onLogTreatment,
+    onApplyProtocol,
     onAddExpense,
     onReverseFeedLedger,
     onClearFeedLedger
@@ -98,6 +102,13 @@ export const Operations: React.FC<Props> = ({
         name: '', status: 'DRAFT', scheduleType: 'RECURRING', items: [], targetType: 'CATEGORY'
     });
     const [applyingProtocol, setApplyingProtocol] = useState<TreatmentProtocol | null>(null);
+    const [medicineExpirations, setMedicineExpirations] = useState<{ id: string; name: string; batchNumber: string; expiryDate: string; daysUntilExpiry: number; quantity: number; unit: string }[]>([]);
+
+    useEffect(() => {
+        if (activeTab === 'MEDICINE') {
+            backendService.getMedicineExpirations(30).then(setMedicineExpirations).catch(() => setMedicineExpirations([]));
+        }
+    }, [activeTab]);
 
     // --- HELPERS ---
     const openAddProtocol = () => {
@@ -109,21 +120,15 @@ export const Operations: React.FC<Props> = ({
     const handleApplyProtocol = async (protocol: TreatmentProtocol) => {
         if (!state.currentFarmId) return alert("Select a farm first");
 
-        const confirmMsg = `Apply protocol "${protocol.name}"?\nThis will deduct stock and log treatments for ${protocol.targetName || 'all targets'}.`;
-        if (!confirm(confirmMsg)) return;
-
-        const performDate = new Date().toISOString().split('T')[0];
-        const logs: TreatmentLog[] = [];
-
-        // Determine animals
-        let animalsToTreat = [];
-        if (protocol.targetType === 'INDIVIDUAL' && protocol.targetId) {
-            const animal = state.livestock.find(l => l.id === protocol.targetId);
-            if (animal) animalsToTreat.push(animal);
-        } else if (protocol.targetType === 'CATEGORY' && protocol.targetId) {
+        let animalsToTreat: Livestock[] = [];
+        if (protocol.targetType === 'INDIVIDUAL') {
+            const ids: string[] = (protocol as any).targetIds?.length ? (protocol as any).targetIds : (protocol.targetId ? [protocol.targetId] : []);
+            if (ids.length) animalsToTreat = state.livestock.filter(l => ids.includes(l.id) && l.farmId === state.currentFarmId && l.status === 'ACTIVE');
+        }
+        if (animalsToTreat.length === 0 && protocol.targetType === 'CATEGORY' && protocol.targetName) {
             animalsToTreat = state.livestock.filter(l => l.category === protocol.targetName && l.farmId === state.currentFarmId && l.status === 'ACTIVE');
-        } else {
-            // Fallback or GROUP logic
+        }
+        if (animalsToTreat.length === 0) {
             animalsToTreat = state.livestock.filter(l => l.farmId === state.currentFarmId && l.status === 'ACTIVE');
         }
 
@@ -132,9 +137,25 @@ export const Operations: React.FC<Props> = ({
             return;
         }
 
-        let animalsProcessed = 0;
+        const confirmMsg = `Apply protocol "${protocol.name}" to ${animalsToTreat.length} animal(s)? This will deduct medicine stock and log treatments.`;
+        if (!confirm(confirmMsg)) return;
+
+        try {
+            if (onApplyProtocol) {
+                await onApplyProtocol(protocol.id, animalsToTreat.map(a => a.id), 'Manager');
+                alert(`Protocol applied to ${animalsToTreat.length} animal(s).`);
+                return;
+            }
+        } catch (e) {
+            console.error(e);
+            alert("Failed to apply protocol.");
+            return;
+        }
+
+        const performDate = new Date().toISOString().split('T')[0];
+        const logs: TreatmentLog[] = [];
         animalsToTreat.forEach(animal => {
-            protocol.items.forEach(item => {
+            (protocol.items || []).forEach((item: TreatmentItem) => {
                 const invItem = state.feed.find(f => f.id === item.inventoryId);
                 logs.push({
                     id: Math.random().toString(36).substr(2, 9),
@@ -142,20 +163,17 @@ export const Operations: React.FC<Props> = ({
                     protocolId: protocol.id,
                     date: performDate,
                     animalId: animal.id,
-
                     itemId: item.inventoryId,
                     medicineName: item.inventoryName,
                     quantityUsed: item.dosage,
-                    cost: (invItem?.unitCost || 0) * item.dosage,
-                    performedBy: 'Manager' // TODO: Get current user
+                    cost: (invItem?.unitCost || 0) * (item.dosage || 0),
+                    performedBy: 'Manager'
                 });
             });
-            animalsProcessed++;
         });
-
         try {
             await onLogTreatment(logs);
-            alert(`Successfully logged treatments for ${animalsProcessed} animals.`);
+            alert(`Successfully logged treatments for ${animalsToTreat.length} animals.`);
         } catch (e) {
             console.error(e);
             alert("Failed to log treatments.");
@@ -504,6 +522,21 @@ export const Operations: React.FC<Props> = ({
                 <>
                     {viewMode === 'LIST' ? (
                         <div className="space-y-6 animate-fade-in">
+                            {medicineExpirations.length > 0 && (
+                                <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+                                    <h4 className="font-bold text-amber-800 flex items-center gap-2 mb-2">
+                                        <AlertCircle size={18} /> Expiring Within 30 Days
+                                    </h4>
+                                    <ul className="space-y-1 text-sm text-amber-900">
+                                        {medicineExpirations.map(m => (
+                                            <li key={m.id} className="flex justify-between items-center">
+                                                <span><strong>{m.name}</strong>{m.batchNumber ? ` (Batch ${m.batchNumber})` : ''} — expires {m.expiryDate}</span>
+                                                <span className="font-bold">{m.daysUntilExpiry} days</span>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            )}
                             {/* Section 1: Medicine Inventory */}
                             <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
                                 <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-blue-50">

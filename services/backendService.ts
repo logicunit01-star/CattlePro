@@ -5,8 +5,8 @@ import { getTenantHeaders, getTenant } from './tenantContext';
 // const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8381/api';
 // const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5003/livestock';
 
-//  const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5003/livestock';
-const API_BASE_URL = (import.meta as any).env.VITE_API_URL || 'https://api.hulmsolutions.com/livestock';
+ const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5003/livestock';
+// const API_BASE_URL = (import.meta as any).env.VITE_API_URL || 'https://api.hulmsolutions.com/livestock';
 
 function apiHeaders(json = false): Record<string, string> {
     const h: Record<string, string> = { ...getTenantHeaders() };
@@ -503,6 +503,16 @@ export const backendService = {
         return handleResponse(res);
     },
 
+    /** Atomic diet plan processing: inventory deduction, logs, ledger, expense, lastProcessedDate. */
+    processDietPlans: async (request?: { dietPlanIds?: string[]; date?: string }): Promise<{ success: boolean; message: string; plansProcessed: number; ledgersCreated: number; totalCost: number; ledgerIds: string[] }> => {
+        const res = await fetch(`${API_BASE_URL}/operations/diet-plan/process`, {
+            method: 'POST',
+            headers: apiHeaders(true),
+            body: JSON.stringify(request || {}),
+        });
+        return handleResponse(res);
+    },
+
     // Medicine Module
     getTreatmentProtocols: async (): Promise<TreatmentProtocol[]> => {
         const res = await fetch(`${API_BASE_URL}/operations/treatment-protocols`, { headers: apiHeaders() });
@@ -540,6 +550,22 @@ export const backendService = {
             body: JSON.stringify(logs),
         });
         await handleResponse(res);
+    },
+
+    /** Bulk apply protocol to multiple animals (atomic: inventory, logs, expense). */
+    applyProtocol: async (request: { protocolId: string; targetAnimalIds: string[]; performedBy?: string; date?: string }): Promise<{ success: boolean; message: string; animalsTreated: number; treatmentLogsCreated: number; totalCost: number; expenseId?: string }> => {
+        const res = await fetch(`${API_BASE_URL}/operations/protocol/apply`, {
+            method: 'POST',
+            headers: apiHeaders(true),
+            body: JSON.stringify(request),
+        });
+        return handleResponse(res);
+    },
+
+    /** Medicine batches expiring within the given days (default 30). */
+    getMedicineExpirations: async (days: number = 30): Promise<{ id: string; name: string; batchNumber: string; expiryDate: string; daysUntilExpiry: number; quantity: number; unit: string }[]> => {
+        const res = await fetch(`${API_BASE_URL}/operations/medicine-expirations?days=${days}`, { headers: apiHeaders() });
+        return handleResponse(res);
     },
 
     // Auth (Mock – used when no URL params)

@@ -327,246 +327,11 @@ const App: React.FC = () => {
   // --- DIET & NUTRITION ENGINE ---
   const processDailyConsumption = async () => {
     try {
-      const today = new Date().toISOString().split('T')[0];
-      const activePlans = state.dietPlans.filter(p => p.status === 'ACTIVE');
-      if (activePlans.length === 0) return alert("No active diet plans found.");
-
-      // --- PRE-FLIGHT CHECK (SIMULATION) ---
-      let simulationFailed = false;
-      const requiredInventory = new Map<string, number>();
-
-      for (const plan of activePlans) {
-        if (!plan.items || plan.items.length === 0) continue;
-
-        let animals: Livestock[] = [];
-        if (plan.targetType === 'CATEGORY') {
-          const categoryMatch = (l: Livestock) =>
-            l.farmId === plan.farmId &&
-            l.status === 'ACTIVE' &&
-            (l.category === plan.targetId || l.category === plan.targetName || (plan.targetName && l.category?.toLowerCase() === plan.targetName.toLowerCase()));
-          animals = state.livestock.filter(categoryMatch);
-        } else if (plan.targetType === 'INDIVIDUAL') {
-          const ids = plan.targetIds || (plan.targetId ? [plan.targetId] : []);
-          animals = state.livestock.filter(l => ids.includes(l.id) && l.status === 'ACTIVE');
-        } else if (plan.targetType === 'ALL' || !plan.targetType) {
-          animals = state.livestock.filter(l => l.farmId === plan.farmId && l.status === 'ACTIVE');
-        }
-
-        if (animals.length === 0) continue;
-
-        for (const item of plan.items) {
-          const qty = Number(item.quantity) || 0;
-          let totalRequiredForPlan = 0;
-
-          if (plan.distributionMode === 'TOTAL_DISTRIBUTED') {
-            totalRequiredForPlan = qty;
-          } else if (plan.distributionMode === 'PER_HUNDRED_KG_BW') {
-            const totalKg = animals.reduce((sum, a) => sum + (a.weight || 0), 0);
-            totalRequiredForPlan = qty * (totalKg / 100);
-          } else {
-            // Default to PER_ANIMAL
-            totalRequiredForPlan = qty * animals.length;
-          }
-
-          const invItem = state.feed.find(f => f.id === item.inventoryId);
-          let deductionQty = totalRequiredForPlan;
-          if (invItem) {
-            const uiInv = (invItem.unit || '').toUpperCase();
-            const uiItem = (item.unit || '').toUpperCase();
-            const wpu = invItem.weightPerUnit || 1;
-
-            if (['BAG', 'BUNDLE'].includes(uiInv)) {
-              if (uiItem === 'KG') deductionQty = totalRequiredForPlan / wpu;
-              else if (uiItem === 'G') deductionQty = (totalRequiredForPlan / 1000) / wpu;
-            } else if (uiInv === 'TON') {
-              if (uiItem === 'KG') deductionQty = totalRequiredForPlan / 1000;
-              else if (uiItem === 'G') deductionQty = totalRequiredForPlan / 1000000;
-            } else if (uiInv === 'KG') {
-              if (uiItem === 'G') deductionQty = totalRequiredForPlan / 1000;
-              else if (uiItem === 'TON') deductionQty = totalRequiredForPlan * 1000;
-            } else if (uiInv === 'G') {
-              if (uiItem === 'KG') deductionQty = totalRequiredForPlan * 1000;
-              else if (uiItem === 'TON') deductionQty = totalRequiredForPlan * 1000000;
-            }
-          }
-          requiredInventory.set(item.inventoryId, (requiredInventory.get(item.inventoryId) || 0) + deductionQty);
-        }
+      const result = await backendService.processDietPlans({});
+      if (result.plansProcessed === 0 && result.ledgersCreated === 0) {
+        alert(result.message || "No eligible plans to process (none active or already processed today).");
+        return;
       }
-
-      // --- HARD STOCK LOCK VALIDATION ---
-      for (const [invId, reqQty] of Array.from(requiredInventory.entries())) {
-        const invItem = state.feed.find(f => f.id === invId);
-        if (!invItem) {
-          alert(`CRITICAL ERROR: Feed item (ID: ${invId}) not found in inventory.`);
-          simulationFailed = true;
-          break;
-        }
-        if (invItem.quantity < reqQty) {
-          alert(`HARD STOCK LOCK TRIGGERED:\nInsufficient stock for ${invItem.name}.\nRequired: ${reqQty.toFixed(2)} ${invItem.unit}. Available: ${invItem.quantity.toFixed(2)} ${invItem.unit}.\nProcessing aborted.`);
-          simulationFailed = true;
-          break;
-        }
-      }
-
-      if (simulationFailed) return;
-
-      // --- EXECUTION PHASE ---
-      let totalGlobalCost = 0;
-      const newLogs: any[] = [];
-      const newLedgers: ProcessedFeedLedger[] = [];
-      const invUpdates = new Map<string, FeedInventory>();
-      const modifiedFeedIds = new Set<string>();
-      state.feed.forEach(f => invUpdates.set(f.id, { ...f }));
-      const livestockUpdates = new Map<string, Livestock>();
-
-      let anyProcessed = false;
-
-      for (const plan of activePlans) {
-        if (!plan.items || plan.items.length === 0) continue;
-
-        let animals: Livestock[] = [];
-        if (plan.targetType === 'CATEGORY') {
-          const categoryMatch = (l: Livestock) =>
-            l.farmId === plan.farmId &&
-            l.status === 'ACTIVE' &&
-            (l.category === plan.targetId || l.category === plan.targetName || (plan.targetName && l.category?.toLowerCase() === plan.targetName.toLowerCase()));
-          animals = state.livestock.filter(categoryMatch);
-        } else if (plan.targetType === 'INDIVIDUAL') {
-          const ids = plan.targetIds || (plan.targetId ? [plan.targetId] : []);
-          animals = state.livestock.filter(l => ids.includes(l.id) && l.status === 'ACTIVE');
-        } else if (plan.targetType === 'ALL' || !plan.targetType) {
-          animals = state.livestock.filter(l => l.farmId === plan.farmId && l.status === 'ACTIVE');
-        }
-
-        if (animals.length === 0) continue;
-
-        // Skip if already processed today
-        if (plan.lastProcessedDate === today) continue;
-
-        let planTotalCost = 0;
-        const ledgerId = `ledger-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
-
-        for (const item of plan.items) {
-          const qty = Number(item.quantity) || 0;
-          let totalQty = 0;
-
-          if (plan.distributionMode === 'TOTAL_DISTRIBUTED') {
-            totalQty = qty;
-          } else if (plan.distributionMode === 'PER_HUNDRED_KG_BW') {
-            const totalKg = animals.reduce((sum, a) => sum + (a.weight || 0), 0);
-            totalQty = qty * (totalKg / 100);
-          } else {
-            totalQty = qty * animals.length;
-          }
-
-          const invItem = invUpdates.get(item.inventoryId);
-          if (invItem && totalQty > 0) {
-            let deductionQty = totalQty;
-            const uiInv = (invItem.unit || '').toUpperCase();
-            const uiItem = (item.unit || '').toUpperCase();
-            const wpu = invItem.weightPerUnit || 1;
-
-            if (['BAG', 'BUNDLE'].includes(uiInv)) {
-              if (uiItem === 'KG') deductionQty = totalQty / wpu;
-              else if (uiItem === 'G') deductionQty = (totalQty / 1000) / wpu;
-            } else if (uiInv === 'TON') {
-              if (uiItem === 'KG') deductionQty = totalQty / 1000;
-              else if (uiItem === 'G') deductionQty = totalQty / 1000000;
-            } else if (uiInv === 'KG') {
-              if (uiItem === 'G') deductionQty = totalQty / 1000;
-              else if (uiItem === 'TON') deductionQty = totalQty * 1000;
-            } else if (uiInv === 'G') {
-              if (uiItem === 'KG') deductionQty = totalQty * 1000;
-              else if (uiItem === 'TON') deductionQty = totalQty * 1000000;
-            }
-
-            invItem.quantity -= deductionQty; // Safe because of hard lock
-            invUpdates.set(invItem.id, invItem);
-            modifiedFeedIds.add(invItem.id);
-
-            const cost = deductionQty * (invItem.unitCost || 0);
-            planTotalCost += cost;
-
-            newLogs.push({
-              id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-              farmId: plan.farmId,
-              dietPlanId: plan.id,
-              processedLedgerId: ledgerId,
-              date: today,
-              itemId: item.inventoryId,
-              quantityUsed: Number(deductionQty),
-              cost: Number(cost),
-              unit: invItem.unit || 'kg'
-            });
-          }
-        }
-
-        if (planTotalCost > 0) {
-          totalGlobalCost += planTotalCost;
-          newLedgers.push({
-            id: ledgerId,
-            farmId: plan.farmId,
-            date: today,
-            dietPlanId: plan.id,
-            totalAnimalsFed: animals.length,
-            totalCost: planTotalCost,
-            processedBy: 'SYSTEM',
-            status: 'PROCESSED'
-          });
-
-          // Accumulate exactly what they ate explicitly onto their profile per animal
-          const logCostPerAnimal = planTotalCost / animals.length;
-          for (const animal of animals) {
-            const currentAnimal = livestockUpdates.get(animal.id) || { ...animal };
-            currentAnimal.accumulatedFeedCost = (currentAnimal.accumulatedFeedCost || 0) + logCostPerAnimal;
-            livestockUpdates.set(animal.id, currentAnimal);
-          }
-
-          anyProcessed = true;
-          // We will update the diet plan lastProcessedDate later, currently local state updates doesn't save plan automatically unless we call backend
-        }
-      }
-
-      if (!anyProcessed) return alert("No valid consumption to process today (No animals matched or no eligible active plans found).");
-
-      // 3. Commit: create ledgers on backend first, then logs, feed, livestock, expense, diet plan lastProcessedDate
-      for (const ledger of newLedgers) {
-        await backendService.createFeedLedger(ledger);
-      }
-      await backendService.logConsumption(newLogs);
-      for (const id of modifiedFeedIds) {
-        const inv = invUpdates.get(id);
-        if (inv) await backendService.updateFeed(id, inv);
-      }
-      for (const [id, animal] of Array.from(livestockUpdates.entries())) {
-        await backendService.updateLivestock(id, animal);
-      }
-      // One expense per ledger so REVERSE can remove the matching expense from Expense log
-      for (const ledger of newLedgers) {
-        const expense: Expense = {
-          id: `exp-feed-${ledger.id}-${Date.now()}`,
-          farmId: ledger.farmId,
-          category: ExpenseCategory.FEED,
-          amount: ledger.totalCost,
-          date: today,
-          description: `Daily feed: ${state.dietPlans.find(p => p.id === ledger.dietPlanId)?.name ?? ledger.dietPlanId} (${ledger.totalAnimalsFed} heads)`,
-          supplier: 'Internal Inventory',
-          isSystemGenerated: true,
-          referenceType: 'CONSUMPTION',
-          processedFeedLedgerId: ledger.id
-        };
-        await backendService.createExpense(expense);
-      }
-
-      // Update lastProcessedDate for each processed plan so we don't double-charge same day
-      const processedPlanIds = new Set(newLedgers.map(l => l.dietPlanId));
-      for (const plan of activePlans) {
-        if (processedPlanIds.has(plan.id)) {
-          await backendService.updateDietPlan(plan.id, { ...plan, lastProcessedDate: today });
-        }
-      }
-
-      // Refetch from backend so UI (and refresh) stays in sync with persisted data
       const [refetchedFeed, refetchedLogs, refetchedLedgers, refetchedLivestock, refetchedPlans, refetchedExpenses] = await Promise.all([
         backendService.getFeed(),
         backendService.getConsumptionLogs(),
@@ -584,8 +349,7 @@ const App: React.FC = () => {
         dietPlans: refetchedPlans,
         expenses: refetchedExpenses
       }));
-
-      alert(`Processed daily feed for ${activePlans.length} plan(s). Total cost: ${totalGlobalCost.toLocaleString()}`);
+      alert(result.message + (result.totalCost > 0 ? ` Total cost: PKR ${result.totalCost.toLocaleString()}` : ''));
     } catch (e: any) {
       console.error('Process daily consumption error:', e);
       const msg = e?.message || e?.response?.data?.message || String(e);
@@ -600,16 +364,18 @@ const App: React.FC = () => {
       if (ledger.status === 'REVERSED') return alert("Already reversed.");
       await backendService.reverseFeedLedger(ledgerId);
       const getLedgers = backendService.getFeedLedgers ? backendService.getFeedLedgers() : Promise.resolve([]);
-      const [expenses, feed, processedFeedLedgers] = await Promise.all([
+      const [expenses, feed, processedFeedLedgers, livestock] = await Promise.all([
         backendService.getExpenses(),
         backendService.getFeed(),
         getLedgers,
+        backendService.getLivestock(),
       ]);
       setState(prev => ({
         ...prev,
         expenses: Array.isArray(expenses) ? expenses : prev.expenses,
         feed: Array.isArray(feed) ? feed : prev.feed,
         processedFeedLedgers: Array.isArray(processedFeedLedgers) ? processedFeedLedgers : (prev.processedFeedLedgers || []).map(l => l.id === ledgerId ? { ...l, status: 'REVERSED' } : l),
+        livestock: toLivestockArray(livestock),
       }));
       alert(`Transaction reversed. Feed inventory, animal costs, and linked expense have been restored/removed by the server.`);
     } catch (e: any) {
@@ -1361,6 +1127,23 @@ const App: React.FC = () => {
                 onUpdateTreatmentProtocol={async (p) => { const updated = await backendService.updateTreatmentProtocol(p.id, p); setState(s => ({ ...s, treatmentProtocols: s.treatmentProtocols.map(x => x.id === p.id ? updated : x) })); }}
                 onDeleteTreatmentProtocol={async (id) => { await backendService.deleteTreatmentProtocol(id); setState(s => ({ ...s, treatmentProtocols: s.treatmentProtocols.filter(x => x.id !== id) })); }}
                 onLogTreatment={handleLogTreatment}
+                onApplyProtocol={async (protocolId, targetAnimalIds, performedBy) => {
+                  const result = await backendService.applyProtocol({ protocolId, targetAnimalIds, performedBy });
+                  if (!result.success) throw new Error(result.message);
+                  const [feed, treatmentLogs, expenses, livestock] = await Promise.all([
+                    backendService.getFeed(),
+                    backendService.getTreatmentLogs(),
+                    backendService.getExpenses(),
+                    backendService.getLivestock()
+                  ]);
+                  setState(prev => ({
+                    ...prev,
+                    feed: Array.isArray(feed) ? feed : prev.feed,
+                    treatmentLogs: Array.isArray(treatmentLogs) ? treatmentLogs : prev.treatmentLogs,
+                    expenses: Array.isArray(expenses) ? expenses : prev.expenses,
+                    livestock: toLivestockArray(livestock)
+                  }));
+                }}
                 onClearFeedLedger={handleClearFeedLedger}
               />
             )}
