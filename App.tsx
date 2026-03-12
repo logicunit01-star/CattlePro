@@ -487,10 +487,44 @@ const App: React.FC = () => {
   const updateLivestock = async (updatedAnimal: Livestock) => {
     try {
       const saved = await backendService.updateLivestock(updatedAnimal.id, updatedAnimal);
-      setState(prev => ({
-        ...prev,
-        livestock: prev.livestock.map(l => l.id === saved.id ? saved : l)
-      }));
+
+      let newExpense: Expense | null = null;
+      let updatedExpense: Expense | null = null;
+
+      const purchExp = state.expenses.find(e => e.relatedAnimalId === saved.id && (e.category === ExpenseCategory.PURCHASE || e.category === 'PURCHASE' || e.id === `purch_exp_${saved.id}`));
+
+      if (purchExp) {
+        if (purchExp.amount !== Math.max(0, saved.purchasePrice || 0) || purchExp.date !== (saved.purchaseDate || purchExp.date)) {
+          updatedExpense = { ...purchExp, amount: Math.max(0, saved.purchasePrice || 0), date: saved.purchaseDate || purchExp.date };
+          await backendService.updateExpense(updatedExpense.id, updatedExpense);
+        }
+      } else if (saved.purchasePrice && saved.purchasePrice > 0) {
+        const expense: Expense = {
+          id: `purch_exp_${saved.id}`,
+          farmId: state.currentFarmId || saved.farmId,
+          category: ExpenseCategory.PURCHASE,
+          amount: saved.purchasePrice,
+          date: saved.purchaseDate || new Date().toISOString().split('T')[0],
+          description: `Purchase of Animal: ${saved.tagId} (${saved.breed})`,
+          relatedAnimalId: saved.id,
+          farmName: state.farms.find(f => f.id === (state.currentFarmId || saved.farmId))?.name
+        };
+        newExpense = await backendService.createExpense(expense);
+      }
+
+      setState(prev => {
+        let newExpenses = prev.expenses;
+        if (updatedExpense) {
+          newExpenses = newExpenses.map(e => e.id === updatedExpense!.id ? updatedExpense! : e);
+        } else if (newExpense) {
+          newExpenses = [...newExpenses, newExpense];
+        }
+        return {
+          ...prev,
+          livestock: prev.livestock.map(l => l.id === saved.id ? saved : l),
+          expenses: newExpenses
+        };
+      });
       setPersistedLivestockStatus({ [saved.id]: saved.status });
       setLivestockGridRefresh(r => r + 1);
     } catch (e) {
