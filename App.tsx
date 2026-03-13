@@ -137,6 +137,7 @@ const App: React.FC = () => {
   const [livestockPageRequest, setLivestockPageRequest] = useState({ number: 0, size: 20, sortBy: 'tagId', sortDirection: 'asc' as 'asc' | 'desc', q: '', category: '' as string, status: '' as string });
   const [livestockPageResult, setLivestockPageResult] = useState<{ content: Livestock[]; totalElements: number; totalPages: number } | null>(null);
   const [livestockGridRefresh, setLivestockGridRefresh] = useState(0);
+  const [financialsRefresh, setFinancialsRefresh] = useState(0);
 
   // Tenant: on first load read URL and persist companyName & instanceId to localStorage + Redux
   useEffect(() => {
@@ -486,54 +487,74 @@ const App: React.FC = () => {
 
   const updateLivestock = async (updatedAnimal: Livestock) => {
     try {
+      // 1. Perform Livestock Update on Server
       const saved = await backendService.updateLivestock(updatedAnimal.id, updatedAnimal);
+      
+      // 2. Update Livestock State immediately
+      setState(prev => ({
+        ...prev,
+        livestock: prev.livestock.map(l => l.id === saved.id ? saved : l)
+      }));
+      setPersistedLivestockStatus({ [saved.id]: saved.status });
+      setLivestockGridRefresh(r => r + 1);
+
+      // 3. Handle Expense (Purchase) Logic
+      // Use the latest state for searching expenses to avoid race conditions
+      const currentExpenses = state.expenses;
+      const purchExp = currentExpenses.find(e => 
+        e.relatedAnimalId === saved.id && 
+        (e.category === ExpenseCategory.PURCHASE || e.category === 'PURCHASE' || e.id === `purch_exp_${saved.id}`)
+      );
 
       let newExpense: Expense | null = null;
       let updatedExpense: Expense | null = null;
 
-      const purchExp = state.expenses.find(e => e.relatedAnimalId === saved.id && (e.category === ExpenseCategory.PURCHASE || e.category === 'PURCHASE' || e.id === `purch_exp_${saved.id}`));
-
       if (purchExp) {
-        if (purchExp.amount !== Math.max(0, saved.purchasePrice || 0) || purchExp.date !== (saved.purchaseDate || purchExp.date)) {
-          updatedExpense = { ...purchExp, amount: Math.max(0, saved.purchasePrice || 0), date: saved.purchaseDate || purchExp.date };
+        // Update existing expense if amount or date changed
+        const targetAmount = Math.max(0, saved.purchasePrice || 0);
+        const targetDate = saved.purchaseDate || purchExp.date;
+        
+        if (purchExp.amount !== targetAmount || purchExp.date !== targetDate) {
+          updatedExpense = { ...purchExp, amount: targetAmount, date: targetDate };
           await backendService.updateExpense(updatedExpense.id, updatedExpense);
         }
       } else if (saved.purchasePrice && saved.purchasePrice > 0) {
+        // Create new expense if doesn't exist but has price
         const expense: Expense = {
           id: `purch_exp_${saved.id}`,
-          farmId: state.currentFarmId || saved.farmId,
+          farmId: saved.farmId || state.currentFarmId || '',
           category: ExpenseCategory.PURCHASE,
           amount: saved.purchasePrice,
           date: saved.purchaseDate || new Date().toISOString().split('T')[0],
           description: `Purchase of Animal: ${saved.tagId} (${saved.breed})`,
           relatedAnimalId: saved.id,
-          farmName: state.farms.find(f => f.id === (state.currentFarmId || saved.farmId))?.name
+          farmName: state.farms.find(f => f.id === (saved.farmId || state.currentFarmId))?.name
         };
         newExpense = await backendService.createExpense(expense);
       }
 
-      setState(prev => {
-        let newExpenses = prev.expenses;
-        if (updatedExpense) {
-          newExpenses = newExpenses.map(e => e.id === updatedExpense!.id ? updatedExpense! : e);
-        } else if (newExpense) {
-          newExpenses = [...newExpenses, newExpense];
-        }
-        return {
-          ...prev,
-          livestock: prev.livestock.map(l => l.id === saved.id ? saved : l),
-          expenses: newExpenses
-        };
-      });
-      setPersistedLivestockStatus({ [saved.id]: saved.status });
-      setLivestockGridRefresh(r => r + 1);
+      // 4. Update Expense State
+      if (newExpense || updatedExpense) {
+        setState(prev => {
+          let nextExpenses = prev.expenses;
+          if (updatedExpense) {
+            nextExpenses = nextExpenses.map(e => e.id === updatedExpense!.id ? updatedExpense! : e);
+          } else if (newExpense) {
+            nextExpenses = [...nextExpenses, newExpense];
+          }
+          return { ...prev, expenses: nextExpenses };
+        });
+        setFinancialsRefresh(r => r + 1); // Trigger refresh in Financials component
+      }
+
     } catch (e) {
+      console.error("Critical failure during livestock/expense update:", e);
+      // Fallback state update to ensure UI is at least consistent with local attempt
       setState(prev => ({
         ...prev,
-        livestock: prev.livestock.map(l => l.id === updatedAnimal.id ? { ...l, status: updatedAnimal.status } : l)
+        livestock: prev.livestock.map(l => l.id === updatedAnimal.id ? { ...l, ...updatedAnimal } : l)
       }));
-      setPersistedLivestockStatus({ [updatedAnimal.id]: updatedAnimal.status });
-      console.warn("Livestock update saved locally; backend sync failed:", e);
+      setLivestockGridRefresh(r => r + 1);
     }
   };
 
@@ -1036,6 +1057,7 @@ const App: React.FC = () => {
               <LivestockManager
                 key="cattle-manager"
                 livestock={livestockPageResult ? livestockPageResult.content : (state.currentFarmId ? state.livestock.filter(l => l.farmId === state.currentFarmId && l.species === 'CATTLE') : (state.currentLocationId ? state.livestock.filter(l => l.species === 'CATTLE' && state.farms.find(f => f.id === l.farmId)?.locationId === state.currentLocationId) : state.livestock.filter(l => l.species === 'CATTLE')))}
+                allLivestock={state.livestock}
                 breeders={state.breeders} species="CATTLE" categories={FIXED_CATEGORIES}
                 entities={state.entities}
                 onAddLivestock={addLivestock} onUpdateLivestock={updateLivestock} onDeleteLivestock={deleteLivestock}
@@ -1054,6 +1076,7 @@ const App: React.FC = () => {
               <LivestockManager
                 key="goat-manager"
                 livestock={livestockPageResult ? livestockPageResult.content : (state.currentFarmId ? state.livestock.filter(l => l.farmId === state.currentFarmId && l.species === 'GOAT') : (state.currentLocationId ? state.livestock.filter(l => l.species === 'GOAT' && state.farms.find(f => f.id === l.farmId)?.locationId === state.currentLocationId) : state.livestock.filter(l => l.species === 'GOAT')))}
+                allLivestock={state.livestock}
                 breeders={state.breeders} species="GOAT" categories={FIXED_CATEGORIES}
                 entities={state.entities}
                 onAddLivestock={addLivestock} onUpdateLivestock={updateLivestock} onDeleteLivestock={deleteLivestock}
@@ -1110,6 +1133,7 @@ const App: React.FC = () => {
                 onDeleteExpense={handleDeleteExpense}
                 onDeleteSale={handleDeleteSale}
                 onDeleteLivestock={async (id) => { await backendService.deleteLivestock(id); setState(p => ({ ...p, livestock: p.livestock.filter(l => l.id !== id) })); }}
+                refreshKey={financialsRefresh}
               />
             )}
             {activeView === 'OPERATIONS' && (

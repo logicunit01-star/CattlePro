@@ -19,11 +19,12 @@ interface Props {
     onAddSale: (s: Sale) => void;
     onDeleteExpense: (id: string) => void;
     onDeleteSale: (id: string) => void;
+    refreshKey?: number;
 }
 
 type FinancialView = 'LIST' | 'ADD_EXPENSE' | 'ADD_SALE';
 
-export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [], entities, infrastructure = [], farms = [], locations = [], currentFarmId, currentLocationId, onAddExpense, onUpdateExpense, onAddSale, onDeleteExpense, onDeleteSale }) => {
+export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [], entities, infrastructure = [], farms = [], locations = [], currentFarmId, currentLocationId, onAddExpense, onUpdateExpense, onAddSale, onDeleteExpense, onDeleteSale, refreshKey }) => {
     const [activeTab, setActiveTab] = useState<'EXPENSES' | 'SALES' | 'LEDGER'>('EXPENSES');
     const [expenseTab, setExpenseTab] = useState<'LIST' | 'DASHBOARD' | 'VENDOR_BILLS'>('LIST');
     const [viewMode, setViewMode] = useState<FinancialView>('LIST');
@@ -75,7 +76,7 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
         backendService.getFinancialsKpis({ farmId: currentFarmId || undefined, ...dateRangeFromFilter })
             .then(setFinancialsKpis)
             .catch(() => setFinancialsKpis(null));
-    }, [currentFarmId, dateRangeFromFilter.startDate, dateRangeFromFilter.endDate]);
+    }, [currentFarmId, dateRangeFromFilter.startDate, dateRangeFromFilter.endDate, refreshKey]);
 
     useEffect(() => { setExpensesPageNum(0); }, [dateFilter, searchTerm]);
     useEffect(() => { setSalesPageNum(0); }, [dateFilter, searchTerm]);
@@ -91,7 +92,7 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
             sortBy: sortConfig.key,
             sortDirection: sortConfig.direction,
         }).then(setExpensesPage).catch(() => setExpensesPage(null));
-    }, [currentFarmId, dateRangeFromFilter.startDate, dateRangeFromFilter.endDate, searchTerm, expensesPageNum, sortConfig.key, sortConfig.direction]);
+    }, [currentFarmId, dateRangeFromFilter.startDate, dateRangeFromFilter.endDate, searchTerm, expensesPageNum, sortConfig.key, sortConfig.direction, refreshKey]);
 
     useEffect(() => {
         backendService.getFinancialsSales({
@@ -103,7 +104,7 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
             sortBy: sortConfig.key,
             sortDirection: sortConfig.direction,
         }).then(setSalesPage).catch(() => setSalesPage(null));
-    }, [currentFarmId, dateRangeFromFilter.startDate, dateRangeFromFilter.endDate, searchTerm, salesPageNum, sortConfig.key, sortConfig.direction]);
+    }, [currentFarmId, dateRangeFromFilter.startDate, dateRangeFromFilter.endDate, searchTerm, salesPageNum, sortConfig.key, sortConfig.direction, refreshKey]);
 
     useEffect(() => {
         backendService.getFinancialsLedger({
@@ -112,7 +113,7 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
             page: ledgerPageNum,
             limit: pageSize,
         }).then(setLedgerPage).catch(() => setLedgerPage(null));
-    }, [currentFarmId, dateRangeFromFilter.startDate, dateRangeFromFilter.endDate, ledgerPageNum]);
+    }, [currentFarmId, dateRangeFromFilter.startDate, dateRangeFromFilter.endDate, ledgerPageNum, refreshKey]);
 
     useEffect(() => {
         backendService.getCategories('EXPENSE').then(setCustomCategories).catch(() => setCustomCategories([]));
