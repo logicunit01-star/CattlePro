@@ -5,7 +5,7 @@ import { getTenantHeaders, getTenant } from './tenantContext';
 // const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8381/api';
 // const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5003/livestock';
 
- //const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5003/livestock';
+//  const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5003/livestock';
  const API_BASE_URL = (import.meta as any).env.VITE_API_URL || 'https://api.hulmsolutions.com/livestock';
 
 function apiHeaders(json = false): Record<string, string> {

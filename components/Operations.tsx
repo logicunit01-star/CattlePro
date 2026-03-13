@@ -227,8 +227,11 @@ export const Operations: React.FC<Props> = ({
 
     const openEditDiet = (plan: DietPlan) => {
         setEditingDiet(plan);
+        const rawIds = plan.targetIds ?? (plan as any).assignedAnimalIds;
+        const targetIds = Array.isArray(rawIds) ? rawIds : (rawIds ? [rawIds] : []);
         setDietForm({
             ...plan,
+            targetIds,
             items: Array.isArray(plan.items) ? plan.items.map(i => ({
                 ...i,
                 id: (i as any).id || Math.random().toString(36).substr(2, 9),
@@ -384,6 +387,9 @@ export const Operations: React.FC<Props> = ({
     const handleDietSubmit = async () => {
         if (!dietForm.name || (!dietForm.items || dietForm.items.length === 0)) return alert("Name and at least one ingredient required");
         if (!state.currentFarmId) return alert("Please select a farm first.");
+        if ((dietForm.targetType || '') === 'INDIVIDUAL' && (!dietForm.targetIds || dietForm.targetIds.length === 0)) {
+            return alert("Please select at least one animal under Target Selection when using Individual Animal.");
+        }
 
         const rawItems = dietForm.items || [];
         const items = rawItems
@@ -465,6 +471,72 @@ export const Operations: React.FC<Props> = ({
             case 'UNDER_MAINTENANCE': return 'text-blue-600 bg-blue-100';
             default: return 'text-gray-600 bg-gray-100';
         }
+    };
+
+    const getDietPlanAssignedCount = (plan: DietPlan): number => {
+        const farmId = plan.farmId || state.currentFarmId;
+        const activeOnFarm = state.livestock.filter(l => l.status === 'ACTIVE' && (!farmId || l.farmId === farmId));
+        const t = (plan.targetType || '').toUpperCase();
+        if (t === 'INDIVIDUAL') {
+            const ids = plan.targetIds ?? (plan as any).assignedAnimalIds ?? [];
+            return Array.isArray(ids) ? ids.length : 0;
+        }
+        if (t === 'CATEGORY' && (plan.targetName || plan.targetId)) {
+            return activeOnFarm.filter(l => l.category === (plan.targetName || plan.targetId)).length;
+        }
+        if (t === 'ALL') return activeOnFarm.length;
+        return 0;
+    };
+
+    const getDietPlanAssignedAnimals = (plan: DietPlan): Livestock[] => {
+        const farmId = plan.farmId || state.currentFarmId;
+        const activeOnFarm = state.livestock.filter(l => l.status === 'ACTIVE' && (!farmId || l.farmId === farmId));
+        const t = (plan.targetType || '').toUpperCase();
+        if (t === 'INDIVIDUAL') {
+            const ids = plan.targetIds ?? (plan as any).assignedAnimalIds ?? [];
+            const idSet = Array.isArray(ids) ? new Set(ids) : new Set<string>();
+            return activeOnFarm.filter(l => idSet.has(l.id));
+        }
+        if (t === 'CATEGORY' && (plan.targetName || plan.targetId)) {
+            return activeOnFarm.filter(l => l.category === (plan.targetName || plan.targetId));
+        }
+        if (t === 'ALL') return activeOnFarm;
+        return [];
+    };
+
+    const getDietPlanDailyCost = (plan: DietPlan): number => {
+        const animals = getDietPlanAssignedAnimals(plan);
+        const aCount = animals.length;
+        if (aCount === 0 || !plan.items?.length) return 0;
+        const mode = (plan.distributionMode || 'PER_ANIMAL') as string;
+        let total = 0;
+        for (const it of plan.items) {
+            if (!it.inventoryId || (it.quantity ?? 0) <= 0) continue;
+            let deductTotal = 0;
+            if (mode === 'TOTAL_DISTRIBUTED') deductTotal = it.quantity ?? 0;
+            else if (mode === 'PER_HUNDRED_KG_BW') deductTotal = (it.quantity ?? 0) * (animals.reduce((s, a) => s + (a.weight ?? 0), 0) / 100);
+            else deductTotal = (it.quantity ?? 0) * aCount;
+            const fInv = state.feed.find(f => f.id === it.inventoryId);
+            const uiInv = (fInv?.unit || '').toUpperCase();
+            const uiItem = (it.unit || 'KG').toUpperCase();
+            let inventoryDeductionCount = deductTotal;
+            const wpu = (fInv?.weightPerUnit ?? 1) || 1;
+            if (fInv && ['BAG', 'BUNDLE'].includes(uiInv)) {
+                if (uiItem === 'KG') inventoryDeductionCount = deductTotal / wpu;
+                else if (uiItem === 'G') inventoryDeductionCount = (deductTotal / 1000) / wpu;
+            } else if (uiInv === 'TON') {
+                if (uiItem === 'KG') inventoryDeductionCount = deductTotal / 1000;
+                else if (uiItem === 'G') inventoryDeductionCount = deductTotal / 1000000;
+            } else if (uiInv === 'KG') {
+                if (uiItem === 'G') inventoryDeductionCount = deductTotal / 1000;
+                else if (uiItem === 'TON') inventoryDeductionCount = (deductTotal ?? 0) * 1000;
+            } else if (uiInv === 'G') {
+                if (uiItem === 'KG') inventoryDeductionCount = (deductTotal ?? 0) * 1000;
+                else if (uiItem === 'TON') inventoryDeductionCount = (deductTotal ?? 0) * 1000000;
+            }
+            total += inventoryDeductionCount * (fInv?.unitCost ?? 0);
+        }
+        return total;
     };
 
     return (
@@ -1340,8 +1412,8 @@ export const Operations: React.FC<Props> = ({
                                                         </div>
 
                                                         <div className="flex items-center justify-between text-sm text-gray-500 pt-2 border-t border-gray-50">
-                                                            <span className="font-bold text-gray-700">Cost: PKR {plan.totalCostPerDay?.toLocaleString() || 0}/day</span>
-                                                            <span className="text-xs">{(plan.totalAnimals || 0)} Animals Assigned</span>
+                                                            <span className="font-bold text-gray-700">Cost: PKR {(plan.totalCostPerDay ?? getDietPlanDailyCost(plan)).toLocaleString()}/day</span>
+                                                            <span className="text-xs">{getDietPlanAssignedCount(plan)} Animals Assigned</span>
                                                         </div>
                                                     </div>
                                                 </div>
@@ -1535,20 +1607,24 @@ export const Operations: React.FC<Props> = ({
                                             ) : dietForm.targetType === 'INDIVIDUAL' ? (
                                                 <div className="border border-gray-300 rounded-lg max-h-40 overflow-y-auto p-2">
                                                     {(state.livestock.filter(l => l.status === 'ACTIVE' && (!state.currentFarmId || l.farmId === state.currentFarmId))).map(l => (
-                                                        <label key={l.id} className="flex items-center gap-2 p-1 hover:bg-gray-50 cursor-pointer text-sm">
+                                                        <label key={l.id} htmlFor={`diet-target-${l.id}`} className="flex items-center gap-2 p-1 hover:bg-gray-50 cursor-pointer text-sm">
                                                             <input
+                                                                id={`diet-target-${l.id}`}
                                                                 type="checkbox"
                                                                 checked={(dietForm.targetIds || []).includes(l.id)}
                                                                 onChange={e => {
-                                                                    const set = new Set(dietForm.targetIds || []);
-                                                                    if (e.target.checked) set.add(l.id); else set.delete(l.id);
-                                                                    setDietForm({ ...dietForm, targetIds: Array.from(set) });
+                                                                    setDietForm(prev => {
+                                                                        const set = new Set(prev.targetIds || []);
+                                                                        if (e.target.checked) set.add(l.id);
+                                                                        else set.delete(l.id);
+                                                                        return { ...prev, targetIds: Array.from(set) };
+                                                                    });
                                                                 }}
                                                             />
                                                             {l.tagId} ({l.breed})
                                                         </label>
                                                     ))}
-                                                    {(state.livestock.filter(l => l.status === 'ACTIVE' && (!state.currentFarmId || l.farmId === state.currentFarmId))).length === 0 && <span className="text-gray-400 italic text-sm">No active animals.</span>}
+                                                    {(state.livestock.filter(l => l.status === 'ACTIVE' && (!state.currentFarmId || l.farmId === state.currentFarmId))).length === 0 && <span className="text-gray-400 italic text-sm">No active animals. Select a farm from the header to list animals.</span>}
                                                 </div>
                                             ) : (
                                                 <input type="text" disabled placeholder="Group selection logic here..." className="w-full border border-gray-300 bg-gray-100 rounded-lg px-4 py-2 outline-none" />

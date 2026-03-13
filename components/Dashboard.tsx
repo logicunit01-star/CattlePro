@@ -1,7 +1,7 @@
 import React from 'react';
 import { AppState, Livestock } from '../types';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, LineChart, Line, AreaChart, Area } from 'recharts';
-import { DollarSign, TrendingUp, AlertTriangle, Activity, Milk, Calendar, ArrowRight, CheckCircle, Syringe, Stethoscope } from 'lucide-react';
+import { DollarSign, TrendingUp, AlertTriangle, Activity, Milk, Calendar, ArrowRight, CheckCircle, Syringe, Stethoscope, HelpCircle } from 'lucide-react';
 import { backendService } from '../services/backendService';
 
 type DashboardView = 'CATTLE_MANAGER' | 'GOAT_MANAGER' | 'FINANCE' | 'OPERATIONS' | 'SALES' | 'PROCUREMENT' | 'REPORTS' | 'ENTITIES';
@@ -107,6 +107,7 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
         id: r.id,
         animalId: animal.id,
         tag: animal.tagId,
+        species: animal.species,
         type: 'HEALTH',
         task: r.type,
         date: r.nextDueDate!,
@@ -184,8 +185,8 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
             <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Total Animals{isGlobalView && farmCount > 0 ? ` (${farmCount} farm${farmCount !== 1 ? 's' : ''})` : ''}</p>
             <h3 className="text-4xl font-black text-slate-800 mt-2 font-display">{totalLivestock}</h3>
             <div className="flex gap-2 mt-3 text-[10px] font-extrabold uppercase tracking-wide">
-              <span className="text-blue-700 bg-blue-50 px-2 py-1 rounded-md border border-blue-100 shadow-sm">{cattleCount} Cattle</span>
-              <span className="text-purple-700 bg-purple-50 px-2 py-1 rounded-md border border-purple-100 shadow-sm">{goatCount} Goats</span>
+              <button type="button" onClick={e => { e.stopPropagation(); onNavigate?.('CATTLE_MANAGER'); }} onKeyDown={e => { if (e.key === 'Enter') { e.stopPropagation(); onNavigate?.('CATTLE_MANAGER'); } }} className="text-blue-700 bg-blue-50 px-2 py-1 rounded-md border border-blue-100 shadow-sm hover:bg-blue-100 hover:border-blue-200 transition-colors cursor-pointer">{cattleCount} Cattle</button>
+              <button type="button" onClick={e => { e.stopPropagation(); onNavigate?.('GOAT_MANAGER'); }} onKeyDown={e => { if (e.key === 'Enter') { e.stopPropagation(); onNavigate?.('GOAT_MANAGER'); } }} className="text-purple-700 bg-purple-50 px-2 py-1 rounded-md border border-purple-100 shadow-sm hover:bg-purple-100 hover:border-purple-200 transition-colors cursor-pointer">{goatCount} Goats</button>
             </div>
           </div>
           <div className="bg-blue-50 p-4 rounded-xl text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-all duration-300 shadow-inner">
@@ -205,14 +206,14 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
           </div>
         </div>
 
-        <div role="button" tabIndex={0} onClick={() => onNavigate?.('FINANCE')} onKeyDown={e => e.key === 'Enter' && onNavigate?.('FINANCE')} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex items-center justify-between premium-card group cursor-pointer relative overflow-hidden hover:shadow-md transition-shadow">
+        <div role="button" tabIndex={0} onClick={() => onNavigate?.('FINANCE')} onKeyDown={e => e.key === 'Enter' && onNavigate?.('FINANCE')} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex items-center justify-between premium-card group cursor-pointer relative overflow-hidden hover:shadow-md transition-shadow" title={`Total Revenue (PKR ${totalRevenue.toLocaleString()}) − Total Expenses (PKR ${totalExpenses.toLocaleString()}) = Net Profit for selected period.`}>
           <div className="bg-gradient-to-br from-emerald-500/10 to-green-600/10 absolute -right-6 -top-6 w-32 h-32 rounded-full blur-2xl group-hover:scale-150 transition-all duration-500"></div>
           <div className="relative z-10">
             <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Net Profit</p>
             <h3 className={`text-3xl font-black mt-2 font-display ${netProfit >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
               {netProfit >= 0 ? '+' : ''}PKR {Math.abs(netProfit).toLocaleString()}
             </h3>
-            <p className="text-xs text-slate-400 mt-3 font-medium">Revenue vs Expenses</p>
+            <p className="text-xs text-slate-400 mt-3 font-medium">Total Revenue − Total Expenses (selected period)</p>
           </div>
           <div className={`p-4 rounded-xl shadow-inner transition-all duration-300 ${netProfit >= 0 ? 'bg-emerald-50 text-emerald-600 group-hover:bg-emerald-600 group-hover:text-white' : 'bg-red-50 text-red-600 group-hover:bg-red-600 group-hover:text-white'}`}>
             <TrendingUp size={24} />
@@ -234,9 +235,12 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
 
       {/* KPI WIDGETS (MEDIUM PRIORITY) */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex items-center justify-between premium-card relative overflow-hidden">
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex items-center justify-between premium-card relative overflow-hidden" title="Average operating cost per animal for the selected period. Total operating expenses (feed, health, breeding, labor, etc., excluding infrastructure) divided by total livestock head count.">
           <div className="relative z-10">
-            <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Avg Spend Per Head (Period)</p>
+            <p className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5" title="Average operating cost per animal for the selected period. Total operating expenses (feed, health, breeding, labor, etc., excluding infrastructure) divided by total livestock head count.">
+              Avg Spend Per Head (Period)
+              <HelpCircle size={12} className="text-slate-400 shrink-0" aria-hidden />
+            </p>
             <h3 className="text-2xl font-black text-slate-800 mt-2 font-display">PKR {avgCostPerAnimal.toLocaleString(undefined, { maximumFractionDigits: 0 })}</h3>
           </div>
           <div className="bg-slate-50 p-4 rounded-xl text-slate-500 shadow-inner">
@@ -445,7 +449,14 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
 
             <div className="space-y-4">
               {upcomingTasks.length > 0 ? upcomingTasks.map((task, idx) => (
-                <div key={idx} className="flex gap-4 items-start p-3 hover:bg-amber-50 rounded-xl transition-all border border-transparent hover:border-amber-100 cursor-pointer group">
+                <div
+                  key={idx}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onNavigate?.(task.species === 'GOAT' ? 'GOAT_MANAGER' : 'CATTLE_MANAGER')}
+                  onKeyDown={e => e.key === 'Enter' && onNavigate?.(task.species === 'GOAT' ? 'GOAT_MANAGER' : 'CATTLE_MANAGER')}
+                  className="flex gap-4 items-start p-3 hover:bg-amber-50 rounded-xl transition-all border border-transparent hover:border-amber-100 cursor-pointer group"
+                >
                   <div className="bg-amber-100 text-amber-600 p-2.5 rounded-xl shrink-0 group-hover:bg-amber-500 group-hover:text-white transition-all shadow-sm">
                     <AlertTriangle size={18} />
                   </div>
