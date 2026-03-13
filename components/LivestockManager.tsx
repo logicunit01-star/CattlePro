@@ -49,13 +49,15 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
         locationPlaceholder: species === 'CATTLE' ? 'Barn A' : 'Goat Shed A',
     };
 
-    /** Generate next Tag ID for this species: EX:BR-xxx (cattle) or EX:GT-xxx (goat). Optionally consider currentTagId when computing next (e.g. for Regenerate). */
+    /** List of all animals of this species (across categories) for globally unique tag IDs. */
+    const listForTagId = (allLivestock && allLivestock.length > 0 ? allLivestock : livestock).filter(l => l.species === species);
+
+    /** Generate next Tag ID for this species: EX:BR-xxx (cattle) or EX:GT-xxx (goat). Uses all animals of this species so IDs are unique across categories. Optionally consider currentTagId when computing next (e.g. for Regenerate). */
     const generateNextTagId = (currentTagId?: string): string => {
         const prefix = species === 'CATTLE' ? 'EX:BR-' : 'EX:GT-';
         const re = species === 'CATTLE' ? /^EX:BR-(\d+)$/i : /^EX:GT-(\d+)$/i;
         let max = 0;
-        livestock.forEach((l) => {
-            if (l.species !== species) return;
+        listForTagId.forEach((l) => {
             const m = (l.tagId || '').trim().match(re);
             if (m) max = Math.max(max, parseInt(m[1], 10));
         });
@@ -148,7 +150,7 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
         setFormErrors({});
         const nextTagId = generateNextTagId();
         setAnimalForm({
-            tagId: nextTagId, category: categories[0], breed: '', gender: 'MALE', weight: 0, dob: '', purchaseDate: '', purchasePrice: 0, status: 'ACTIVE', location: '', notes: '', imageUrl: '', medicalHistory: [], breedingHistory: [], weightHistory: [], milkProductionHistory: [],
+            tagId: nextTagId, category: activeCategoryTab, breed: '', gender: 'MALE', weight: 0, dob: '', purchaseDate: '', purchasePrice: 0, status: 'ACTIVE', location: '', notes: '', imageUrl: '', medicalHistory: [], breedingHistory: [], weightHistory: [], milkProductionHistory: [],
             serviceDetails: { feedPlan: 'BASIC', monthlyFee: 0, specialInstructions: '' }
         });
         setIsPregnantEntry(false);
