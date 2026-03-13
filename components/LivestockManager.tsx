@@ -31,11 +31,12 @@ interface Props {
     onCategoryChange?: (category: string) => void;
     inventory: FeedInventory[];
     onAddSale: (sale: Sale) => Promise<void>;
+    allLivestock?: Livestock[];
 }
 
 type ViewMode = 'LIST' | 'ANIMAL_FORM' | 'DETAILS';
 
-export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species, categories, entities = [], infrastructure = [], onAddLivestock, onUpdateLivestock, onDeleteLivestock, onAddMedicalRecord, onAddBreedingRecord, onAddWeightRecord, onAddMilkRecord, onUpdateBreedingRecord, onBulkVaccinate, onBulkMove, pagination, onPageChange, onSortChange, onSearchChange, onCategoryChange, inventory, onAddSale }) => {
+export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species, categories, entities = [], infrastructure = [], onAddLivestock, onUpdateLivestock, onDeleteLivestock, onAddMedicalRecord, onAddBreedingRecord, onAddWeightRecord, onAddMilkRecord, onUpdateBreedingRecord, onBulkVaccinate, onBulkMove, pagination, onPageChange, onSortChange, onSearchChange, onCategoryChange, inventory, onAddSale, allLivestock }) => {
     const T = {
         animal: species === 'CATTLE' ? 'Animal' : 'Goat',
         sire: species === 'CATTLE' ? 'Bull' : 'Buck',
@@ -81,7 +82,8 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
     const [selectedAnimalId, setSelectedAnimalId] = useState<string | null>(null);
 
     // Derive selectedAnimal from props to ensure it's always up to date
-    const selectedAnimal = livestock.find(l => l.id === selectedAnimalId) || null;
+    const resolveLivestock = allLivestock && allLivestock.length > 0 ? allLivestock : livestock;
+    const selectedAnimal = resolveLivestock.find(l => l.id === selectedAnimalId) || null;
     const [isEditing, setIsEditing] = useState(false);
     const [detailTab, setDetailTab] = useState<'INFO' | 'MEDICAL' | 'BREEDING' | 'WEIGHT' | 'PRODUCTION'>('INFO');
 
@@ -968,7 +970,7 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                                             <div className="text-center">
                                                 <div className="w-16 h-16 rounded-full bg-pink-100 flex items-center justify-center text-pink-600 border-2 border-white shadow-md mx-auto mb-2"><User size={24} /></div>
                                                 <p className="text-[10px] font-bold text-gray-400 uppercase">Dam (Mother)</p>
-                                                <p className="font-bold text-gray-800">{livestock.find(l => l.id === selectedAnimal.damId)?.tagId || 'Unknown'}</p>
+                                                <p className="font-bold text-gray-800">{(allLivestock && allLivestock.length > 0 ? allLivestock : livestock).find(l => l.id === selectedAnimal.damId)?.tagId || 'Unknown'}</p>
                                             </div>
                                             <div className="h-px w-20 bg-gray-200 relative"><ChevronRight size={16} className="absolute -top-2 -right-2 text-gray-300" /></div>
                                             <div className="text-center">
@@ -985,7 +987,8 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                                         </div>
                                     </div>
                                     {selectedAnimal.gender === 'FEMALE' && (() => {
-                                        const offspringList = livestock.filter(l => l.damId === selectedAnimal.id);
+                                        const lookupList = allLivestock && allLivestock.length > 0 ? allLivestock : livestock;
+                                        const offspringList = lookupList.filter(l => l.damId === selectedAnimal.id);
                                         if (offspringList.length === 0) return null;
                                         return (
                                             <div className="bg-gray-50 rounded-3xl p-8 border border-gray-100 mt-6">
@@ -1453,8 +1456,9 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                         const isGoat = species === 'GOAT';
                         const themeText = isGoat ? 'text-amber-600' : 'text-emerald-600';
                         const hoverBorder = isGoat ? 'hover:border-amber-300' : 'hover:border-emerald-300';
-                        const kids = livestock.filter(l => l.damId === animal.id || l.sireId === animal.id);
-                        const dam = animal.damId ? livestock.find(l => l.id === animal.damId) : null;
+                        const lookupList = allLivestock && allLivestock.length > 0 ? allLivestock : livestock;
+                        const kids = lookupList.filter(l => l.damId === animal.id || l.sireId === animal.id);
+                        const dam = animal.damId ? (allLivestock && allLivestock.length > 0 ? allLivestock : livestock).find(l => l.id === animal.damId) : null;
                         const sire = animal.sireId ? livestock.find(l => l.id === animal.sireId) : null;
                         const badges = getBadges(animal);
 
