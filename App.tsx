@@ -409,7 +409,11 @@ const App: React.FC = () => {
       for (const log of logs) {
         const invItem = invUpdates.get(log.itemId);
         if (invItem) {
-          invItem.quantity = Math.max(0, invItem.quantity - log.quantityUsed);
+          const isBulkUnit = ['BOTTLE', 'VIAL', 'BOX', 'PACK'].includes(invItem.unit?.toUpperCase() || '');
+          const conversionFactor = (isBulkUnit && (invItem.weightPerUnit || 0) > 0) ? invItem.weightPerUnit! : 1;
+          const deductedAmount = log.quantityUsed / conversionFactor;
+
+          invItem.quantity = Math.max(0, invItem.quantity - deductedAmount);
           invUpdates.set(invItem.id, invItem);
           totalCost += (log.cost || 0);
         }

@@ -157,6 +157,10 @@ export const Operations: React.FC<Props> = ({
         animalsToTreat.forEach(animal => {
             (protocol.items || []).forEach((item: TreatmentItem) => {
                 const invItem = state.feed.find(f => f.id === item.inventoryId);
+                const isBulkUnit = ['BOTTLE', 'VIAL', 'BOX', 'PACK'].includes(invItem?.unit?.toUpperCase() || '');
+                const conversionFactor = (isBulkUnit && (invItem?.weightPerUnit || 0) > 0) ? invItem!.weightPerUnit! : 1;
+                const costPerDosage = (invItem?.unitCost || 0) / conversionFactor;
+
                 logs.push({
                     id: Math.random().toString(36).substr(2, 9),
                     farmId: state.currentFarmId!,
@@ -166,7 +170,7 @@ export const Operations: React.FC<Props> = ({
                     itemId: item.inventoryId,
                     medicineName: item.inventoryName,
                     quantityUsed: item.dosage,
-                    cost: (invItem?.unitCost || 0) * (item.dosage || 0),
+                    cost: costPerDosage * (item.dosage || 0),
                     performedBy: 'Manager'
                 });
             });
@@ -1171,7 +1175,15 @@ export const Operations: React.FC<Props> = ({
                         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-6">
                             <div>
                                 <label className="block text-sm font-medium text-gray-700 mb-1">Item Name *</label>
-                                <input type="text" value={feedForm.name} onChange={e => setFeedForm({ ...feedForm, name: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" placeholder={activeTab === 'MEDICINE' ? "e.g. Ivermectin 10ml" : (activeTab === 'SUPPLIES' ? "e.g. Shovel, Tags" : "e.g. Corn Silage")} />
+                                <input type="text" value={feedForm.name} onChange={e => setFeedForm({ ...feedForm, name: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" placeholder={activeTab === 'MEDICINE' ? "e.g. Ivermectin 1% Injection" : (activeTab === 'SUPPLIES' ? "e.g. Shovel, Tags" : "e.g. Corn Silage")} />
+                                {activeTab === 'MEDICINE' && !editingFeed && (
+                                    <div className="flex flex-wrap gap-2 mt-2">
+                                        <span className="text-xs text-gray-500 mt-1">Standard Presets:</span>
+                                        {['FMD Vaccine', 'HS Vaccine', 'BQ Vaccine', 'LSD Vaccine', 'Ivermectin (Endectocide)', 'Oxytetracycline (Antibiotic)', 'Multivitamin Injection'].map(med => (
+                                            <button key={med} type="button" onClick={() => setFeedForm({ ...feedForm, name: med, unit: 'bottle', weightPerUnit: 100, category: 'MEDICINE' })} className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 px-2 py-1 rounded-full border border-blue-200 transition-colors">{med}</button>
+                                        ))}
+                                    </div>
+                                )}
                             </div>
 
                             {activeTab === 'SUPPLIES' && (
@@ -1196,10 +1208,12 @@ export const Operations: React.FC<Props> = ({
                                     <select value={feedForm.unit} onChange={e => setFeedForm({ ...feedForm, unit: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none">
                                         {activeTab === 'MEDICINE' ? (
                                             <>
-                                                <option value="ml">ml (Milliliters)</option>
+                                                <option value="ml">ml / cc (Liquid)</option>
+                                                <option value="mg">mg (Powder/Solid)</option>
                                                 <option value="dose">Dose</option>
-                                                <option value="tablet">Tablet</option>
+                                                <option value="tablet">Tablet / Bolus</option>
                                                 <option value="bottle">Bottle</option>
+                                                <option value="vial">Vial</option>
                                             </>
                                         ) : activeTab === 'SUPPLIES' ? (
                                             <>
@@ -1221,6 +1235,14 @@ export const Operations: React.FC<Props> = ({
                                     </select>
                                 </div>
                             </div>
+
+                            {activeTab === 'MEDICINE' && ['bottle', 'vial', 'box'].includes(feedForm.unit?.toLowerCase() || '') && (
+                                <div className="animate-fade-in-up">
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Total Volume/Doses per {feedForm.unit} (e.g. 100 for 100ml)</label>
+                                    <input type="number" min={0} step={0.1} value={feedForm.weightPerUnit || ''} onChange={e => setFeedForm({ ...feedForm, weightPerUnit: Number(e.target.value) || 0 })} className="w-full border border-blue-200 bg-blue-50 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none" placeholder="e.g. 100" />
+                                    <p className="text-xs text-blue-600 mt-1">Used to accurately deduct stock when administering specific dosages in ml/mg.</p>
+                                </div>
+                            )}
 
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                 <div>
