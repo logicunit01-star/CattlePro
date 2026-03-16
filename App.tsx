@@ -22,6 +22,11 @@ import { setTenant as setTenantContext, getTenantFromUrl, getPersistedSales, set
 function toLivestockArray(r: Livestock[] | { content?: Livestock[] }): Livestock[] {
   return Array.isArray(r) ? r : (r?.content ?? []);
 }
+
+function normalizeDietPlanTargetIds(p: DietPlan): DietPlan {
+  const ids = Array.isArray(p.targetIds) ? p.targetIds : (Array.isArray((p as any).assignedAnimalIds) ? (p as any).assignedAnimalIds : []);
+  return { ...p, targetIds: ids };
+}
 import { setTenant as setTenantRedux } from './store/tenantSlice';
 import type { RootState } from './store';
 
@@ -248,7 +253,7 @@ const App: React.FC = () => {
             sales: mergedSales,
             feed,
             infrastructure: infra,
-            dietPlans,
+            dietPlans: (dietPlans || []).map(normalizeDietPlanTargetIds),
             entities,
             ledger,
             consumptionLogs,
@@ -341,13 +346,13 @@ const App: React.FC = () => {
         backendService.getDietPlans(),
         backendService.getExpenses()
       ]);
-      setState(prev => ({
+        setState(prev => ({
         ...prev,
         feed: refetchedFeed,
         consumptionLogs: refetchedLogs,
         processedFeedLedgers: refetchedLedgers,
         livestock: toLivestockArray(refetchedLivestock),
-        dietPlans: refetchedPlans,
+        dietPlans: (refetchedPlans || []).map(normalizeDietPlanTargetIds),
         expenses: refetchedExpenses
       }));
       alert(result.message + (result.totalCost > 0 ? ` Total cost: PKR ${result.totalCost.toLocaleString()}` : ''));
@@ -1175,9 +1180,14 @@ const App: React.FC = () => {
                   if (!state.currentFarmId) { alert("Select farm"); return; }
                   const planWithFarm = { ...d, farmId: state.currentFarmId }; // Ensure farmId is set
                   const saved = await backendService.createDietPlan(planWithFarm);
-                  setState(p => ({ ...p, dietPlans: [...p.dietPlans, saved] }));
+                  const normalized = { ...saved, targetIds: Array.isArray(saved.targetIds) ? saved.targetIds : (Array.isArray((saved as any).assignedAnimalIds) ? (saved as any).assignedAnimalIds : []) };
+                  setState(p => ({ ...p, dietPlans: [...p.dietPlans, normalized] }));
                 }}
-                onUpdateDietPlan={async (d) => { const updated = await backendService.updateDietPlan(d.id, d); setState(p => ({ ...p, dietPlans: p.dietPlans.map(i => i.id === d.id ? updated : i) })); }}
+                onUpdateDietPlan={async (d) => {
+                  const updated = await backendService.updateDietPlan(d.id, d);
+                  const normalized = { ...updated, targetIds: Array.isArray(updated.targetIds) ? updated.targetIds : (Array.isArray((updated as any).assignedAnimalIds) ? (updated as any).assignedAnimalIds : []) };
+                  setState(p => ({ ...p, dietPlans: p.dietPlans.map(i => i.id === d.id ? normalized : i) }));
+                }}
                 onDeleteDietPlan={async (id) => { try { await backendService.deleteDietPlan(id); setState(p => ({ ...p, dietPlans: p.dietPlans.filter(i => i.id !== id) })); } catch (e) { alert('Failed to delete diet plan.'); } }}
                 onRunDailyProcessing={processDailyConsumption}
                 onAddTreatmentProtocol={async (p) => {
