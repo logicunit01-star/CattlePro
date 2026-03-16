@@ -400,10 +400,12 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
             cost: Number(newHealthRecord.cost) || 0,
             notes: newHealthRecord.notes ?? '',
             nextDueDate: (newHealthRecord.nextDueDate && newHealthRecord.nextDueDate.trim() !== '') ? newHealthRecord.nextDueDate : undefined,
-            imageUrl: newHealthRecord.imageUrl ?? ''
+            imageUrl: newHealthRecord.imageUrl ?? '',
+            inventoryId: item?.id,
+            quantityUsed: newHealthRecord.quantityUsed
         });
         setIsAddingHealthRecord(false);
-        setNewHealthRecord({ type: 'VACCINATION', date: new Date().toISOString().split('T')[0], medicineName: '', doctorName: '', cost: 0 });
+        setNewHealthRecord({ type: 'VACCINATION', date: new Date().toISOString().split('T')[0], medicineName: '', doctorName: '', cost: 0, quantityUsed: undefined, inventoryId: undefined });
     };
 
     const [imageUploading, setImageUploading] = useState(false);
@@ -1056,13 +1058,23 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                                         </div>
                                         <div>
                                             <label className="block text-[10px] font-black text-emerald-600 uppercase mb-1">Medicine/Treatment</label>
-                                            <select className="w-full p-2 rounded-lg border border-emerald-200" value={newHealthRecord.medicineName} onChange={e => {
-                                                const selectedItem = inventory.find(i => i.name === e.target.value);
-                                                setNewHealthRecord({ ...newHealthRecord, medicineName: e.target.value, cost: selectedItem ? selectedItem.unitCost : 0 });
+                                            <select className="w-full p-2 rounded-lg border border-emerald-200" value={newHealthRecord.inventoryId || (newHealthRecord.medicineName === 'Other' ? 'Other' : '')} onChange={e => {
+                                                if (e.target.value === 'Other') {
+                                                    setNewHealthRecord({ ...newHealthRecord, medicineName: 'Other', inventoryId: undefined, cost: 0, quantityUsed: undefined });
+                                                } else {
+                                                    const selectedItem = inventory.find(i => i.id === e.target.value);
+                                                    setNewHealthRecord({ 
+                                                        ...newHealthRecord, 
+                                                        medicineName: selectedItem ? selectedItem.name : '', 
+                                                        inventoryId: selectedItem?.id, 
+                                                        cost: selectedItem ? selectedItem.unitCost : 0,
+                                                        quantityUsed: undefined
+                                                    });
+                                                }
                                             }}>
                                                 <option value="">Select Medicine</option>
-                                                {inventory.filter(i => i.category === 'MEDICINE' && i.quantity > 0).map(i => (
-                                                    <option key={i.id} value={i.name}>{i.name} (Stock: {i.quantity})</option>
+                                                {inventory.filter(i => i.category === 'MEDICINE').map(i => (
+                                                    <option key={i.id} value={i.id}>{i.name} (Stock: {i.quantity.toFixed(2)})</option>
                                                 ))}
                                                 <option value="Other">Other / Manual Entry</option>
                                             </select>
@@ -1070,6 +1082,22 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                                                 <input type="text" className="w-full p-2 rounded-lg border border-emerald-200 mt-2" placeholder="Enter Medicine Name" onChange={e => setNewHealthRecord({ ...newHealthRecord, medicineName: e.target.value })} />
                                             )}
                                         </div>
+                                        {newHealthRecord.inventoryId && (
+                                            <div>
+                                                <label className="block text-[10px] font-black text-emerald-600 uppercase mb-1">Dosage Used</label>
+                                                <input type="number" step="0.01" className="w-full p-2 rounded-lg border border-emerald-200" placeholder="e.g. 5ml" value={newHealthRecord.quantityUsed || ''} onChange={e => {
+                                                    const qty = parseFloat(e.target.value) || 0;
+                                                    const item = inventory.find(i => i.id === newHealthRecord.inventoryId);
+                                                    let calculatedCost = 0;
+                                                    if (item) {
+                                                        const isBulkUnit = ['BOTTLE', 'VIAL', 'BOX', 'PACK'].includes(item.unit?.toUpperCase() || '');
+                                                        const conversionFactor = (isBulkUnit && (item.weightPerUnit || 0) > 0) ? item.weightPerUnit! : 1;
+                                                        calculatedCost = (item.unitCost || 0) * (qty / conversionFactor);
+                                                    }
+                                                    setNewHealthRecord({ ...newHealthRecord, quantityUsed: qty, cost: calculatedCost });
+                                                }} />
+                                            </div>
+                                        )}
                                         <div><label className="block text-[10px] font-black text-emerald-600 uppercase mb-1">Doctor Name</label><input type="text" className="w-full p-2 rounded-lg border border-emerald-200" value={newHealthRecord.doctorName} onChange={e => setNewHealthRecord({ ...newHealthRecord, doctorName: e.target.value })} /></div>
                                         <div><label className="block text-[10px] font-black text-emerald-600 uppercase mb-1">Cost (PKR)</label><input type="number" className="w-full p-2 rounded-lg border border-emerald-200" value={newHealthRecord.cost} onChange={e => setNewHealthRecord({ ...newHealthRecord, cost: parseFloat(e.target.value) })} /></div>
                                         <div><label className="block text-[10px] font-black text-emerald-600 uppercase mb-1">Date</label><input type="date" className="w-full p-2 rounded-lg border border-emerald-200" value={newHealthRecord.date} onChange={e => setNewHealthRecord({ ...newHealthRecord, date: e.target.value })} /></div>

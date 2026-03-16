@@ -589,6 +589,22 @@ const App: React.FC = () => {
         await backendService.createExpense(expense);
       }
 
+      if (record.inventoryId && record.quantityUsed) {
+        const item = state.feed.find(f => f.id === record.inventoryId);
+        if (item) {
+          const isBulkUnit = ['BOTTLE', 'VIAL', 'BOX', 'PACK'].includes(item.unit?.toUpperCase() || '');
+          const conversionFactor = (isBulkUnit && (item.weightPerUnit || 0) > 0) ? item.weightPerUnit! : 1;
+          const deductedAmount = record.quantityUsed / conversionFactor;
+
+          const updatedItem = { ...item, quantity: Math.max(0, item.quantity - deductedAmount) };
+          backendService.updateFeed(item.id, updatedItem).catch(console.error);
+          
+          setState(prev => ({
+             ...prev, feed: prev.feed.map(f => f.id === item.id ? updatedItem : f)
+          }));
+        }
+      }
+
       const [rawLivestock, expenses] = await Promise.all([
         backendService.getLivestock(),
         record.cost > 0 ? backendService.getExpenses() : Promise.resolve(state.expenses)

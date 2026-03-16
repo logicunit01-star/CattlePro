@@ -43,6 +43,8 @@ export interface MedicalRecord {
   notes: string;
   nextDueDate?: string;
   imageUrl?: string;
+  inventoryId?: string;
+  quantityUsed?: number;
 }
 
 export interface MedicineInventory {
