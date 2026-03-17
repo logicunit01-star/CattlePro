@@ -664,6 +664,17 @@ const App: React.FC = () => {
     }
   };
 
+  const deleteBreedingRecord = async (animalId: string, recordId: string) => {
+    try {
+      if (!window.confirm("Are you sure you want to delete this breeding record?")) return;
+      await backendService.deleteBreedingRecord(animalId, recordId);
+      const updatedLivestock = toLivestockArray(await backendService.getLivestock());
+      setState(prev => ({ ...prev, livestock: updatedLivestock }));
+    } catch (e: any) {
+      alert("Failed to delete breeding record: " + (e?.message || e));
+    }
+  };
+
   const addWeightRecord = async (animalId: string, record: WeightRecord) => {
     try {
       await backendService.addWeightRecord(animalId, record);
@@ -1084,6 +1095,7 @@ const App: React.FC = () => {
                 onAddLivestock={addLivestock} onUpdateLivestock={updateLivestock} onDeleteLivestock={deleteLivestock}
                 onAddMedicalRecord={addMedicalRecord} onAddBreedingRecord={addBreedingRecord} onAddWeightRecord={addWeightRecord} onAddMilkRecord={addMilkRecord}
                 onUpdateBreedingRecord={updateBreedingRecord}
+                onDeleteBreedingRecord={deleteBreedingRecord}
                 onBulkVaccinate={bulkVaccinate} onBulkMove={bulkMove}
                 pagination={livestockPageResult ? { totalElements: livestockPageResult.totalElements, totalPages: livestockPageResult.totalPages, page: livestockPageRequest.number, size: livestockPageRequest.size, sortBy: livestockPageRequest.sortBy, sortDirection: livestockPageRequest.sortDirection, searchQ: livestockPageRequest.q, category: livestockPageRequest.category } : undefined}
                 onPageChange={(page) => setLivestockPageRequest(prev => ({ ...prev, number: page }))}
@@ -1103,6 +1115,7 @@ const App: React.FC = () => {
                 onAddLivestock={addLivestock} onUpdateLivestock={updateLivestock} onDeleteLivestock={deleteLivestock}
                 onAddMedicalRecord={addMedicalRecord} onAddBreedingRecord={addBreedingRecord} onAddWeightRecord={addWeightRecord} onAddMilkRecord={addMilkRecord}
                 onUpdateBreedingRecord={updateBreedingRecord}
+                onDeleteBreedingRecord={deleteBreedingRecord}
                 onBulkVaccinate={bulkVaccinate} onBulkMove={bulkMove}
                 pagination={livestockPageResult ? { totalElements: livestockPageResult.totalElements, totalPages: livestockPageResult.totalPages, page: livestockPageRequest.number, size: livestockPageRequest.size, sortBy: livestockPageRequest.sortBy, sortDirection: livestockPageRequest.sortDirection, searchQ: livestockPageRequest.q, category: livestockPageRequest.category } : undefined}
                 onPageChange={(page) => setLivestockPageRequest(prev => ({ ...prev, number: page }))}

@@ -114,8 +114,21 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
         description: `Follow-up: ${r.medicineName || 'Checkup'}`
       }));
 
-    return medicalTasks;
-  }).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()).slice(0, 5);
+    const breedingTasks = (animal.breedingHistory || [])
+      .filter(r => r.expectedBirthDate && r.status === 'CONFIRMED' && r.expectedBirthDate >= todayStr)
+      .map(r => ({
+        id: r.id,
+        animalId: animal.id,
+        tag: animal.tagId,
+        species: animal.species,
+        type: 'BREEDING',
+        task: 'BIRTH',
+        date: r.expectedBirthDate!,
+        description: `Expected ${animal.species === 'CATTLE' ? 'Calving' : 'Kidding'}: ${animal.tagId}`
+      }));
+
+    return [...medicalTasks, ...breedingTasks];
+  }).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()).slice(0, 10);
 
   // --- FINANCIAL TREND (Mini) ---
   const expenseByCategory = filteredExpenses.reduce((acc, curr) => {

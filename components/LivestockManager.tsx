@@ -22,6 +22,7 @@ interface Props {
 
     onAddMilkRecord: (animalId: string, record: MilkRecord) => void;
     onUpdateBreedingRecord: (animalId: string, record: InseminationRecord) => void;
+    onDeleteBreedingRecord?: (animalId: string, recordId: string) => void | Promise<void>;
     onBulkVaccinate?: (animalIds: string[], record: MedicalRecord) => void | Promise<void>;
     onBulkMove?: (animalIds: string[], location: string) => void | Promise<void>;
     pagination?: { totalElements: number; totalPages: number; page: number; size: number; sortBy: string; sortDirection: string; searchQ: string; category?: string };
@@ -36,7 +37,7 @@ interface Props {
 
 type ViewMode = 'LIST' | 'ANIMAL_FORM' | 'DETAILS';
 
-export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species, categories, entities = [], infrastructure = [], onAddLivestock, onUpdateLivestock, onDeleteLivestock, onAddMedicalRecord, onAddBreedingRecord, onAddWeightRecord, onAddMilkRecord, onUpdateBreedingRecord, onBulkVaccinate, onBulkMove, pagination, onPageChange, onSortChange, onSearchChange, onCategoryChange, inventory, onAddSale, allLivestock }) => {
+export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species, categories, entities = [], infrastructure = [], onAddLivestock, onUpdateLivestock, onDeleteLivestock, onAddMedicalRecord, onAddBreedingRecord, onAddWeightRecord, onAddMilkRecord, onUpdateBreedingRecord, onDeleteBreedingRecord, onBulkVaccinate, onBulkMove, pagination, onPageChange, onSortChange, onSearchChange, onCategoryChange, inventory, onAddSale, allLivestock }) => {
     const T = {
         animal: species === 'CATTLE' ? 'Animal' : 'Goat',
         sire: species === 'CATTLE' ? 'Bull' : 'Buck',
@@ -91,6 +92,7 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
 
     const [isAddingHealthRecord, setIsAddingHealthRecord] = useState(false);
     const [isAddingBreedingRecord, setIsAddingBreedingRecord] = useState(false);
+    const [isEditingBreedingRecord, setIsEditingBreedingRecord] = useState(false);
     const [isLoggingBirth, setIsLoggingBirth] = useState<string | null>(null);
     const [isAddingWeight, setIsAddingWeight] = useState(false);
     const [isAddingMilk, setIsAddingMilk] = useState(false);
@@ -283,7 +285,7 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
         const birthDate = new Date(inseminationDate.getTime() + (T.gestationDays * 24 * 60 * 60 * 1000));
 
         const record: InseminationRecord = {
-            id: Math.random().toString(36).substr(2, 9),
+            id: newBreedingRecord.id || Math.random().toString(36).substr(2, 9),
             date: newBreedingRecord.date!,
             conceiveDate: newBreedingRecord.conceiveDate,
             sireId: newBreedingRecord.sireId!,
@@ -298,9 +300,21 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
             imageUrl: newBreedingRecord.imageUrl
         };
 
-        onAddBreedingRecord(selectedAnimal.id, record);
+        if (isEditingBreedingRecord) {
+            onUpdateBreedingRecord(selectedAnimal.id, record);
+        } else {
+            onAddBreedingRecord(selectedAnimal.id, record);
+        }
+        
         setIsAddingBreedingRecord(false);
+        setIsEditingBreedingRecord(false);
         setNewBreedingRecord({ date: new Date().toISOString().split('T')[0], conceiveDate: '', sireId: '', sireBreed: '', breederId: '', strawBatchId: '', technician: '', cost: 0, status: 'PENDING', notes: '', imageUrl: '' });
+    };
+
+    const handleEditBreedingRecord = (rec: InseminationRecord) => {
+        setNewBreedingRecord(rec);
+        setIsEditingBreedingRecord(true);
+        setIsAddingBreedingRecord(true);
     };
 
     const handleConfirmPregnancy = (recId: string) => {
@@ -1034,6 +1048,31 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                                             <div className="flex justify-between items-center"><span className="text-sm text-gray-400">Health Checks</span><span className="text-sm font-bold">{selectedAnimal.medicalHistory.filter(m => m.type === 'CHECKUP').length} Conducted</span></div>
                                         </div>
                                     </div>
+                                    <div className="bg-white border border-gray-100 rounded-3xl p-6 shadow-sm">
+                                        <h5 className="font-black text-gray-800 mb-4 text-sm tracking-tight uppercase border-b border-gray-50 pb-2">Recent Activity</h5>
+                                        <div className="space-y-4">
+                                            {(() => {
+                                                const activities = [
+                                                    ...selectedAnimal.medicalHistory.map(m => ({ date: m.date, label: m.type, detail: m.medicineName, icon: Stethoscope, color: 'text-blue-500' })),
+                                                    ...selectedAnimal.breedingHistory.map(b => ({ date: b.date, label: 'BREEDING', detail: `${b.status}: ${b.sireId}`, icon: Dna, color: 'text-pink-500' })),
+                                                    ...selectedAnimal.weightHistory.map(w => ({ date: w.date, label: 'WEIGHT', detail: `${w.weight} kg`, icon: Scale, color: 'text-emerald-500' })),
+                                                    ...(selectedAnimal.milkProductionHistory || []).map(m => ({ date: m.date, label: 'MILK', detail: `${m.quantity} L (${m.session})`, icon: Droplets, color: 'text-sky-500' }))
+                                                ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 5);
+
+                                                if (activities.length === 0) return <p className="text-xs text-gray-400 italic">No recent activity.</p>;
+
+                                                return activities.map((act, i) => (
+                                                    <div key={i} className="flex items-center gap-3">
+                                                        <div className={`p-2 rounded-lg bg-gray-50 ${act.color}`}><act.icon size={14} /></div>
+                                                        <div className="flex-1 min-w-0">
+                                                            <div className="flex justify-between items-center"><span className="text-[10px] font-black uppercase text-gray-400">{act.label}</span><span className="text-[9px] font-bold text-gray-300">{act.date}</span></div>
+                                                            <p className="text-xs font-bold text-gray-700 truncate">{act.detail}</p>
+                                                        </div>
+                                                    </div>
+                                                ));
+                                            })()}
+                                        </div>
+                                    </div>
                                     <div className="p-6 bg-emerald-50 rounded-3xl border border-emerald-100">
                                         <h5 className="font-black text-emerald-800 mb-3 text-sm flex items-center gap-2"><FileText size={16} /> Manager's Notes</h5>
                                         <p className="text-sm text-emerald-700 leading-relaxed italic">"{selectedAnimal.notes || 'No special instructions recorded for this animal.'}"</p>
@@ -1325,7 +1364,7 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                                 </div>
                             ) : isAddingBreedingRecord ? (
                                 <div className="max-w-2xl mx-auto bg-pink-50 rounded-3xl border border-pink-100 p-8 animate-fade-in">
-                                    <h3 className="text-2xl font-black text-pink-800 mb-8 flex items-center gap-3 tracking-tighter"><Dna size={32} /> New Insemination / Mating</h3>
+                                    <h3 className="text-2xl font-black text-pink-800 mb-8 flex items-center gap-3 tracking-tighter"><Dna size={32} /> {isEditingBreedingRecord ? 'Edit Insemination' : 'New Insemination / Mating'}</h3>
                                     <div className="space-y-6">
                                         <div className="grid grid-cols-2 gap-6">
                                             <div><label className="block text-[10px] font-black text-pink-700 uppercase mb-1 tracking-widest">Insemination Date</label><input type="date" className="w-full p-3 border border-pink-200 rounded-xl" value={newBreedingRecord.date} onChange={e => setNewBreedingRecord({ ...newBreedingRecord, date: e.target.value })} /></div>
@@ -1340,7 +1379,7 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                                             <div><label className="block text-[10px] font-black text-pink-700 uppercase mb-1 tracking-widest">Cost (PKR)</label><input type="number" className="w-full p-3 border border-pink-200 rounded-xl" value={newBreedingRecord.cost} onChange={e => setNewBreedingRecord({ ...newBreedingRecord, cost: parseFloat(e.target.value) })} /></div>
                                         </div>
                                         <div className="flex justify-end gap-6 pt-6 mt-6 border-t border-pink-100">
-                                            <button onClick={() => setIsAddingBreedingRecord(false)} className="font-bold text-gray-400">CANCEL</button>
+                                            <button onClick={() => { setIsAddingBreedingRecord(false); setIsEditingBreedingRecord(false); setNewBreedingRecord({ date: new Date().toISOString().split('T')[0], conceiveDate: '', sireId: '', sireBreed: '', breederId: '', strawBatchId: '', technician: '', cost: 0, status: 'PENDING', notes: '', imageUrl: '' }); }} className="font-bold text-gray-400">CANCEL</button>
                                             <button onClick={handleSaveBreedingRecord} className="bg-pink-600 text-white px-10 py-3 rounded-xl font-bold shadow-xl shadow-pink-100">SAVE INSEMINATION</button>
                                         </div>
                                     </div>
@@ -1381,6 +1420,21 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                                                         )}
                                                         {rec.status === 'CONFIRMED' && <button onClick={() => setIsLoggingBirth(rec.id)} className="bg-emerald-600 text-white px-6 py-2.5 rounded-xl text-xs font-black shadow-lg shadow-emerald-100 flex items-center gap-2 hover:scale-105 transition-all"><Baby size={16} /> LOG {T.birth.toUpperCase()}</button>}
                                                         {rec.status === 'COMPLETED' && rec.birthRecord && <div className="text-right"><p className="text-[10px] font-black text-emerald-600 uppercase mb-1 tracking-widest">SUCCESSFUL BIRTH</p><p className="text-lg font-black text-gray-800">{rec.birthRecord.count} {T.offspring}(s)</p></div>}
+                                                        
+                                                        <button 
+                                                            onClick={() => handleEditBreedingRecord(rec)}
+                                                            className="p-2 ml-2 rounded-xl text-gray-300 hover:bg-emerald-50 hover:text-emerald-600 transition-colors"
+                                                            title="Edit Record"
+                                                        >
+                                                            <Edit2 size={18} />
+                                                        </button>
+                                                        <button 
+                                                            onClick={() => onDeleteBreedingRecord?.(selectedAnimal.id, rec.id)}
+                                                            className="p-2 ml-2 rounded-xl text-gray-300 hover:bg-red-50 hover:text-red-600 transition-colors"
+                                                            title="Delete Record"
+                                                        >
+                                                            <Trash2 size={18} />
+                                                        </button>
                                                     </div>
                                                 </div>
                                             </div>

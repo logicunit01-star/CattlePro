@@ -160,6 +160,13 @@ export const backendService = {
         });
         return handleResponse(res);
     },
+    deleteBreedingRecord: async (animalId: string, recordId: string): Promise<void> => {
+        const res = await fetch(`${API_BASE_URL}/livestock/${animalId}/breeding-records/${recordId}`, {
+            method: 'DELETE',
+            headers: apiHeaders(),
+        });
+        await handleDeleteResponse(res);
+    },
     addWeightRecord: async (animalId: string, record: WeightRecord): Promise<WeightRecord> => {
         const res = await fetch(`${API_BASE_URL}/livestock/${animalId}/weight-records`, {
             method: 'POST',
