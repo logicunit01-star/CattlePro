@@ -1250,8 +1250,16 @@ export const Operations: React.FC<Props> = ({
                                 <input type="text" value={feedForm.name} onChange={e => setFeedForm({ ...feedForm, name: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" placeholder={activeTab === 'MEDICINE' ? "e.g. Ivermectin 1% Injection" : (activeTab === 'SUPPLIES' ? "e.g. Shovel, Tags" : "e.g. Corn Silage")} />
                                 {activeTab === 'MEDICINE' && !editingFeed && (
                                     <div className="flex flex-wrap gap-2 mt-2">
-                                        <span className="text-xs text-gray-500 mt-1">Standard Presets:</span>
-                                        {['FMD Vaccine', 'HS Vaccine', 'BQ Vaccine', 'LSD Vaccine', 'Ivermectin (Endectocide)', 'Oxytetracycline (Antibiotic)', 'Multivitamin Injection'].map(med => (
+                                        <span className="text-xs text-gray-500 mt-1 w-full">Standard Presets (quick-add: configures as Bottle, 100ml default):</span>
+                                        {[
+                                            'FMD Vaccine (Foot & Mouth Disease)',
+                                            'HS Vaccine (Haemorrhagic Septicaemia)',
+                                            'BQ Vaccine (Black Quarter)',
+                                            'LSD Vaccine (Lumpy Skin Disease)',
+                                            'Ivermectin (Endectocide / Dewormer)',
+                                            'Oxytetracycline (Broad-Spectrum Antibiotic)',
+                                            'Multivitamin Injection'
+                                        ].map(med => (
                                             <button key={med} type="button" onClick={() => setFeedForm({ ...feedForm, name: med, unit: 'bottle', weightPerUnit: 100, category: 'MEDICINE' })} className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 px-2 py-1 rounded-full border border-blue-200 transition-colors">{med}</button>
                                         ))}
                                     </div>
@@ -1280,12 +1288,12 @@ export const Operations: React.FC<Props> = ({
                                     <select value={feedForm.unit} onChange={e => setFeedForm({ ...feedForm, unit: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none">
                                         {activeTab === 'MEDICINE' ? (
                                             <>
-                                                <option value="ml">ml / cc (Liquid)</option>
-                                                <option value="mg">mg (Powder/Solid)</option>
+                                                <option value="ml">ml / cc (Liquid measures)</option>
+                                                <option value="mg">mg (Powders)</option>
                                                 <option value="dose">Dose</option>
                                                 <option value="tablet">Tablet / Bolus</option>
-                                                <option value="bottle">Bottle</option>
-                                                <option value="vial">Vial</option>
+                                                <option value="bottle">Bottle (Bulk)</option>
+                                                <option value="vial">Vial (Bulk)</option>
                                             </>
                                         ) : activeTab === 'SUPPLIES' ? (
                                             <>

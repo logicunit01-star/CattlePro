@@ -97,6 +97,10 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
     const [isBatchMode, setIsBatchMode] = useState(false);
     const [selectedBatchIds, setSelectedBatchIds] = useState<string[]>([]);
     const [isSelling, setIsSelling] = useState(false);
+    const [showBulkVaccinateForm, setShowBulkVaccinateForm] = useState(false);
+    const [bulkVaccinateForm, setBulkVaccinateForm] = useState<{ date: string; inventoryId: string; medicineName: string; quantityUsed: number; cost: number }>({
+        date: new Date().toISOString().split('T')[0], inventoryId: '', medicineName: '', quantityUsed: 0, cost: 0
+    });
     const [saleForm, setSaleForm] = useState<Partial<Sale>>({
         date: new Date().toISOString().split('T')[0],
         pricePerAnimal: 0,
@@ -1429,22 +1433,86 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                     <div className="flex items-center gap-4">
                         <span className="font-black text-emerald-400 text-lg px-4">{selectedBatchIds.length} Selected</span>
                         <div className="h-8 w-px bg-gray-700"></div>
-                        <button onClick={async () => {
-                            const date = prompt("Vaccination Date (YYYY-MM-DD)", new Date().toISOString().split('T')[0]);
-                            const medicine = prompt("Medicine Name");
-                            if (date && medicine) {
-                                const record: MedicalRecord = { id: Math.random().toString(36).substr(2, 9), date, time: '09:00', type: 'VACCINATION', medicineName: medicine, doctorName: 'Self', cost: 0, notes: 'Bulk Vaccination' };
-                                if (onBulkVaccinate) {
-                                    await onBulkVaccinate(selectedBatchIds, record);
-                                    setSelectedBatchIds([]);
-                                    setIsBatchMode(false);
-                                } else {
-                                    selectedBatchIds.forEach(id => onAddMedicalRecord(id, record));
-                                    setSelectedBatchIds([]);
-                                    setIsBatchMode(false);
-                                }
-                            }
+                        <button onClick={() => {
+                            setBulkVaccinateForm({ date: new Date().toISOString().split('T')[0], inventoryId: '', medicineName: '', quantityUsed: 0, cost: 0 });
+                            setShowBulkVaccinateForm(true);
                         }} className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg font-bold text-xs flex items-center gap-2 transition-all"><Stethoscope size={16} /> VACCINATE</button>
+
+                        {showBulkVaccinateForm && (
+                            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowBulkVaccinateForm(false)}>
+                                <div className="bg-white rounded-2xl p-6 shadow-xl max-w-md w-full mx-4" onClick={e => e.stopPropagation()}>
+                                    <h4 className="font-black text-gray-800 mb-4">Bulk Vaccinate — {selectedBatchIds.length} animals</h4>
+                                    <div className="space-y-3">
+                                        <div>
+                                            <label className="block text-[10px] font-black text-emerald-600 uppercase mb-1">Date</label>
+                                            <input type="date" className="w-full p-2 rounded-lg border border-emerald-200" value={bulkVaccinateForm.date} onChange={e => setBulkVaccinateForm(f => ({ ...f, date: e.target.value }))} />
+                                        </div>
+                                        <div>
+                                            <label className="block text-[10px] font-black text-emerald-600 uppercase mb-1">Medicine (from Cabinet)</label>
+                                            <select className="w-full p-2 rounded-lg border border-emerald-200" value={bulkVaccinateForm.inventoryId} onChange={e => {
+                                                const id = e.target.value;
+                                                const item = inventory.find(i => i.id === id);
+                                                setBulkVaccinateForm(f => ({ ...f, inventoryId: id, medicineName: item?.name ?? '', quantityUsed: 0, cost: 0 }));
+                                            }}>
+                                                <option value="">Manual name only (no stock deduction)</option>
+                                                {inventory.filter(i => i.category === 'MEDICINE').map(i => (
+                                                    <option key={i.id} value={i.id}>{i.name} (Stock: {Number(i.quantity).toFixed(2)} {i.unit})</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                        {bulkVaccinateForm.inventoryId && (
+                                            <div>
+                                                <label className="block text-[10px] font-black text-emerald-600 uppercase mb-1">Dosage per animal (e.g. ml)</label>
+                                                <input type="number" step="0.01" min={0} className="w-full p-2 rounded-lg border border-emerald-200" value={bulkVaccinateForm.quantityUsed || ''} onChange={e => {
+                                                    const qty = parseFloat(e.target.value) || 0;
+                                                    const item = inventory.find(i => i.id === bulkVaccinateForm.inventoryId);
+                                                    let cost = 0;
+                                                    if (item) {
+                                                        const isBulk = ['BOTTLE', 'VIAL', 'BOX', 'PACK'].includes(item.unit?.toUpperCase() || '');
+                                                        const cf = (isBulk && (item.weightPerUnit || 0) > 0) ? item.weightPerUnit! : 1;
+                                                        cost = (item.unitCost || 0) * (qty / cf);
+                                                    }
+                                                    setBulkVaccinateForm(f => ({ ...f, quantityUsed: qty, cost }));
+                                                }} placeholder="e.g. 5" />
+                                            </div>
+                                        )}
+                                        {!bulkVaccinateForm.inventoryId && (
+                                            <div>
+                                                <label className="block text-[10px] font-black text-emerald-600 uppercase mb-1">Medicine name (if manual)</label>
+                                                <input type="text" className="w-full p-2 rounded-lg border border-emerald-200" value={bulkVaccinateForm.medicineName} onChange={e => setBulkVaccinateForm(f => ({ ...f, medicineName: e.target.value }))} placeholder="e.g. FMD Vaccine" />
+                                            </div>
+                                        )}
+                                    </div>
+                                    <div className="flex gap-2 mt-4">
+                                        <button onClick={async () => {
+                                            const record: MedicalRecord = {
+                                                id: Math.random().toString(36).substr(2, 9),
+                                                date: bulkVaccinateForm.date,
+                                                time: '09:00',
+                                                type: 'VACCINATION',
+                                                medicineName: bulkVaccinateForm.medicineName || 'Bulk Vaccination',
+                                                doctorName: 'Self',
+                                                cost: bulkVaccinateForm.cost,
+                                                notes: 'Bulk Vaccination',
+                                                ...(bulkVaccinateForm.inventoryId && bulkVaccinateForm.quantityUsed ? { inventoryId: bulkVaccinateForm.inventoryId, quantityUsed: bulkVaccinateForm.quantityUsed } : {})
+                                            };
+                                            if (onBulkVaccinate) {
+                                                await onBulkVaccinate(selectedBatchIds, record);
+                                                setSelectedBatchIds([]);
+                                                setIsBatchMode(false);
+                                                setShowBulkVaccinateForm(false);
+                                            } else {
+                                                selectedBatchIds.forEach(id => onAddMedicalRecord(id, record));
+                                                setSelectedBatchIds([]);
+                                                setIsBatchMode(false);
+                                                setShowBulkVaccinateForm(false);
+                                            }
+                                        }} className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg font-bold text-xs">Apply to {selectedBatchIds.length} animals</button>
+                                        <button onClick={() => setShowBulkVaccinateForm(false)} className="px-4 py-2 rounded-lg font-bold text-xs border border-gray-300 text-gray-600">Cancel</button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
 
                         <button onClick={async () => {
                             const newLocation = prompt("Enter New Location / Barn Name:");
