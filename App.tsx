@@ -584,6 +584,7 @@ const App: React.FC = () => {
           date: record.date,
           description: `${record.type}: ${record.medicineName} (${animal.tagId})`,
           relatedAnimalId: animalId,
+          supplier: record.vendorId,
           farmName: state.farms.find(f => f.id === targetFarmId)?.name
         };
         await backendService.createExpense(expense);
@@ -613,8 +614,27 @@ const App: React.FC = () => {
         const feed = await backendService.getFeed();
         next.feed = feed;
       }
+      if (record.cost > 0) {
+        const targetFarmId = state.currentFarmId;
+        if (!targetFarmId) { alert("Warning: Bulk expense recorded but no Farm ID could be associated."); }
+        const expense: Expense = {
+          id: `bulk_med_${Date.now()}`,
+          farmId: targetFarmId || 'UNKNOWN_FARM',
+          category: record.type === 'VACCINATION' ? ExpenseCategory.VACCINE : ExpenseCategory.MEDICAL,
+          amount: record.cost,
+          date: record.date,
+          description: `${record.type} (Bulk): ${record.medicineName} (${animalIds.length} animals)`,
+          supplier: record.vendorId,
+          farmName: state.farms.find(f => f.id === targetFarmId)?.name
+        };
+        await backendService.createExpense(expense);
+        const expenses = await backendService.getExpenses();
+        next.expenses = expenses;
+      }
+
       setState(prev => ({ ...prev, ...next }));
       setLivestockGridRefresh(r => r + 1);
+      setFinancialsRefresh(fr => fr + 1);
     } catch (e) { alert("Failed to bulk vaccinate: " + (e instanceof Error ? e.message : String(e))); }
   };
 
@@ -643,6 +663,7 @@ const App: React.FC = () => {
           date: record.date,
           description: `Insemination: ${record.sireId} (${animal?.tagId})`,
           relatedAnimalId: animalId,
+          supplier: record.breederId,
           farmName: state.farms.find(f => f.id === targetFarmId)?.name
         };
         const savedExpense = await backendService.createExpense(expense);

@@ -100,8 +100,8 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
     const [selectedBatchIds, setSelectedBatchIds] = useState<string[]>([]);
     const [isSelling, setIsSelling] = useState(false);
     const [showBulkVaccinateForm, setShowBulkVaccinateForm] = useState(false);
-    const [bulkVaccinateForm, setBulkVaccinateForm] = useState<{ date: string; inventoryId: string; medicineName: string; quantityUsed: number; cost: number }>({
-        date: new Date().toISOString().split('T')[0], inventoryId: '', medicineName: '', quantityUsed: 0, cost: 0
+    const [bulkVaccinateForm, setBulkVaccinateForm] = useState<{ date: string; inventoryId: string; medicineName: string; quantityUsed: number; cost: number; vendorId?: string }>({
+        date: new Date().toISOString().split('T')[0], inventoryId: '', medicineName: '', quantityUsed: 0, cost: 0, vendorId: ''
     });
     const [saleForm, setSaleForm] = useState<Partial<Sale>>({
         date: new Date().toISOString().split('T')[0],
@@ -119,7 +119,7 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
     });
 
     const [newHealthRecord, setNewHealthRecord] = useState<Partial<MedicalRecord>>({
-        type: 'VACCINATION', date: new Date().toISOString().split('T')[0], time: new Date().toTimeString().slice(0, 5), doctorName: '', medicineName: '', cost: 0, notes: '', nextDueDate: '', imageUrl: ''
+        type: 'VACCINATION', date: new Date().toISOString().split('T')[0], time: new Date().toTimeString().slice(0, 5), doctorName: '', medicineName: '', cost: 0, notes: '', nextDueDate: '', imageUrl: '', vendorId: ''
     });
 
     const [newBreedingRecord, setNewBreedingRecord] = useState<Partial<InseminationRecord>>({
@@ -420,10 +420,11 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
             nextDueDate: (newHealthRecord.nextDueDate && newHealthRecord.nextDueDate.trim() !== '') ? newHealthRecord.nextDueDate : undefined,
             imageUrl: newHealthRecord.imageUrl ?? '',
             inventoryId: item?.id,
-            quantityUsed: newHealthRecord.quantityUsed
+            quantityUsed: newHealthRecord.quantityUsed,
+            vendorId: newHealthRecord.vendorId
         });
         setIsAddingHealthRecord(false);
-        setNewHealthRecord({ type: 'VACCINATION', date: new Date().toISOString().split('T')[0], medicineName: '', doctorName: '', cost: 0, quantityUsed: undefined, inventoryId: undefined });
+        setNewHealthRecord({ type: 'VACCINATION', date: new Date().toISOString().split('T')[0], medicineName: '', doctorName: '', cost: 0, quantityUsed: undefined, inventoryId: undefined, vendorId: '' });
     };
 
     const [imageUploading, setImageUploading] = useState(false);
@@ -1142,6 +1143,19 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                                             </div>
                                         )}
                                         <div><label className="block text-[10px] font-black text-emerald-600 uppercase mb-1">Doctor Name</label><input type="text" className="w-full p-2 rounded-lg border border-emerald-200" value={newHealthRecord.doctorName} onChange={e => setNewHealthRecord({ ...newHealthRecord, doctorName: e.target.value })} /></div>
+                                        <div>
+                                            <label className="block text-[10px] font-black text-emerald-600 uppercase mb-1">Vendor/Supplier</label>
+                                            <select 
+                                                className="w-full p-2 rounded-lg border border-emerald-200 bg-white" 
+                                                value={newHealthRecord.vendorId || ''} 
+                                                onChange={e => setNewHealthRecord({ ...newHealthRecord, vendorId: e.target.value })}
+                                            >
+                                                <option value="">Select Vendor (Optional)</option>
+                                                {entities.filter(e => e.type === 'VENDOR').map(v => (
+                                                    <option key={v.id} value={v.id}>{v.name}</option>
+                                                ))}
+                                            </select>
+                                        </div>
                                         <div><label className="block text-[10px] font-black text-emerald-600 uppercase mb-1">Cost (PKR)</label><input type="number" className="w-full p-2 rounded-lg border border-emerald-200" value={newHealthRecord.cost} onChange={e => setNewHealthRecord({ ...newHealthRecord, cost: parseFloat(e.target.value) })} /></div>
                                         <div><label className="block text-[10px] font-black text-emerald-600 uppercase mb-1">Date</label><input type="date" className="w-full p-2 rounded-lg border border-emerald-200" value={newHealthRecord.date} onChange={e => setNewHealthRecord({ ...newHealthRecord, date: e.target.value })} /></div>
                                         <div><label className="block text-[10px] font-black text-emerald-600 uppercase mb-1">Next Due (Optional)</label><input type="date" className="w-full p-2 rounded-lg border border-emerald-200" value={newHealthRecord.nextDueDate} onChange={e => setNewHealthRecord({ ...newHealthRecord, nextDueDate: e.target.value })} /></div>
@@ -1488,7 +1502,7 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                         <span className="font-black text-emerald-400 text-lg px-4">{selectedBatchIds.length} Selected</span>
                         <div className="h-8 w-px bg-gray-700"></div>
                         <button onClick={() => {
-                            setBulkVaccinateForm({ date: new Date().toISOString().split('T')[0], inventoryId: '', medicineName: '', quantityUsed: 0, cost: 0 });
+                            setBulkVaccinateForm({ date: new Date().toISOString().split('T')[0], inventoryId: '', medicineName: '', quantityUsed: 0, cost: 0, vendorId: '' });
                             setShowBulkVaccinateForm(true);
                         }} className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg font-bold text-xs flex items-center gap-2 transition-all"><Stethoscope size={16} /> VACCINATE</button>
 
@@ -1536,6 +1550,19 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                                                 <input type="text" className="w-full p-2 rounded-lg border border-emerald-200" value={bulkVaccinateForm.medicineName} onChange={e => setBulkVaccinateForm(f => ({ ...f, medicineName: e.target.value }))} placeholder="e.g. FMD Vaccine" />
                                             </div>
                                         )}
+                                        <div>
+                                            <label className="block text-[10px] font-black text-emerald-600 uppercase mb-1">Vendor/Supplier</label>
+                                            <select 
+                                                className="w-full p-2 rounded-lg border border-emerald-200 bg-white text-gray-800"
+                                                value={bulkVaccinateForm.vendorId || ''} 
+                                                onChange={e => setBulkVaccinateForm(f => ({ ...f, vendorId: e.target.value }))}
+                                            >
+                                                <option value="">Select Vendor...</option>
+                                                {entities.filter(e => e.type === 'VENDOR').map(v => (
+                                                    <option key={v.id} value={v.id}>{v.name}</option>
+                                                ))}
+                                            </select>
+                                        </div>
                                     </div>
                                     <div className="flex gap-2 mt-4">
                                         <button onClick={async () => {
@@ -1548,6 +1575,7 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                                                 doctorName: 'Self',
                                                 cost: bulkVaccinateForm.cost,
                                                 notes: 'Bulk Vaccination',
+                                                vendorId: bulkVaccinateForm.vendorId,
                                                 ...(bulkVaccinateForm.inventoryId && bulkVaccinateForm.quantityUsed ? { inventoryId: bulkVaccinateForm.inventoryId, quantityUsed: bulkVaccinateForm.quantityUsed } : {})
                                             };
                                             if (onBulkVaccinate) {

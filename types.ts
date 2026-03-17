@@ -45,6 +45,7 @@ export interface MedicalRecord {
   imageUrl?: string;
   inventoryId?: string;
   quantityUsed?: number;
+  vendorId?: string;
 }
 
 export interface MedicineInventory {
@@ -331,6 +332,7 @@ export interface FeedInventory {
   location?: string;
   feedType?: 'GRASS' | 'TMR' | 'WANDA' | 'OTHER';
   defaultSupplier?: string;
+  vendorId?: string;
   description?: string;
 }
 

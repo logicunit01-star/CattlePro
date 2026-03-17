@@ -199,7 +199,7 @@ export const Operations: React.FC<Props> = ({
 
     const openAddFeed = () => {
         setEditingFeed(null);
-        setFeedForm({ name: '', quantity: 0, unitCost: 0, reorderLevel: 0, unit: 'kg' });
+        setFeedForm({ name: '', quantity: 0, unitCost: 0, reorderLevel: 0, unit: 'KG', vendorId: '', batchNumber: '', expiryDate: '' });
         setCreateExpense(false);
         setViewMode('FORM');
     };
@@ -261,6 +261,7 @@ export const Operations: React.FC<Props> = ({
             unit: feedForm.unit || 'kg',
             batchNumber: feedForm.batchNumber,
             expiryDate: feedForm.expiryDate,
+            vendorId: feedForm.vendorId,
             description: feedForm.description
         };
         try {
@@ -275,7 +276,8 @@ export const Operations: React.FC<Props> = ({
                         date: new Date().toISOString().split('T')[0],
                         amount: item.unitCost * item.quantity,
                         description: `Purchase of ${item.category}: ${item.name}`,
-                        category: expenseCategory
+                        category: expenseCategory,
+                        supplier: item.vendorId
                     });
                 }
             }
@@ -630,6 +632,7 @@ export const Operations: React.FC<Props> = ({
                                             <tr>
                                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Item Name</th>
                                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Stock</th>
+                                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Vendor</th>
                                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Unit Cost</th>
                                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
                                             </tr>
@@ -637,11 +640,20 @@ export const Operations: React.FC<Props> = ({
                                         <tbody className="bg-white divide-y divide-gray-200">
                                             {state.feed.filter(i => i.category === 'MEDICINE').map((item) => (
                                                 <tr key={item.id} className="hover:bg-blue-50/30">
-                                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-800 flex items-center gap-2">
-                                                        <Pill size={16} className="text-blue-400" />
-                                                        {item.name}
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-800">
+                                                        <div className="flex flex-col">
+                                                            <div className="flex items-center gap-2">
+                                                                <Pill size={16} className="text-blue-400" />
+                                                                {item.name}
+                                                            </div>
+                                                            {item.batchNumber && <span className="text-[10px] text-gray-400 ml-6">Batch: {item.batchNumber}</span>}
+                                                            {item.expiryDate && <span className="text-[10px] text-red-400 ml-6">Exp: {item.expiryDate}</span>}
+                                                        </div>
                                                     </td>
                                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 font-bold">{item.quantity} {item.unit}</td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                                        {state.entities?.find(e => e.id === item.vendorId)?.name || 'N/A'}
+                                                    </td>
                                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">PKR {item.unitCost}</td>
                                                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                                                         <div className="flex gap-2">
@@ -728,6 +740,7 @@ export const Operations: React.FC<Props> = ({
                                             <tr>
                                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Item Name</th>
                                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Current Stock</th>
+                                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Vendor</th>
                                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Unit Cost</th>
                                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
                                                 <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
@@ -751,6 +764,9 @@ export const Operations: React.FC<Props> = ({
                                                                 </span>
                                                             ) : null}
                                                         </div>
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                                        {state.entities?.find(e => e.id === item.vendorId)?.name || 'N/A'}
                                                     </td>
                                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
                                                         PKR {item.unitCost.toLocaleString()} / {item.unit?.toUpperCase() || 'KG'}
@@ -822,8 +838,41 @@ export const Operations: React.FC<Props> = ({
                                     <div className="lg:col-span-2 border-t border-gray-100 pt-3">
                                         <label className="block text-sm font-medium text-gray-700 mb-1">Reorder Alert Level ({feedForm.unit || 'KG'})</label>
                                         <input type="number" value={feedForm.reorderLevel} onChange={e => setFeedForm({ ...feedForm, reorderLevel: Number(e.target.value) })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" />
-                                        <p className="text-xs text-gray-400 mt-1">System flags "Low Stock" when quantity (in selected unit) drops below this.</p>
+                                        <p className="text-xs text-gray-400 mt-1">System flags "Low Stock" when quantity drops below this.</p>
                                     </div>
+
+                                    <div className="lg:col-span-1">
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Batch Number</label>
+                                        <input type="text" value={feedForm.batchNumber || ''} onChange={e => setFeedForm({ ...feedForm, batchNumber: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" placeholder="e.g. BTC-123" />
+                                    </div>
+                                    <div className="lg:col-span-1">
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Expiry Date</label>
+                                        <input type="date" value={feedForm.expiryDate || ''} onChange={e => setFeedForm({ ...feedForm, expiryDate: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" />
+                                    </div>
+                                    <div className="lg:col-span-1">
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Supplier / Vendor</label>
+                                        <select 
+                                            value={feedForm.vendorId || ''} 
+                                            onChange={e => setFeedForm({ ...feedForm, vendorId: e.target.value })} 
+                                            className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none bg-white"
+                                        >
+                                            <option value="">Select Vendor...</option>
+                                            {state.entities?.filter(e => e.type === 'VENDOR').map(v => (
+                                                <option key={v.id} value={v.id}>{v.name}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+
+                                    <div className="lg:col-span-3">
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Notes / Description</label>
+                                        <input type="text" value={feedForm.description || ''} onChange={e => setFeedForm({ ...feedForm, description: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" placeholder="Storage info or precautions" />
+                                    </div>
+                                    {!editingFeed && (
+                                        <div className="lg:col-span-3 bg-emerald-50 p-3 rounded-lg flex items-center gap-2">
+                                            <input type="checkbox" id="createExp" checked={createExpense} onChange={e => setCreateExpense(e.target.checked)} className="rounded border-emerald-300 text-emerald-600 focus:ring-emerald-500" />
+                                            <label htmlFor="createExp" className="text-sm font-bold text-emerald-700 cursor-pointer">Log as Financial Expense / Vendor Bill</label>
+                                        </div>
+                                    )}
                                 </div>
                                 <div className="pt-4 flex justify-end gap-3">
                                     <button onClick={() => setViewMode('LIST')} className="px-6 py-2 text-gray-500 hover:text-gray-700 font-medium">Cancel</button>
