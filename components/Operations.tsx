@@ -206,7 +206,7 @@ export const Operations: React.FC<Props> = ({
 
     const openEditFeed = (item: FeedInventory) => {
         setEditingFeed(item);
-        setFeedForm(item);
+        setFeedForm({ ...item, vendorId: item.vendorId || item.defaultSupplier || '' });
         setViewMode('FORM');
     };
 
@@ -652,7 +652,7 @@ export const Operations: React.FC<Props> = ({
                                                     </td>
                                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 font-bold">{item.quantity} {item.unit}</td>
                                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                                        {state.entities?.find(e => e.id === item.vendorId)?.name || 'N/A'}
+                                                        {state.entities?.find(e => e.id === (item.vendorId || item.defaultSupplier))?.name || 'N/A'}
                                                     </td>
                                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">PKR {item.unitCost}</td>
                                                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
@@ -664,7 +664,7 @@ export const Operations: React.FC<Props> = ({
                                                 </tr>
                                             ))}
                                             {state.feed.filter(i => i.category === 'MEDICINE').length === 0 && (
-                                                <tr><td colSpan={4} className="px-6 py-8 text-center text-gray-400 italic">No medicines in stock.</td></tr>
+                                                <tr><td colSpan={5} className="px-6 py-8 text-center text-gray-400 italic">No medicines in stock.</td></tr>
                                             )}
                                         </tbody>
                                     </table>
@@ -766,7 +766,7 @@ export const Operations: React.FC<Props> = ({
                                                         </div>
                                                     </td>
                                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                                        {state.entities?.find(e => e.id === item.vendorId)?.name || 'N/A'}
+                                                        {state.entities?.find(e => e.id === (item.vendorId || item.defaultSupplier))?.name || 'N/A'}
                                                     </td>
                                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
                                                         PKR {item.unitCost.toLocaleString()} / {item.unit?.toUpperCase() || 'KG'}
@@ -1372,6 +1372,17 @@ export const Operations: React.FC<Props> = ({
                                     <p className="text-xs text-blue-600 mt-1">Used to accurately deduct stock when administering specific dosages in ml/mg.</p>
                                 </div>
                             )}
+
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Supplier / Vendor</label>
+                                <select value={feedForm.vendorId || ''} onChange={e => setFeedForm({ ...feedForm, vendorId: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none bg-white">
+                                    <option value="">Select Vendor...</option>
+                                    {state.entities?.filter(e => e.type === 'VENDOR').map(v => (
+                                        <option key={v.id} value={v.id}>{v.name}</option>
+                                    ))}
+                                </select>
+                                <p className="text-xs text-gray-400 mt-1">Add vendors in Financials &gt; Entity Registry (type VENDOR).</p>
+                            </div>
 
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                 <div>

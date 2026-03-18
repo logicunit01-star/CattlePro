@@ -215,18 +215,40 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
     };
 
     const getBadges = (animal: Livestock) => {
-        const badges = [];
-        const upcomingVax = animal.medicalHistory?.find(m => m.type === 'VACCINATION' && m.nextDueDate && new Date(m.nextDueDate) >= new Date());
-        if (upcomingVax) {
-            badges.push({ text: `💉 Next Vax: ${new Date(upcomingVax.nextDueDate).toLocaleDateString()}`, color: 'bg-sky-100 text-sky-700 border-sky-200' });
+        const badges: { text: string; color: string }[] = [];
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        // Overdue vaccination/treatment (nextDueDate in the past)
+        const overdue = (animal.medicalHistory || []).filter(m => m.nextDueDate && new Date(m.nextDueDate) < today);
+        if (overdue.length > 0) {
+            const next = overdue.sort((a, b) => new Date(b.nextDueDate!).getTime() - new Date(a.nextDueDate!).getTime())[0];
+            badges.push({ text: `⚠️ Due: ${next.nextDueDate}`, color: 'bg-red-100 text-red-700 border-red-200' });
         }
+        // Upcoming vaccination due (nextDueDate in the future)
+        const upcomingVax = animal.medicalHistory?.find(m => m.type === 'VACCINATION' && m.nextDueDate && new Date(m.nextDueDate) >= today);
+        if (upcomingVax) {
+            const dueDate = new Date(upcomingVax.nextDueDate);
+            const daysLeft = Math.ceil((dueDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+            const label = daysLeft <= 14 ? `💉 Due in ${daysLeft}d` : `💉 Vax: ${dueDate.toLocaleDateString()}`;
+            badges.push({ text: label, color: daysLeft <= 14 ? 'bg-amber-100 text-amber-700 border-amber-200' : 'bg-sky-100 text-sky-700 border-sky-200' });
+        }
+        // CONFIRMED pregnancy: show expected birth date or countdown
         const activePregnancy = animal.breedingHistory?.find(b => ['CONFIRMED', 'PENDING'].includes(b.status));
         if (activePregnancy && animal.gender === 'FEMALE') {
-            if (activePregnancy.status === 'CONFIRMED' && activePregnancy.conceiveDate) {
-                const months = Math.floor((new Date().getTime() - new Date(activePregnancy.conceiveDate).getTime()) / (1000 * 60 * 60 * 24 * 30));
-                badges.push({ text: `🍼 Pregnant: ${months} mo`, color: 'bg-pink-100 text-pink-700 border-pink-200' });
+            if (activePregnancy.status === 'CONFIRMED') {
+                if (activePregnancy.expectedBirthDate) {
+                    const birthDate = new Date(activePregnancy.expectedBirthDate);
+                    const daysToBirth = Math.ceil((birthDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+                    if (daysToBirth <= 0) badges.push({ text: '🐄 Due now', color: 'bg-emerald-100 text-emerald-700 border-emerald-200' });
+                    else if (daysToBirth <= 30) badges.push({ text: `🐄 Due in ${daysToBirth}d`, color: 'bg-pink-100 text-pink-700 border-pink-200' });
+                    else badges.push({ text: `🐄 Due ${birthDate.toLocaleDateString()}`, color: 'bg-pink-100 text-pink-700 border-pink-200' });
+                } else if (activePregnancy.conceiveDate) {
+                    const months = Math.floor((today.getTime() - new Date(activePregnancy.conceiveDate).getTime()) / (1000 * 60 * 60 * 24 * 30));
+                    badges.push({ text: `🍼 Pregnant: ${months} mo`, color: 'bg-pink-100 text-pink-700 border-pink-200' });
+                }
             } else {
-                badges.push({ text: `🍼 Pregnant (Pending)`, color: 'bg-amber-100 text-amber-700 border-amber-200' });
+                badges.push({ text: '🍼 Pending PD', color: 'bg-amber-100 text-amber-700 border-amber-200' });
             }
         }
         return badges;
@@ -1787,8 +1809,10 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                                                 <p className="font-black text-emerald-700 text-xs">{Math.round(cost).toLocaleString()}</p>
                                             </td>
                                             <td className="p-4">
-                                                <div className="flex flex-wrap gap-1.5 maxWidth-[180px]">
-                                                    {badges.map((b, i) => <span key={i} className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap ${b.color}`}>{b.text}</span>)}
+                                                <div className="flex flex-wrap gap-1.5 max-w-[180px]">
+                                                    {badges.length > 0 ? badges.map((b, i) => (
+                                                        <span key={i} className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap ${b.color}`} title={b.text}>{b.text}</span>
+                                                    )) : <span className="text-[10px] text-slate-300 italic">—</span>}
                                                 </div>
                                             </td>
                                             <td className="p-4 text-right">
