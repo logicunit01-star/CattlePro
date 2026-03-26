@@ -20,6 +20,15 @@ interface Props {
     onUpdateDietPlan: (plan: DietPlan) => void | Promise<void>;
     onDeleteDietPlan: (id: string) => void | Promise<void>;
     onRunDailyProcessing: () => Promise<void>;
+    /**
+     * Diet plan processing for arbitrary backdated dates (and optional animal override).
+     * refreshAfter: set false during multi-day runs to avoid refetching every single day.
+     */
+    onProcessDietPlans?: (
+        request: { dietPlanIds?: string[]; date?: string; animalIds?: string[] },
+        refreshAfter?: boolean
+    ) => Promise<any>;
+    onRefreshDietData?: () => Promise<void>;
     onAddTreatmentProtocol: (plan: TreatmentProtocol) => void | Promise<void>;
     onUpdateTreatmentProtocol: (plan: TreatmentProtocol) => void | Promise<void>;
     onDeleteTreatmentProtocol: (id: string) => void | Promise<void>;
@@ -45,6 +54,8 @@ export const Operations: React.FC<Props> = ({
     onUpdateDietPlan,
     onDeleteDietPlan,
     onRunDailyProcessing,
+    onProcessDietPlans,
+    onRefreshDietData,
     onAddTreatmentProtocol,
     onUpdateTreatmentProtocol,
     onDeleteTreatmentProtocol,
@@ -65,7 +76,7 @@ export const Operations: React.FC<Props> = ({
         setActiveTab(tab);
         onTabChange?.(tab);
     };
-    const [viewMode, setViewMode] = useState<'LIST' | 'FORM' | 'PROTOCOL' | 'SERVICE' | 'LEDGER'>('LIST');
+    const [viewMode, setViewMode] = useState<'LIST' | 'FORM' | 'PROTOCOL' | 'SERVICE' | 'LEDGER' | 'BACKDATE'>('LIST');
 
     // --- SERVICE STATE ---
     const [servicingAsset, setServicingAsset] = useState<Infrastructure | null>(null);
@@ -95,6 +106,156 @@ export const Operations: React.FC<Props> = ({
     const [dietForm, setDietForm] = useState<Partial<DietPlan>>({
         name: '', status: 'DRAFT', startDate: new Date().toISOString().split('T')[0], items: [], targetType: 'CATEGORY'
     });
+
+    // --- BACKDATE DIET PROCESS WIZARD STATE ---
+    const [backdateStep, setBackdateStep] = useState<1 | 2 | 3>(1);
+    const [backdateFrom, setBackdateFrom] = useState<string>(new Date().toISOString().split('T')[0]);
+    const [backdateTo, setBackdateTo] = useState<string>(new Date().toISOString().split('T')[0]);
+    const [backdateSelectedPlanIds, setBackdateSelectedPlanIds] = useState<string[]>([]);
+    const [backdateUseCustomAnimals, setBackdateUseCustomAnimals] = useState<boolean>(false);
+    const [backdateCustomAnimalIds, setBackdateCustomAnimalIds] = useState<string[]>([]);
+    const [backdateProcessing, setBackdateProcessing] = useState<boolean>(false);
+    const [backdateProgress, setBackdateProgress] = useState<{ current: number; total: number }>({ current: 0, total: 0 });
+    const [backdateResults, setBackdateResults] = useState<
+        Array<{
+            date: string;
+            dietPlanId: string;
+            dietPlanName: string;
+            animalsFed: number;
+            cost: number;
+            status: 'SUCCESS' | 'SKIP' | 'ERROR';
+            message: string;
+        }>
+    >([]);
+
+    const openBackdateWizard = () => {
+        setBackdateStep(1);
+        const today = new Date().toISOString().split('T')[0];
+        setBackdateFrom(today);
+        setBackdateTo(today);
+        const activePlans = (state.dietPlans || []).filter(p => p.status === 'ACTIVE');
+        setBackdateSelectedPlanIds(activePlans.map(p => p.id));
+        setBackdateUseCustomAnimals(false);
+        setBackdateCustomAnimalIds([]);
+        setBackdateResults([]);
+        setViewMode('BACKDATE');
+    };
+
+    const parseISODate = (s: string) => {
+        // expects YYYY-MM-DD; new Date('YYYY-MM-DD') can be timezone-sensitive, so we manually build.
+        const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec((s || '').trim());
+        if (!m) return null;
+        const y = Number(m[1]);
+        const mo = Number(m[2]) - 1;
+        const d = Number(m[3]);
+        const dt = new Date(Date.UTC(y, mo, d));
+        return dt;
+    };
+
+    const getInclusiveDays = (from: string, to: string) => {
+        const a = parseISODate(from);
+        const b = parseISODate(to);
+        if (!a || !b) return 0;
+        const diffMs = b.getTime() - a.getTime();
+        const days = Math.floor(diffMs / (1000 * 60 * 60 * 24)) + 1;
+        return days > 0 ? days : 0;
+    };
+
+    const buildDateList = (from: string, to: string) => {
+        const a = parseISODate(from);
+        const b = parseISODate(to);
+        if (!a || !b) return [];
+        const days = getInclusiveDays(from, to);
+        if (!days) return [];
+        const list: string[] = [];
+        for (let i = 0; i < days; i++) {
+            const dt = new Date(a.getTime() + i * 24 * 60 * 60 * 1000);
+            const yyyy = dt.getUTCFullYear();
+            const mm = String(dt.getUTCMonth() + 1).padStart(2, '0');
+            const dd = String(dt.getUTCDate()).padStart(2, '0');
+            list.push(`${yyyy}-${mm}-${dd}`);
+        }
+        return list;
+    };
+
+    const runBackdateProcessing = async () => {
+        if (!backdateSelectedPlanIds.length) return alert("Select at least one diet plan.");
+        const days = getInclusiveDays(backdateFrom, backdateTo);
+        if (!days) return alert("Invalid date range.");
+        if (days > 90) return alert("Max range is 90 days.");
+
+        const dateList = buildDateList(backdateFrom, backdateTo);
+        if (!dateList.length) return alert("Invalid date range.");
+
+        setBackdateProcessing(true);
+        setBackdateProgress({ current: 0, total: dateList.length });
+        setBackdateResults([]);
+
+        const activeAnimals = state.livestock?.filter(l => l.status === 'ACTIVE') || [];
+
+        // Validate custom animalIds exist
+        const validCustomAnimalIds = backdateUseCustomAnimals
+            ? backdateCustomAnimalIds.filter(id => activeAnimals.some(a => a.id === id))
+            : [];
+
+        try {
+            for (let idx = 0; idx < dateList.length; idx++) {
+                const d = dateList[idx];
+                const payload: { dietPlanIds: string[]; date: string; animalIds?: string[] } = {
+                    dietPlanIds: backdateSelectedPlanIds,
+                    date: d,
+                };
+                if (backdateUseCustomAnimals && validCustomAnimalIds.length > 0) payload.animalIds = validCustomAnimalIds;
+
+                const resp = await (onProcessDietPlans
+                    ? onProcessDietPlans(payload, false)
+                    : backendService.processDietPlans(payload));
+
+                const planResults = resp?.planResults || [];
+                const respSuccess = resp?.success !== false;
+
+                // Add one row per selected plan for this date
+                const rowsForDate = backdateSelectedPlanIds.map(pid => {
+                    const pr = planResults.find((x: any) => x.dietPlanId === pid);
+                    const plan = state.dietPlans.find(p => p.id === pid);
+                    const defaultMsg = respSuccess ? "No result returned for this plan." : (resp?.message || "Processing failed.");
+                    const statusRaw = pr?.status || (respSuccess ? "SKIP" : "ERROR");
+                    const status = (statusRaw === 'SUCCESS' || statusRaw === 'SKIP' || statusRaw === 'ERROR') ? statusRaw : (respSuccess ? 'SKIP' : 'ERROR');
+                    return {
+                        date: d,
+                        dietPlanId: pid,
+                        dietPlanName: plan?.name || pid,
+                        animalsFed: pr?.animalsFed ?? 0,
+                        cost: pr?.cost ?? 0,
+                        status,
+                        message: pr?.message || defaultMsg
+                    };
+                });
+
+                setBackdateResults(prev => [...prev, ...rowsForDate]);
+                setBackdateProgress({ current: idx + 1, total: dateList.length });
+            }
+
+            if (onRefreshDietData) await onRefreshDietData();
+        } catch (e: any) {
+            const msg = e instanceof Error ? e.message : String(e);
+            setBackdateResults(prev => [
+                ...prev,
+                ...backdateSelectedPlanIds.map(pid => ({
+                    date: '—',
+                    dietPlanId: pid,
+                    dietPlanName: state.dietPlans.find(p => p.id === pid)?.name || pid,
+                    animalsFed: 0,
+                    cost: 0,
+                    status: 'ERROR' as const,
+                    message: msg
+                }))
+            ]);
+            alert("Backdate processing failed: " + msg);
+        } finally {
+            setBackdateProcessing(false);
+        }
+    };
 
     // --- TREATMENT PROTOCOL STATE ---
     const [editingProtocol, setEditingProtocol] = useState<TreatmentProtocol | null>(null);
@@ -1436,7 +1597,7 @@ export const Operations: React.FC<Props> = ({
             {
                 activeTab === 'DIET' && (
                     <>
-                        {(viewMode === 'LIST' || viewMode === 'LEDGER') ? (
+                        {(viewMode === 'LIST' || viewMode === 'LEDGER' || viewMode === 'BACKDATE') ? (
                             <div className="space-y-4 animate-fade-in">
                                 <div className="flex justify-between items-center mb-6">
                                     <div className="flex bg-gray-100 p-1 rounded-lg">
@@ -1461,6 +1622,16 @@ export const Operations: React.FC<Props> = ({
                                             </div>
                                             <button onClick={onRunDailyProcessing} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 shadow-sm transition-colors text-sm font-medium">
                                                 <CalendarClock size={16} /> Process Today's Feed
+                                            </button>
+                                        </div>
+
+                                        <div className="flex justify-between items-center bg-emerald-50 p-4 rounded-lg border border-emerald-200 mb-6">
+                                            <div>
+                                                <h4 className="font-bold text-emerald-800">Backdate Process</h4>
+                                                <p className="text-xs text-emerald-700">Re-process diet plans for a past date range.</p>
+                                            </div>
+                                            <button onClick={openBackdateWizard} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 shadow-sm transition-colors text-sm font-medium">
+                                                <CalendarClock size={16} /> Backdate Process
                                             </button>
                                         </div>
 
@@ -1516,6 +1687,324 @@ export const Operations: React.FC<Props> = ({
                                             )}
                                         </div>
                                     </>
+                                )}
+
+                                {viewMode === 'BACKDATE' && (
+                                    <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                                        <div className="px-6 py-4 border-b border-gray-200 bg-gray-50 flex justify-between items-center">
+                                            <div>
+                                                <h3 className="font-bold text-gray-800">Backdate Diet Processing</h3>
+                                                <p className="text-xs text-gray-500 mt-1">Re-process diet plans for a selected past date range.</p>
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                <button onClick={() => { setViewMode('LIST'); setBackdateStep(1); }} className="px-3 py-1.5 text-sm font-bold text-gray-600 hover:text-gray-800 border border-gray-200 rounded-lg bg-white">
+                                                    Back
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        <div className="p-6 space-y-6">
+                                            {/* Step indicators */}
+                                            <div className="flex gap-2">
+                                                {[1, 2, 3].map((n) => (
+                                                    <div key={n} className={`flex-1 px-3 py-2 rounded-lg border text-center text-xs font-black uppercase tracking-widest ${backdateStep === n ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-white border-gray-200 text-gray-400'}`}>
+                                                        Step {n}
+                                                    </div>
+                                                ))}
+                                            </div>
+
+                                            {backdateStep === 1 && (
+                                                <div className="space-y-6 animate-fade-in">
+                                                    <div className="bg-blue-50 border border-blue-100 rounded-xl p-4">
+                                                        <h4 className="font-bold text-blue-900 mb-3">Step 1 — Configure</h4>
+                                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                                            <div>
+                                                                <label className="block text-sm font-medium text-gray-700 mb-1">From</label>
+                                                                <input type="date" className="w-full border border-gray-300 rounded-lg px-3 py-2" value={backdateFrom} onChange={e => setBackdateFrom(e.target.value)} />
+                                                            </div>
+                                                            <div>
+                                                                <label className="block text-sm font-medium text-gray-700 mb-1">To</label>
+                                                                <input type="date" className="w-full border border-gray-300 rounded-lg px-3 py-2" value={backdateTo} onChange={e => setBackdateTo(e.target.value)} />
+                                                            </div>
+                                                        </div>
+
+                                                        <div className="mt-4 flex flex-wrap gap-2">
+                                                            {[
+                                                                { label: 'Yesterday', days: 1 },
+                                                                { label: 'Last 3 Days', days: 3 },
+                                                                { label: 'Last 7', days: 7 },
+                                                                { label: '14', days: 14 },
+                                                                { label: '30', days: 30 },
+                                                            ].map(p => (
+                                                                <button
+                                                                    key={p.label}
+                                                                    type="button"
+                                                                    className="text-xs bg-white hover:bg-gray-100 text-gray-800 px-3 py-1.5 rounded-lg border border-gray-200 font-bold"
+                                                                    onClick={() => {
+                                                                        const to = new Date();
+                                                                        const toStr = to.toISOString().split('T')[0];
+                                                                        const fromDt = new Date(to);
+                                                                        fromDt.setDate(fromDt.getDate() - (p.days - 1));
+                                                                        const fromStr = fromDt.toISOString().split('T')[0];
+                                                                        setBackdateFrom(fromStr);
+                                                                        setBackdateTo(toStr);
+                                                                    }}
+                                                                >
+                                                                    {p.label}
+                                                                </button>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="bg-white rounded-xl border border-gray-200 p-4">
+                                                        <h4 className="font-bold text-gray-800 mb-3">Diet Plans</h4>
+                                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                                            {state.dietPlans
+                                                                .filter(p => p.status === 'ACTIVE')
+                                                                .map(plan => {
+                                                                    const defaultAnimalCount = getDietPlanAssignedCount(plan);
+                                                                    const usedAnimalCount = backdateUseCustomAnimals ? backdateCustomAnimalIds.length : defaultAnimalCount;
+                                                                    let costPerDay = plan.totalCostPerDay ?? getDietPlanDailyCost(plan);
+                                                                    // Simple scaling for dry-run preview when overriding animals (assumes approximately linear per-animal cost).
+                                                                    if (backdateUseCustomAnimals && defaultAnimalCount > 0) {
+                                                                        costPerDay = costPerDay * (usedAnimalCount / defaultAnimalCount);
+                                                                    }
+                                                                    const animalCount = usedAnimalCount;
+                                                                    const checked = backdateSelectedPlanIds.includes(plan.id);
+                                                                    return (
+                                                                        <label key={plan.id} className={`flex items-start gap-3 p-3 rounded-xl border ${checked ? 'bg-emerald-50 border-emerald-200' : 'bg-white border-gray-200'} cursor-pointer`}>
+                                                                            <input
+                                                                                type="checkbox"
+                                                                                checked={checked}
+                                                                                onChange={() => {
+                                                                                    setBackdateSelectedPlanIds(prev => prev.includes(plan.id) ? prev.filter(x => x !== plan.id) : [...prev, plan.id]);
+                                                                                }}
+                                                                                className="mt-1"
+                                                                            />
+                                                                            <div className="flex-1 min-w-0">
+                                                                                <div className="font-black text-sm text-gray-800 truncate">{plan.name}</div>
+                                                                                <div className="text-xs text-gray-500 mt-1">
+                                                                                    PKR {costPerDay.toLocaleString()}/day • {animalCount} animals
+                                                                                </div>
+                                                                            </div>
+                                                                        </label>
+                                                                    );
+                                                                })}
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="bg-white rounded-xl border border-gray-200 p-4">
+                                                        <h4 className="font-bold text-gray-800 mb-3">Animal Selection</h4>
+                                                        <div className="flex gap-2 mb-3">
+                                                            <button
+                                                                type="button"
+                                                                className={`px-4 py-2 rounded-lg text-sm font-black border ${!backdateUseCustomAnimals ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+                                                                onClick={() => { setBackdateUseCustomAnimals(false); setBackdateCustomAnimalIds([]); }}
+                                                            >
+                                                                Plan Default
+                                                            </button>
+                                                            <button
+                                                                type="button"
+                                                                className={`px-4 py-2 rounded-lg text-sm font-black border ${backdateUseCustomAnimals ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+                                                                onClick={() => setBackdateUseCustomAnimals(true)}
+                                                            >
+                                                                Custom Animals
+                                                            </button>
+                                                        </div>
+
+                                                        {backdateUseCustomAnimals && (
+                                                            <div className="max-h-64 overflow-auto pr-2">
+                                                                {state.livestock
+                                                                    .filter(a => a.status === 'ACTIVE')
+                                                                    .map(a => {
+                                                                        const checked = backdateCustomAnimalIds.includes(a.id);
+                                                                        return (
+                                                                            <label key={a.id} className={`flex items-center gap-3 p-2 rounded-lg border mb-2 cursor-pointer ${checked ? 'bg-emerald-50 border-emerald-200' : 'bg-white border-gray-200'}`}>
+                                                                                <input
+                                                                                    type="checkbox"
+                                                                                    checked={checked}
+                                                                                    onChange={() => {
+                                                                                        setBackdateCustomAnimalIds(prev => prev.includes(a.id) ? prev.filter(x => x !== a.id) : [...prev, a.id]);
+                                                                                    }}
+                                                                                />
+                                                                                <div className="flex-1 min-w-0">
+                                                                                    <div className="text-sm font-bold text-gray-800 truncate">{a.tagId}</div>
+                                                                                    <div className="text-[10px] uppercase font-black text-gray-400">{a.category}</div>
+                                                                                </div>
+                                                                            </label>
+                                                                        );
+                                                                    })}
+                                                            </div>
+                                                        )}
+                                                    </div>
+
+                                                    <div className="flex justify-end gap-3">
+                                                        <button type="button" className="px-5 py-2 border border-gray-200 rounded-lg text-sm font-black text-gray-600 hover:bg-gray-50" onClick={() => setViewMode('LIST')}>
+                                                            Cancel
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            className="px-6 py-2 bg-emerald-600 text-white rounded-lg text-sm font-black shadow-sm hover:bg-emerald-700"
+                                                            onClick={() => {
+                                                                const days = getInclusiveDays(backdateFrom, backdateTo);
+                                                                if (!days) return alert("Invalid date range.");
+                                                                if (days > 90) return alert("Max range is 90 days.");
+                                                                if (!backdateSelectedPlanIds.length) return alert("Select at least one active diet plan.");
+                                                                if (backdateUseCustomAnimals && backdateCustomAnimalIds.length === 0) return alert("Select at least one custom animal or use Plan Default.");
+                                                                setBackdateStep(2);
+                                                            }}
+                                                        >
+                                                            Review Dry Run
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            )}
+
+                                            {backdateStep === 2 && (
+                                                <div className="space-y-6 animate-fade-in">
+                                                    {(() => {
+                                                        const days = getInclusiveDays(backdateFrom, backdateTo);
+                                                        const selectedPlans = state.dietPlans.filter(p => backdateSelectedPlanIds.includes(p.id));
+                                                        const totalRuns = selectedPlans.length * days;
+                                                        const validCustomCount = backdateUseCustomAnimals ? state.livestock.filter(a => backdateCustomAnimalIds.includes(a.id) && a.status === 'ACTIVE').length : 0;
+                                                        const totalAnimalsEstimate = backdateUseCustomAnimals
+                                                            ? validCustomCount * selectedPlans.length * days
+                                                            : selectedPlans.reduce((sum, p) => sum + getDietPlanAssignedCount(p), 0) * days;
+                                                        return (
+                                                            <>
+                                                                <div className="bg-blue-50 border border-blue-100 rounded-xl p-4">
+                                                                    <h4 className="font-bold text-blue-900 mb-3">Step 2 — Review (Dry Run Preview)</h4>
+                                                                    <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                                                                        <div className="bg-white border border-blue-100 rounded-lg p-3">
+                                                                            <div className="text-xs font-black uppercase text-blue-700">Days</div>
+                                                                            <div className="text-2xl font-black text-blue-900">{days}</div>
+                                                                        </div>
+                                                                        <div className="bg-white border border-blue-100 rounded-lg p-3">
+                                                                            <div className="text-xs font-black uppercase text-blue-700">Plans</div>
+                                                                            <div className="text-2xl font-black text-blue-900">{selectedPlans.length}</div>
+                                                                        </div>
+                                                                        <div className="bg-white border border-blue-100 rounded-lg p-3">
+                                                                            <div className="text-xs font-black uppercase text-blue-700">Total Runs</div>
+                                                                            <div className="text-2xl font-black text-blue-900">{totalRuns}</div>
+                                                                        </div>
+                                                                        <div className="bg-white border border-blue-100 rounded-lg p-3">
+                                                                            <div className="text-xs font-black uppercase text-blue-700">Animals Fed</div>
+                                                                            <div className="text-2xl font-black text-blue-900">{totalAnimalsEstimate}</div>
+                                                                        </div>
+                                                                    </div>
+
+                                                                    <div className="mt-4 bg-amber-50 border border-amber-200 text-amber-900 rounded-xl p-4">
+                                                                        Warning: This run will deduct feed inventory and create ledger/expenses for past dates. This action is not easily reversible.
+                                                                    </div>
+                                                                </div>
+
+                                                                <div className="bg-white rounded-xl border border-gray-200 p-4">
+                                                                    <h4 className="font-bold text-gray-800 mb-3">Per-plan cost estimate</h4>
+                                                                    <div className="space-y-2">
+                                                                        {selectedPlans.map(plan => {
+                                                                            const defaultAnimalCount = getDietPlanAssignedCount(plan);
+                                                                            const usedAnimalCount = backdateUseCustomAnimals ? validCustomCount : defaultAnimalCount;
+                                                                            let costPerDay = plan.totalCostPerDay ?? getDietPlanDailyCost(plan);
+                                                                            if (backdateUseCustomAnimals && defaultAnimalCount > 0) {
+                                                                                costPerDay = costPerDay * (usedAnimalCount / defaultAnimalCount);
+                                                                            }
+                                                                            const estimate = costPerDay * days;
+                                                                            return (
+                                                                                <div key={plan.id} className="flex justify-between items-center bg-gray-50 rounded-lg p-3 border border-gray-100">
+                                                                                    <div>
+                                                                                        <div className="font-bold text-gray-800">{plan.name}</div>
+                                                                                        <div className="text-[10px] uppercase font-black text-gray-400 mt-1">PKR/day {costPerDay.toLocaleString()}</div>
+                                                                                    </div>
+                                                                                    <div className="font-black text-emerald-700">PKR {estimate.toLocaleString()}</div>
+                                                                                </div>
+                                                                            );
+                                                                        })}
+                                                                    </div>
+                                                                </div>
+
+                                                                <div className="flex justify-end gap-3">
+                                                                    <button type="button" className="px-5 py-2 border border-gray-200 rounded-lg text-sm font-black text-gray-600 hover:bg-gray-50" onClick={() => setBackdateStep(1)}>
+                                                                        Back
+                                                                    </button>
+                                                                    <button type="button" className="px-6 py-2 bg-emerald-600 text-white rounded-lg text-sm font-black shadow-sm hover:bg-emerald-700" onClick={async () => {
+                                                                        setBackdateStep(3);
+                                                                        await runBackdateProcessing();
+                                                                    }}>
+                                                                        Confirm & Process
+                                                                    </button>
+                                                                </div>
+                                                            </>
+                                                        );
+                                                    })()}
+                                                </div>
+                                            )}
+
+                                            {backdateStep === 3 && (
+                                                <div className="space-y-4 animate-fade-in">
+                                                    <div className="flex items-center justify-between gap-4 bg-slate-50 border border-slate-200 rounded-xl p-4">
+                                                        <div>
+                                                            <h4 className="font-bold text-gray-800">Step 3 — Results</h4>
+                                                            <p className="text-xs text-gray-500 mt-1">Processing {backdateProgress.total} date(s). This may take a while.</p>
+                                                        </div>
+                                                        <div className="text-right">
+                                                            <div className="text-sm font-black text-gray-800">{backdateProgress.current} / {backdateProgress.total} dates completed</div>
+                                                            {backdateProcessing && <div className="text-xs font-black text-emerald-700">Working…</div>}
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="overflow-x-auto">
+                                                        <table className="min-w-full bg-white border border-gray-200 rounded-lg overflow-hidden">
+                                                            <thead className="bg-gray-50 border-b border-gray-200">
+                                                                <tr className="text-[10px] uppercase font-black text-gray-500">
+                                                                    <th className="px-4 py-3 text-left">Date</th>
+                                                                    <th className="px-4 py-3 text-left">Plan</th>
+                                                                    <th className="px-4 py-3 text-right">Animals Fed</th>
+                                                                    <th className="px-4 py-3 text-right">Cost</th>
+                                                                    <th className="px-4 py-3 text-left">Status</th>
+                                                                    <th className="px-4 py-3 text-left">Message</th>
+                                                                </tr>
+                                                            </thead>
+                                                            <tbody>
+                                                                {backdateResults.length === 0 ? (
+                                                                    <tr><td colSpan={6} className="px-4 py-10 text-center text-gray-400 font-bold">No results yet.</td></tr>
+                                                                ) : (
+                                                                    backdateResults.map((r, idx) => (
+                                                                        <tr key={`${r.date}_${r.dietPlanId}_${idx}`} className="border-t border-gray-100">
+                                                                            <td className="px-4 py-3 whitespace-nowrap text-sm font-bold text-gray-800">{r.date}</td>
+                                                                            <td className="px-4 py-3 whitespace-nowrap text-sm font-bold text-gray-800">{r.dietPlanName}</td>
+                                                                            <td className="px-4 py-3 whitespace-nowrap text-right text-sm font-bold text-gray-700">{r.animalsFed}</td>
+                                                                            <td className="px-4 py-3 whitespace-nowrap text-right text-sm font-bold text-emerald-700">PKR {Number(r.cost || 0).toLocaleString()}</td>
+                                                                            <td className="px-4 py-3 whitespace-nowrap">
+                                                                                <span className={`inline-flex items-center px-2 py-1 rounded text-[10px] font-black uppercase border ${r.status === 'SUCCESS' ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : r.status === 'SKIP' ? 'bg-amber-50 border-amber-200 text-amber-700' : 'bg-red-50 border-red-200 text-red-700'}`}>
+                                                                                    {r.status === 'SUCCESS' ? '✅ SUCCESS' : r.status === 'SKIP' ? '⚠️ SKIP' : '❌ ERROR'}
+                                                                                </span>
+                                                                            </td>
+                                                                            <td className="px-4 py-3 text-sm text-gray-600">{r.message}</td>
+                                                                        </tr>
+                                                                    ))
+                                                                )}
+                                                            </tbody>
+                                                        </table>
+                                                    </div>
+
+                                                    <div className="flex justify-end gap-3">
+                                                        <button
+                                                            type="button"
+                                                            className="px-5 py-2 border border-gray-200 rounded-lg text-sm font-black text-gray-600 hover:bg-gray-50"
+                                                            onClick={() => {
+                                                                setBackdateStep(1);
+                                                                setBackdateResults([]);
+                                                                setBackdateProcessing(false);
+                                                                setBackdateProgress({ current: 0, total: 0 });
+                                                            }}
+                                                        >
+                                                            Process Another Range
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
                                 )}
 
                                 {viewMode === 'LEDGER' && (
