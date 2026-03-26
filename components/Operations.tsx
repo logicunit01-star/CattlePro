@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { AppState, Livestock, FeedInventory, Infrastructure, DietPlan, TreatmentProtocol, TreatmentLog, TreatmentItem, MaintenanceRecord, ExpenseCategory } from '../types';
 import { backendService } from '../services/backendService';
-import { Warehouse, Construction, AlertCircle, Plus, Trash2, Edit2, Tag, X, Save, CheckCircle, ArrowLeft, Utensils, CalendarClock, Beef, Upload, Image as ImageIcon, Stethoscope, Pill } from 'lucide-react';
+import { Warehouse, Construction, AlertCircle, Plus, Trash2, Edit2, Tag, X, Save, CheckCircle, ArrowLeft, Utensils, CalendarClock, Beef, Upload, Image as ImageIcon, Stethoscope, Pill, Calendar, ChevronRight, RotateCcw, PlayCircle, ListChecks, Users, FlaskConical } from 'lucide-react';
 
 export type OperationsTab = 'FEED' | 'MEDICINE' | 'SUPPLIES' | 'INFRA' | 'DIET';
 
@@ -65,7 +65,7 @@ export const Operations: React.FC<Props> = ({
         setActiveTab(tab);
         onTabChange?.(tab);
     };
-    const [viewMode, setViewMode] = useState<'LIST' | 'FORM' | 'PROTOCOL' | 'SERVICE' | 'LEDGER'>('LIST');
+    const [viewMode, setViewMode] = useState<'LIST' | 'FORM' | 'PROTOCOL' | 'SERVICE' | 'LEDGER' | 'BACKDATE'>('LIST');
 
     // --- SERVICE STATE ---
     const [servicingAsset, setServicingAsset] = useState<Infrastructure | null>(null);
@@ -109,6 +109,74 @@ export const Operations: React.FC<Props> = ({
             backendService.getMedicineExpirations(30).then(setMedicineExpirations).catch(() => setMedicineExpirations([]));
         }
     }, [activeTab]);
+
+    // --- BACKDATE PROCESSING STATE ---
+    const [bdStartDate, setBdStartDate] = useState<string>(() => {
+        const d = new Date(); d.setDate(d.getDate() - 7);
+        return d.toISOString().split('T')[0];
+    });
+    const [bdEndDate, setBdEndDate] = useState<string>(new Date().toISOString().split('T')[0]);
+    const [bdSelectedPlanIds, setBdSelectedPlanIds] = useState<string[]>([]);
+    const [bdAnimalOverride, setBdAnimalOverride] = useState<'PLAN_DEFAULT' | 'CUSTOM'>('PLAN_DEFAULT');
+    const [bdSelectedAnimalIds, setBdSelectedAnimalIds] = useState<string[]>([]);
+    const [bdProcessing, setBdProcessing] = useState(false);
+    const [bdResults, setBdResults] = useState<{ date: string; planId: string; planName: string; status: 'SUCCESS' | 'SKIP' | 'ERROR'; message: string; totalCost?: number; animalsCount?: number }[]>([]);
+    const [bdStep, setBdStep] = useState<'CONFIG' | 'PREVIEW' | 'DONE'>('CONFIG');
+
+    const bdDateRange = (): string[] => {
+        const dates: string[] = [];
+        if (!bdStartDate || !bdEndDate) return dates;
+        const start = new Date(bdStartDate);
+        const end = new Date(bdEndDate);
+        if (start > end) return dates;
+        const cur = new Date(start);
+        while (cur <= end) {
+            dates.push(cur.toISOString().split('T')[0]);
+            cur.setDate(cur.getDate() + 1);
+        }
+        return dates;
+    };
+
+    const bdTotalDays = bdDateRange().length;
+    const bdSelectedPlans = state.dietPlans.filter(p => bdSelectedPlanIds.includes(p.id));
+
+    const handleBackdateProcess = async () => {
+        if (!state.currentFarmId) return alert('Please select a farm first.');
+        if (bdSelectedPlanIds.length === 0) return alert('Select at least one diet plan.');
+        const dates = bdDateRange();
+        if (dates.length === 0) return alert('Invalid date range.');
+        if (dates.length > 90) return alert('Date range cannot exceed 90 days at once.');
+        if (!confirm(`This will process ${bdSelectedPlanIds.length} plan(s) across ${dates.length} day(s) (${dates.length * bdSelectedPlanIds.length} total runs). Continue?`)) return;
+
+        setBdProcessing(true);
+        setBdStep('DONE');
+        setBdResults([]);
+        const results: typeof bdResults = [];
+
+        for (const date of dates) {
+            for (const planId of bdSelectedPlanIds) {
+                const plan = state.dietPlans.find(p => p.id === planId);
+                try {
+                    const overrideIds = bdAnimalOverride === 'CUSTOM' && bdSelectedAnimalIds.length > 0 ? bdSelectedAnimalIds : undefined;
+                    const res = await backendService.processDietPlans({ dietPlanIds: [planId], date, ...(overrideIds ? { animalIds: overrideIds } : {}) });
+                    results.push({
+                        date,
+                        planId,
+                        planName: plan?.name || planId,
+                        status: res.success ? 'SUCCESS' : 'SKIP',
+                        message: res.message || 'Processed',
+                        totalCost: res.totalCost,
+                        animalsCount: (res as any).totalAnimalsFed ?? (res as any).animalsFed,
+                    });
+                } catch (e: any) {
+                    results.push({ date, planId, planName: plan?.name || planId, status: 'ERROR', message: e?.message || 'Unknown error' });
+                }
+            }
+        }
+
+        setBdResults(results);
+        setBdProcessing(false);
+    };
 
     // --- HELPERS ---
     const openAddProtocol = () => {
@@ -1436,15 +1504,18 @@ export const Operations: React.FC<Props> = ({
             {
                 activeTab === 'DIET' && (
                     <>
-                        {(viewMode === 'LIST' || viewMode === 'LEDGER') ? (
+                        {(viewMode === 'LIST' || viewMode === 'LEDGER' || viewMode === 'BACKDATE') ? (
                             <div className="space-y-4 animate-fade-in">
                                 <div className="flex justify-between items-center mb-6">
-                                    <div className="flex bg-gray-100 p-1 rounded-lg">
+                                    <div className="flex bg-gray-100 p-1 rounded-lg gap-0.5 flex-wrap">
                                         <button onClick={() => setViewMode('LIST')} className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${viewMode === 'LIST' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500 hover:text-gray-700'}`}>
-                                            Active Diet Plans
+                                            Active Plans
                                         </button>
                                         <button onClick={() => setViewMode('LEDGER')} className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${viewMode === 'LEDGER' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500 hover:text-gray-700'}`}>
-                                            Processing Ledger
+                                            Ledger
+                                        </button>
+                                        <button onClick={() => { setViewMode('BACKDATE'); setBdStep('CONFIG'); setBdResults([]); setBdSelectedPlanIds(state.dietPlans.filter(p => p.status === 'ACTIVE').map(p => p.id)); }} className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5 ${viewMode === 'BACKDATE' ? 'bg-white shadow-sm text-indigo-700' : 'text-gray-500 hover:text-gray-700'}`}>
+                                            <RotateCcw size={13} /> Backdate Process
                                         </button>
                                     </div>
                                     <button onClick={openAddDiet} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 shadow-sm transition-colors text-sm font-medium">
@@ -1516,6 +1587,316 @@ export const Operations: React.FC<Props> = ({
                                             )}
                                         </div>
                                     </>
+                                )}
+
+                                {viewMode === 'BACKDATE' && (
+                                    <div className="space-y-6 animate-fade-in">
+                                        {/* Header Banner */}
+                                        <div className="bg-gradient-to-r from-indigo-600 to-purple-700 rounded-2xl p-6 text-white shadow-lg">
+                                            <div className="flex items-center gap-3 mb-2">
+                                                <div className="bg-white/20 p-2 rounded-xl"><RotateCcw size={22} /></div>
+                                                <div>
+                                                    <h3 className="text-xl font-bold">Backdate Diet Processing</h3>
+                                                    <p className="text-indigo-200 text-sm">Re-process historical feed consumption for selected plans and dates</p>
+                                                </div>
+                                            </div>
+                                            {bdStep !== 'CONFIG' && (
+                                                <button onClick={() => { setBdStep('CONFIG'); setBdResults([]); }} className="mt-3 flex items-center gap-2 bg-white/20 hover:bg-white/30 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors">
+                                                    <ArrowLeft size={14} /> Start Over
+                                                </button>
+                                            )}
+                                        </div>
+
+                                        {/* Step Indicator */}
+                                        <div className="flex items-center gap-2 text-sm font-medium">
+                                            {['CONFIG', 'PREVIEW', 'DONE'].map((s, i) => (
+                                                <React.Fragment key={s}>
+                                                    <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold transition-colors ${
+                                                        bdStep === s ? 'bg-indigo-600 text-white' : 
+                                                        (['CONFIG', 'PREVIEW', 'DONE'].indexOf(bdStep) > i) ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-400'
+                                                    }`}>
+                                                        <span>{i + 1}.</span> {s === 'CONFIG' ? 'Configure' : s === 'PREVIEW' ? 'Review' : 'Results'}
+                                                    </div>
+                                                    {i < 2 && <ChevronRight size={14} className="text-gray-300" />}
+                                                </React.Fragment>
+                                            ))}
+                                        </div>
+
+                                        {/* STEP 1: CONFIG */}
+                                        {bdStep === 'CONFIG' && (
+                                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                                {/* LEFT: Date Range */}
+                                                <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 space-y-5">
+                                                    <div className="flex items-center gap-3 pb-3 border-b border-gray-100">
+                                                        <div className="bg-blue-50 text-blue-600 p-2 rounded-xl"><Calendar size={18} /></div>
+                                                        <div>
+                                                            <h4 className="font-bold text-gray-800">Date Range</h4>
+                                                            <p className="text-xs text-gray-500">Select the backdate period (max 90 days)</p>
+                                                        </div>
+                                                    </div>
+                                                    <div className="grid grid-cols-2 gap-4">
+                                                        <div>
+                                                            <label className="block text-xs font-semibold text-gray-600 mb-1.5 uppercase tracking-wide">From Date</label>
+                                                            <input type="date" value={bdStartDate} max={bdEndDate} onChange={e => setBdStartDate(e.target.value)} className="w-full border border-gray-300 rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-indigo-500 outline-none text-sm" />
+                                                        </div>
+                                                        <div>
+                                                            <label className="block text-xs font-semibold text-gray-600 mb-1.5 uppercase tracking-wide">To Date</label>
+                                                            <input type="date" value={bdEndDate} min={bdStartDate} max={new Date().toISOString().split('T')[0]} onChange={e => setBdEndDate(e.target.value)} className="w-full border border-gray-300 rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-indigo-500 outline-none text-sm" />
+                                                        </div>
+                                                    </div>
+                                                    {/* Quick Presets */}
+                                                    <div>
+                                                        <p className="text-xs text-gray-500 mb-2 font-medium">Quick Presets</p>
+                                                        <div className="flex flex-wrap gap-2">
+                                                            {[
+                                                                { label: 'Yesterday', days: 1 },
+                                                                { label: 'Last 3 Days', days: 3 },
+                                                                { label: 'Last 7 Days', days: 7 },
+                                                                { label: 'Last 14 Days', days: 14 },
+                                                                { label: 'Last 30 Days', days: 30 },
+                                                            ].map(p => (
+                                                                <button key={p.label} type="button" onClick={() => {
+                                                                    const end = new Date(); end.setDate(end.getDate() - (p.days === 1 ? 1 : 0));
+                                                                    const start = new Date(end); start.setDate(start.getDate() - (p.days - 1));
+                                                                    setBdStartDate(start.toISOString().split('T')[0]);
+                                                                    setBdEndDate(end.toISOString().split('T')[0]);
+                                                                }} className="text-xs bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-3 py-1.5 rounded-full border border-indigo-200 font-medium transition-colors">
+                                                                    {p.label}
+                                                                </button>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                    {bdTotalDays > 0 && (
+                                                        <div className="bg-indigo-50 rounded-xl p-3 border border-indigo-100 flex items-center gap-3">
+                                                            <Calendar size={18} className="text-indigo-500 flex-shrink-0" />
+                                                            <div>
+                                                                <p className="text-sm font-bold text-indigo-800">{bdTotalDays} day{bdTotalDays > 1 ? 's' : ''} selected</p>
+                                                                <p className="text-xs text-indigo-500">{bdStartDate} → {bdEndDate}</p>
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
+
+                                                {/* RIGHT: Plan + Animal Selection */}
+                                                <div className="space-y-4">
+                                                    {/* Diet Plan Selector */}
+                                                    <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-5">
+                                                        <div className="flex items-center gap-3 pb-3 border-b border-gray-100 mb-4">
+                                                            <div className="bg-emerald-50 text-emerald-600 p-2 rounded-xl"><ListChecks size={18} /></div>
+                                                            <div>
+                                                                <h4 className="font-bold text-gray-800">Diet Plans</h4>
+                                                                <p className="text-xs text-gray-500">Select plans to process</p>
+                                                            </div>
+                                                            <button type="button" onClick={() => setBdSelectedPlanIds(bdSelectedPlanIds.length === state.dietPlans.length ? [] : state.dietPlans.map(p => p.id))} className="ml-auto text-xs text-indigo-600 hover:underline font-medium">
+                                                                {bdSelectedPlanIds.length === state.dietPlans.length ? 'Deselect All' : 'Select All'}
+                                                            </button>
+                                                        </div>
+                                                        <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                                                            {state.dietPlans.length === 0 && <p className="text-sm text-gray-400 italic text-center py-4">No diet plans found. Create one first.</p>}
+                                                            {state.dietPlans.map(plan => (
+                                                                <label key={plan.id} className={`flex items-center gap-3 p-3 rounded-xl cursor-pointer border-2 transition-all ${
+                                                                    bdSelectedPlanIds.includes(plan.id) ? 'border-indigo-400 bg-indigo-50' : 'border-transparent bg-gray-50 hover:bg-gray-100'
+                                                                }`}>
+                                                                    <input type="checkbox" checked={bdSelectedPlanIds.includes(plan.id)} onChange={e => {
+                                                                        setBdSelectedPlanIds(prev => e.target.checked ? [...prev, plan.id] : prev.filter(id => id !== plan.id));
+                                                                    }} className="w-4 h-4 text-indigo-600 rounded" />
+                                                                    <div className="flex-1 min-w-0">
+                                                                        <p className="text-sm font-semibold text-gray-800 truncate">{plan.name}</p>
+                                                                        <p className="text-xs text-gray-500">{plan.targetType} · {getDietPlanAssignedCount(plan)} animals · <span className={plan.status === 'ACTIVE' ? 'text-green-600' : 'text-gray-400'}>{plan.status}</span></p>
+                                                                    </div>
+                                                                    <span className="text-xs font-medium text-gray-500 whitespace-nowrap">PKR {getDietPlanDailyCost(plan).toLocaleString()}/day</span>
+                                                                </label>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+
+                                                    {/* Animal Override */}
+                                                    <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-5">
+                                                        <div className="flex items-center gap-3 pb-3 border-b border-gray-100 mb-4">
+                                                            <div className="bg-amber-50 text-amber-600 p-2 rounded-xl"><Users size={18} /></div>
+                                                            <div>
+                                                                <h4 className="font-bold text-gray-800">Animal Selection</h4>
+                                                                <p className="text-xs text-gray-500">Use plan defaults or specify animals</p>
+                                                            </div>
+                                                        </div>
+                                                        <div className="flex gap-3 mb-3">
+                                                            {(['PLAN_DEFAULT', 'CUSTOM'] as const).map(mode => (
+                                                                <button key={mode} type="button" onClick={() => setBdAnimalOverride(mode)} className={`flex-1 py-2 rounded-xl text-sm font-semibold border-2 transition-all ${
+                                                                    bdAnimalOverride === mode ? 'border-amber-400 bg-amber-50 text-amber-800' : 'border-gray-200 text-gray-500 hover:border-gray-300'
+                                                                }`}>
+                                                                    {mode === 'PLAN_DEFAULT' ? '📋 Plan Default' : '🎯 Custom Animals'}
+                                                                </button>
+                                                            ))}
+                                                        </div>
+                                                        {bdAnimalOverride === 'CUSTOM' && (
+                                                            <div className="border border-gray-200 rounded-xl max-h-36 overflow-y-auto p-2 space-y-1">
+                                                                {state.livestock.filter(l => l.status === 'ACTIVE' && (!state.currentFarmId || l.farmId === state.currentFarmId)).map(l => (
+                                                                    <label key={l.id} className="flex items-center gap-2 p-1.5 hover:bg-gray-50 rounded-lg cursor-pointer text-sm">
+                                                                        <input type="checkbox" checked={bdSelectedAnimalIds.includes(l.id)} onChange={e => {
+                                                                            setBdSelectedAnimalIds(prev => e.target.checked ? [...prev, l.id] : prev.filter(id => id !== l.id));
+                                                                        }} className="w-3.5 h-3.5 text-amber-500 rounded" />
+                                                                        <span className="font-mono text-xs bg-gray-100 px-1.5 py-0.5 rounded">{l.tagId}</span>
+                                                                        <span className="text-gray-600 truncate">{l.name || l.breed}</span>
+                                                                    </label>
+                                                                ))}
+                                                                {state.livestock.filter(l => l.status === 'ACTIVE' && (!state.currentFarmId || l.farmId === state.currentFarmId)).length === 0 && (
+                                                                    <p className="text-xs text-gray-400 italic text-center py-2">No active animals on selected farm.</p>
+                                                                )}
+                                                            </div>
+                                                        )}
+                                                        {bdAnimalOverride === 'CUSTOM' && bdSelectedAnimalIds.length > 0 && (
+                                                            <p className="text-xs text-amber-600 font-medium mt-2">{bdSelectedAnimalIds.length} animal(s) manually selected</p>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {/* STEP 1 -> PREVIEW button */}
+                                        {bdStep === 'CONFIG' && (
+                                            <div className="flex justify-end gap-3">
+                                                <button onClick={() => setViewMode('LIST')} className="px-6 py-2.5 text-gray-500 hover:text-gray-700 font-medium">Cancel</button>
+                                                <button
+                                                    disabled={bdSelectedPlanIds.length === 0 || bdTotalDays === 0}
+                                                    onClick={() => setBdStep('PREVIEW')}
+                                                    className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl font-semibold shadow-sm flex items-center gap-2 transition-all"
+                                                >
+                                                    Review &amp; Confirm <ChevronRight size={16} />
+                                                </button>
+                                            </div>
+                                        )}
+
+                                        {/* STEP 2: PREVIEW */}
+                                        {bdStep === 'PREVIEW' && (
+                                            <div className="space-y-4">
+                                                <div className="bg-white rounded-2xl shadow-sm border border-indigo-200 p-6">
+                                                    <h4 className="font-bold text-gray-800 mb-4 flex items-center gap-2"><FlaskConical size={18} className="text-indigo-500" /> Processing Summary (Dry Run)</h4>
+                                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                                                        {[{ label: 'Days to Process', value: bdTotalDays, color: 'text-indigo-700', bg: 'bg-indigo-50' },
+                                                          { label: 'Plans Selected', value: bdSelectedPlanIds.length, color: 'text-emerald-700', bg: 'bg-emerald-50' },
+                                                          { label: 'Total Runs', value: bdTotalDays * bdSelectedPlanIds.length, color: 'text-purple-700', bg: 'bg-purple-50' },
+                                                          { label: 'Animals (per plan)', value: bdAnimalOverride === 'CUSTOM' ? bdSelectedAnimalIds.length : 'Plan Default', color: 'text-amber-700', bg: 'bg-amber-50' },
+                                                        ].map(stat => (
+                                                            <div key={stat.label} className={`${stat.bg} rounded-xl p-4 text-center`}>
+                                                                <p className={`text-2xl font-black ${stat.color}`}>{stat.value}</p>
+                                                                <p className="text-xs text-gray-500 mt-1 font-medium">{stat.label}</p>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                    <div className="space-y-2">
+                                                        <p className="text-sm font-semibold text-gray-700 mb-2">Plans to run:</p>
+                                                        {bdSelectedPlans.map(p => (
+                                                            <div key={p.id} className="flex items-center justify-between bg-gray-50 rounded-lg px-4 py-2.5 text-sm">
+                                                                <div className="flex items-center gap-2">
+                                                                    <Utensils size={14} className="text-emerald-500" />
+                                                                    <span className="font-semibold text-gray-800">{p.name}</span>
+                                                                    <span className={`text-xs px-2 py-0.5 rounded-full font-bold ${p.status === 'ACTIVE' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>{p.status}</span>
+                                                                </div>
+                                                                <span className="text-gray-500 text-xs">~PKR {getDietPlanDailyCost(p).toLocaleString()}/day × {bdTotalDays} days = PKR {(getDietPlanDailyCost(p) * bdTotalDays).toLocaleString()}</span>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                    <div className="mt-5 pt-4 border-t border-gray-200 flex items-center justify-between">
+                                                        <div>
+                                                            <p className="text-xs text-gray-500">Estimated Total Feed Cost Impact</p>
+                                                            <p className="text-2xl font-black text-emerald-700">
+                                                                PKR {bdSelectedPlans.reduce((s, p) => s + getDietPlanDailyCost(p), 0) * bdTotalDays > 0
+                                                                    ? (bdSelectedPlans.reduce((s, p) => s + getDietPlanDailyCost(p), 0) * bdTotalDays).toLocaleString()
+                                                                    : '—'}
+                                                            </p>
+                                                        </div>
+                                                        <div className="bg-amber-50 text-amber-800 border border-amber-200 rounded-xl px-4 py-2 text-xs font-medium max-w-xs">
+                                                            ⚠️ This will deduct inventory and create expense records. This cannot be easily undone (use Reverse in Ledger if needed).
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div className="flex justify-end gap-3">
+                                                    <button onClick={() => setBdStep('CONFIG')} className="px-6 py-2.5 text-gray-500 hover:text-gray-700 font-medium flex items-center gap-2"><ArrowLeft size={16} /> Back</button>
+                                                    <button
+                                                        onClick={handleBackdateProcess}
+                                                        disabled={bdProcessing}
+                                                        className="px-8 py-2.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 disabled:from-gray-400 disabled:to-gray-400 text-white rounded-xl font-bold shadow-md flex items-center gap-2 transition-all"
+                                                    >
+                                                        {bdProcessing ? <><span className="animate-spin">⏳</span> Processing...</> : <><PlayCircle size={18} /> Process Backdated Diets</>}
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {/* STEP 3: DONE / RESULTS */}
+                                        {bdStep === 'DONE' && (
+                                            <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+                                                <div className="px-6 py-4 border-b border-gray-100 bg-gray-50 flex items-center justify-between">
+                                                    <div>
+                                                        <h4 className="font-bold text-gray-800">Processing Results</h4>
+                                                        <p className="text-xs text-gray-500">{bdResults.filter(r => r.status === 'SUCCESS').length} succeeded · {bdResults.filter(r => r.status === 'ERROR').length} failed · {bdResults.filter(r => r.status === 'SKIP').length} skipped</p>
+                                                    </div>
+                                                    {!bdProcessing && (
+                                                        <div className="flex gap-2">
+                                                            <span className={`px-3 py-1 rounded-full text-xs font-bold ${
+                                                                bdResults.every(r => r.status === 'SUCCESS') ? 'bg-green-100 text-green-700' :
+                                                                bdResults.some(r => r.status === 'ERROR') ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
+                                                            }`}>
+                                                                {bdResults.every(r => r.status === 'SUCCESS') ? '✅ All Successful' :
+                                                                 bdResults.some(r => r.status === 'ERROR') ? '❌ Some Errors' : '⚠️ Partial'}
+                                                            </span>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                                {bdProcessing && (
+                                                    <div className="p-8 text-center">
+                                                        <div className="inline-block animate-spin text-4xl mb-3">⚙️</div>
+                                                        <p className="text-gray-600 font-medium">Processing... Please wait</p>
+                                                        <p className="text-xs text-gray-400 mt-1">{bdResults.length} of {bdTotalDays * bdSelectedPlanIds.length} runs completed</p>
+                                                    </div>
+                                                )}
+                                                {!bdProcessing && bdResults.length > 0 && (
+                                                    <div className="overflow-x-auto">
+                                                        <table className="w-full text-sm">
+                                                            <thead className="bg-gray-50 text-gray-600 text-xs">
+                                                                <tr>
+                                                                    <th className="px-5 py-3 text-left font-semibold">Date</th>
+                                                                    <th className="px-5 py-3 text-left font-semibold">Plan</th>
+                                                                    <th className="px-5 py-3 text-left font-semibold">Animals</th>
+                                                                    <th className="px-5 py-3 text-left font-semibold">Cost (PKR)</th>
+                                                                    <th className="px-5 py-3 text-left font-semibold">Status</th>
+                                                                    <th className="px-5 py-3 text-left font-semibold">Message</th>
+                                                                </tr>
+                                                            </thead>
+                                                            <tbody className="divide-y divide-gray-100">
+                                                                {bdResults.map((r, i) => (
+                                                                    <tr key={i} className={`hover:bg-gray-50 ${
+                                                                        r.status === 'ERROR' ? 'bg-red-50/40' :
+                                                                        r.status === 'SKIP' ? 'bg-amber-50/30' : ''
+                                                                    }`}>
+                                                                        <td className="px-5 py-3 font-mono text-xs text-gray-700 whitespace-nowrap">{r.date}</td>
+                                                                        <td className="px-5 py-3 font-semibold text-gray-800">{r.planName}</td>
+                                                                        <td className="px-5 py-3 text-gray-600">{r.animalsCount ?? '—'}</td>
+                                                                        <td className="px-5 py-3 font-bold text-emerald-600">{r.totalCost ? r.totalCost.toLocaleString() : '—'}</td>
+                                                                        <td className="px-5 py-3">
+                                                                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                                                                r.status === 'SUCCESS' ? 'bg-green-100 text-green-700' :
+                                                                                r.status === 'ERROR' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
+                                                                            }`}>{r.status}</span>
+                                                                        </td>
+                                                                        <td className="px-5 py-3 text-gray-500 text-xs max-w-xs truncate">{r.message}</td>
+                                                                    </tr>
+                                                                ))}
+                                                            </tbody>
+                                                        </table>
+                                                    </div>
+                                                )}
+                                                {!bdProcessing && (
+                                                    <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-between items-center">
+                                                        <p className="text-sm text-gray-600">Total Cost Processed: <span className="font-bold text-emerald-700">PKR {bdResults.reduce((s, r) => s + (r.totalCost || 0), 0).toLocaleString()}</span></p>
+                                                        <button onClick={() => { setBdStep('CONFIG'); setBdResults([]); }} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm rounded-xl font-semibold flex items-center gap-2">
+                                                            <RotateCcw size={14} /> Process Another Range
+                                                        </button>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
                                 )}
 
                                 {viewMode === 'LEDGER' && (

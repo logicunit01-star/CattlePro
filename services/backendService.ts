@@ -511,7 +511,7 @@ export const backendService = {
     },
 
     /** Atomic diet plan processing: inventory deduction, logs, ledger, expense, lastProcessedDate. */
-    processDietPlans: async (request?: { dietPlanIds?: string[]; date?: string }): Promise<{ success: boolean; message: string; plansProcessed: number; ledgersCreated: number; totalCost: number; ledgerIds: string[] }> => {
+    processDietPlans: async (request?: { dietPlanIds?: string[]; date?: string; animalIds?: string[] }): Promise<{ success: boolean; message: string; plansProcessed: number; ledgersCreated: number; totalCost: number; ledgerIds: string[]; totalAnimalsFed?: number }> => {
         const res = await fetch(`${API_BASE_URL}/operations/diet-plan/process`, {
             method: 'POST',
             headers: apiHeaders(true),
