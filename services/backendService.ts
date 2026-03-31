@@ -6,7 +6,7 @@ import { getTenantHeaders, getTenant } from './tenantContext';
 // const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5003/livestock';
 
 //  const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5003/livestock';
- const API_BASE_URL = (import.meta as any).env.VITE_API_URL || 'https://api.hulmsolutions.com/livestock';
+const API_BASE_URL = (import.meta as any).env.VITE_API_URL || 'https://api.hulmsolutions.com/livestock';
 
 function apiHeaders(json = false): Record<string, string> {
     const h: Record<string, string> = { ...getTenantHeaders() };
@@ -511,7 +511,7 @@ export const backendService = {
     },
 
     /** Atomic diet plan processing: inventory deduction, logs, ledger, expense, lastProcessedDate. */
-    processDietPlans: async (request?: { dietPlanIds?: string[]; date?: string; animalIds?: string[] }): Promise<{ success: boolean; message: string; plansProcessed: number; ledgersCreated: number; totalCost: number; ledgerIds: string[]; totalAnimalsFed?: number }> => {
+    processDietPlans: async (request?: { dietPlanIds?: string[]; date?: string }): Promise<{ success: boolean; message: string; plansProcessed: number; ledgersCreated: number; totalCost: number; ledgerIds: string[] }> => {
         const res = await fetch(`${API_BASE_URL}/operations/diet-plan/process`, {
             method: 'POST',
             headers: apiHeaders(true),

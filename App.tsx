@@ -331,30 +331,43 @@ const App: React.FC = () => {
   };
 
   // --- DIET & NUTRITION ENGINE ---
+  const refreshDietData = async () => {
+    const [refetchedFeed, refetchedLogs, refetchedLedgers, refetchedLivestock, refetchedPlans, refetchedExpenses] = await Promise.all([
+      backendService.getFeed(),
+      backendService.getConsumptionLogs(),
+      backendService.getFeedLedgers(),
+      backendService.getLivestock(),
+      backendService.getDietPlans(),
+      backendService.getExpenses()
+    ]);
+
+    setState(prev => ({
+      ...prev,
+      feed: refetchedFeed,
+      consumptionLogs: refetchedLogs,
+      processedFeedLedgers: refetchedLedgers,
+      livestock: toLivestockArray(refetchedLivestock),
+      dietPlans: (refetchedPlans || []).map(normalizeDietPlanTargetIds),
+      expenses: refetchedExpenses
+    }));
+  };
+
+  const processDietPlans = async (
+    requestPayload: { dietPlanIds?: string[]; date?: string; animalIds?: string[] },
+    refreshAfter: boolean = true
+  ) => {
+    const result = await backendService.processDietPlans(requestPayload);
+    if (refreshAfter) await refreshDietData();
+    return result;
+  };
+
   const processDailyConsumption = async () => {
     try {
-      const result = await backendService.processDietPlans({});
+      const result = await processDietPlans({}, true);
       if (result.plansProcessed === 0 && result.ledgersCreated === 0) {
         alert(result.message || "No eligible plans to process (none active or already processed today).");
         return;
       }
-      const [refetchedFeed, refetchedLogs, refetchedLedgers, refetchedLivestock, refetchedPlans, refetchedExpenses] = await Promise.all([
-        backendService.getFeed(),
-        backendService.getConsumptionLogs(),
-        backendService.getFeedLedgers(),
-        backendService.getLivestock(),
-        backendService.getDietPlans(),
-        backendService.getExpenses()
-      ]);
-        setState(prev => ({
-        ...prev,
-        feed: refetchedFeed,
-        consumptionLogs: refetchedLogs,
-        processedFeedLedgers: refetchedLedgers,
-        livestock: toLivestockArray(refetchedLivestock),
-        dietPlans: (refetchedPlans || []).map(normalizeDietPlanTargetIds),
-        expenses: refetchedExpenses
-      }));
       alert(result.message + (result.totalCost > 0 ? ` Total cost: PKR ${result.totalCost.toLocaleString()}` : ''));
     } catch (e: any) {
       console.error('Process daily consumption error:', e);
@@ -1236,6 +1249,8 @@ const App: React.FC = () => {
                 }}
                 onDeleteDietPlan={async (id) => { try { await backendService.deleteDietPlan(id); setState(p => ({ ...p, dietPlans: p.dietPlans.filter(i => i.id !== id) })); } catch (e) { alert('Failed to delete diet plan.'); } }}
                 onRunDailyProcessing={processDailyConsumption}
+                onProcessDietPlans={processDietPlans}
+                onRefreshDietData={refreshDietData}
                 onAddTreatmentProtocol={async (p) => {
                   if (!state.currentFarmId) { alert("Select farm"); return; }
                   const protoWithFarm = { ...p, farmId: state.currentFarmId };
