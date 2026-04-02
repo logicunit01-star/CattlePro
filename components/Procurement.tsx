@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { AppState, Expense, FeedInventory, ExpenseCategory } from '../types';
-import { Truck, ShoppingCart, User, AlertTriangle, CheckCircle, Clock, Search, Layers, Archive, Activity, RefreshCw, MinusCircle, Edit2, X, Save, Plus, Package, TrendingUp, BarChart, DollarSign, ArrowRight } from 'lucide-react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart as RechartsBarChart, Bar } from 'recharts';
+import { Truck, ShoppingCart, User, AlertTriangle, CheckCircle, Clock, Search, Layers, Archive, Activity, RefreshCw, MinusCircle, Edit2, X, Save, Plus, Package, TrendingUp, BarChart, DollarSign, ArrowRight, Filter, Download } from 'lucide-react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart as RechartsBarChart, Bar, PieChart, Pie, Cell } from 'recharts';
 
 interface Props {
     state: AppState;
@@ -16,7 +16,7 @@ const FEED_TYPES = ['GRASS', 'TMR', 'WANDA', 'OTHER'];
 const UNIT_OPTIONS = ['KG', 'TON', 'BUNDLE', 'BAG'];
 
 export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpense, onAddFeed, onUpdateInventory, onDeleteFeed }) => {
-    const [activeTab, setActiveTab] = useState<'DASHBOARD' | 'PROCUREMENT' | 'INVENTORY' | 'SUPPLIERS'>('DASHBOARD');
+    const [activeTab, setActiveTab] = useState<'DASHBOARD' | 'PROCUREMENT' | 'INVENTORY' | 'SUPPLIERS' | 'ANALYTICS'>('DASHBOARD');
 
     // VENDOR ENTITIES LOGIC - STRICT INTEGRATION
     const vendorEntities = useMemo(() => state.entities.filter(ent => ent.type === 'VENDOR'), [state.entities]);
@@ -121,6 +121,55 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
 
         return { data: chartData, vendors: Array.from(vendorsSet) };
     }, [vendorExpenses, state.feed, vendorEntities]);
+
+    // NEW EXOTIC procurement data stats
+    const monthlySpendTrend = useMemo(() => {
+        const m = new Map<string, number>();
+        vendorExpenses.forEach(e => {
+            const month = e.date.substring(0, 7);
+            m.set(month, (m.get(month) || 0) + e.amount);
+        });
+        return Array.from(m.entries()).sort((a,b) => a[0].localeCompare(b[0])).map(([month, Total]) => ({ name: month, Total })).slice(-12);
+    }, [vendorExpenses]);
+
+    const topPurchasedItems = useMemo(() => {
+        const m = new Map<string, { qty: number, cost: number, bg: string }>();
+        vendorExpenses.forEach(e => {
+            const item = state.feed.find(f => f.id === e.feedItemId);
+            if (!item) return;
+            const ex = m.get(item.name) || { qty: 0, cost: 0, bg: item.feedType === 'GRASS' ? 'bg-emerald-500' : item.feedType === 'TMR' ? 'bg-blue-500' : 'bg-amber-500' };
+            m.set(item.name, { ...ex, qty: ex.qty + (e.weight || e.quantity || 0), cost: ex.cost + e.amount });
+        });
+        return Array.from(m.entries()).map(([name, data]) => ({ name, ...data })).sort((a,b) => b.cost - a.cost).slice(0, 5);
+    }, [vendorExpenses, state.feed]);
+
+    const vendorSpendDist = useMemo(() => {
+        const m = new Map<string, number>();
+        vendorExpenses.forEach(e => {
+            const vendorName = e.supplier === CASH_LABEL ? 'Cash' : (vendorEntities.find(v => v.id === e.supplier)?.name || 'Unknown');
+            m.set(vendorName, (m.get(vendorName) || 0) + e.amount);
+        });
+        return Array.from(m.entries()).map(([name, value]) => ({ name, value })).sort((a,b) => b.value - a.value);
+    }, [vendorExpenses, vendorEntities]);
+
+    const payablesAging = useMemo(() => {
+        const pending = vendorExpenses.filter(e => e.paymentStatus !== 'PAID');
+        const now = new Date().getTime();
+        let current = 0, days30 = 0, days60 = 0, days90 = 0;
+        pending.forEach(e => {
+            const diff = (now - new Date(e.date).getTime()) / (1000 * 3600 * 24);
+            if (diff <= 30) current += e.amount;
+            else if (diff <= 60) days30 += e.amount;
+            else if (diff <= 90) days60 += e.amount;
+            else days90 += e.amount;
+        });
+        return [
+            { name: '0-30 Days', amount: current, fill: '#10b981' },
+            { name: '31-60 Days', amount: days30, fill: '#f59e0b' },
+            { name: '61-90 Days', amount: days60, fill: '#f97316' },
+            { name: '> 90 Days', amount: days90, fill: '#ef4444' }
+        ].filter(x => x.amount > 0);
+    }, [vendorExpenses]);
 
     // Available items for procurement depending on category
     const availableProcurementItems = feedItems.filter(f => f.feedType === procurementForm.feedCategory || (!f.feedType && procurementForm.feedCategory === 'OTHER'));
@@ -382,6 +431,7 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
             <div className="flex flex-wrap gap-2 bg-white p-1.5 rounded-2xl border border-slate-200 shadow-sm w-fit">
                 {[
                     { id: 'DASHBOARD', label: 'Overview', icon: BarChart },
+                    { id: 'ANALYTICS', label: 'Analytics', icon: Activity },
                     { id: 'PROCUREMENT', label: 'Procure', icon: Truck },
                     { id: 'INVENTORY', label: 'Inventory', icon: Package },
                     { id: 'SUPPLIERS', label: 'Vendors', icon: User }
@@ -443,10 +493,26 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                     </div>
 
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                        <div className="lg:col-span-2 bg-white rounded-3xl border border-slate-200 p-6 flex flex-col justify-center items-center h-72 shadow-sm text-center">
-                            <BarChart className="text-slate-200 mb-4" size={64} />
-                            <h3 className="text-lg font-bold text-slate-700">Procurement & Analytics</h3>
-                            <p className="text-sm font-medium text-slate-400 max-w-sm mt-2">Comprehensive graphs for historical consumption limits and feed category distribution will be generated here as data populates.</p>
+                        <div className="lg:col-span-2 bg-white rounded-3xl border border-slate-200 p-6 shadow-sm">
+                            <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2"><TrendingUp size={18} className="text-emerald-500" /> Monthly Procurement Spend</h3>
+                            <div className="h-64">
+                                {monthlySpendTrend.length > 0 ? (
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <LineChart data={monthlySpendTrend} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+                                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
+                                            <XAxis dataKey="name" tick={{ fontSize: 12, fill: '#64748b', fontWeight: 600 }} axisLine={false} tickLine={false} />
+                                            <YAxis tick={{ fontSize: 12, fill: '#64748b', fontWeight: 600 }} axisLine={false} tickLine={false} tickFormatter={(value) => `v${value >= 1000 ? (value/1000).toFixed(0)+'k' : value}`} />
+                                            <Tooltip formatter={(value: number) => `PKR ${value.toLocaleString()}`} contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)' }} />
+                                            <Line type="monotone" dataKey="Total" stroke="#10b981" strokeWidth={4} dot={{ stroke: '#10b981', strokeWidth: 2, r: 6, fill: '#fff' }} activeDot={{ r: 8 }} />
+                                        </LineChart>
+                                    </ResponsiveContainer>
+                                ) : (
+                                    <div className="h-full flex flex-col items-center justify-center text-slate-400">
+                                        <TrendingUp size={48} className="mb-2 opacity-20" />
+                                        <p className="text-sm font-bold">No procurement history</p>
+                                    </div>
+                                )}
+                            </div>
                         </div>
                         <div className="lg:col-span-1 bg-gradient-to-b from-slate-50 to-white rounded-3xl border border-slate-200 p-6 shadow-sm">
                             <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2"><Package size={18} className="text-slate-500" /> Inventory Value Spread</h3>
@@ -468,6 +534,164 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                     );
                                 })}
                             </div>
+                            <div className="mt-8 space-y-4">
+                                <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2 text-sm"><Layers size={16} className="text-blue-500" /> Top Purchased Items</h3>
+                                {topPurchasedItems.map(item => (
+                                    <div key={item.name}>
+                                        <div className="flex justify-between text-xs font-bold text-slate-600 mb-1">
+                                            <span>{item.name}</span>
+                                            <span>PKR {(item.cost/1000).toFixed(1)}k</span>
+                                        </div>
+                                        <div className="w-full bg-slate-100 rounded-full h-1.5">
+                                            <div className={`${item.bg} h-1.5 rounded-full`} style={{ width: `${Math.min(100, (item.cost / (topPurchasedItems[0]?.cost || 1)) * 100)}%` }}></div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {activeTab === 'ANALYTICS' && (
+                <div className="space-y-6 animate-fade-in-up">
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        {/* Price Trend Chart */}
+                        <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+                            <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2"><TrendingUp size={18} className="text-emerald-500" /> Item Price Trend (PKR)</h3>
+                            <div className="h-72">
+                                {priceTrendData.length > 0 ? (
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <LineChart data={priceTrendData}>
+                                            <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                                            <XAxis dataKey="name" tick={{ fontSize: 12 }} />
+                                            <YAxis tick={{ fontSize: 12 }} />
+                                            <Tooltip contentStyle={{ borderRadius: '12px' }} />
+                                            <Legend wrapperStyle={{ fontSize: '12px' }} />
+                                            {feedItems.map((item, idx) => (
+                                                <Line key={item.id} type="monotone" dataKey={item.name} stroke={['#10b981', '#3b82f6', '#f59e0b', '#8b5cf6', '#ef4444'][idx % 5]} strokeWidth={3} dot={{ r: 4 }} connectNulls activeDot={{ r: 6 }} />
+                                            ))}
+                                        </LineChart>
+                                    </ResponsiveContainer>
+                                ) : (
+                                    <div className="h-full flex items-center justify-center text-slate-400">No sufficient data for pricing trend</div>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Payables Aging */}
+                        <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+                            <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2"><Clock size={18} className="text-red-500" /> Payables Aging Summary</h3>
+                            <div className="h-72">
+                                {payablesAging.length > 0 ? (
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <RechartsBarChart data={payablesAging} layout="vertical" margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+                                            <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+                                            <XAxis type="number" tickFormatter={(v) => `\${v >= 1000 ? v/1000+'k' : v}`} />
+                                            <YAxis dataKey="name" type="category" tick={{ fontSize: 12, fontWeight: 600 }} width={80} />
+                                            <Tooltip formatter={(value: number) => `PKR ${value.toLocaleString()}`} cursor={{ fill: 'transparent' }} contentStyle={{ borderRadius: '12px' }} />
+                                            <Bar dataKey="amount" radius={[0, 4, 4, 0]} barSize={32}>
+                                                {payablesAging.map((entry, index) => (
+                                                    <Cell key={`cell-${index}`} fill={entry.fill} />
+                                                ))}
+                                            </Bar>
+                                        </RechartsBarChart>
+                                    </ResponsiveContainer>
+                                ) : (
+                                    <div className="h-full flex items-center justify-center text-emerald-500 font-bold gap-2">
+                                        <CheckCircle size={24} /> No aging payables
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Vendor Spend Dist */}
+                        <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+                            <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2"><User size={18} className="text-blue-500" /> Spend by Vendor</h3>
+                            <div className="h-72">
+                                {vendorSpendDist.length > 0 ? (
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <PieChart>
+                                            <Pie data={vendorSpendDist} cx="50%" cy="50%" innerRadius={60} outerRadius={90} paddingAngle={4} dataKey="value">
+                                                {vendorSpendDist.map((_, i) => <Cell key={i} fill={['#10b981', '#3b82f6', '#f59e0b', '#8b5cf6', '#ef4444', '#14b8a6'][i % 6]} />)}
+                                            </Pie>
+                                            <Tooltip formatter={(v: number) => `PKR ${v.toLocaleString()}`} contentStyle={{ borderRadius: '12px' }} />
+                                            <Legend />
+                                        </PieChart>
+                                    </ResponsiveContainer>
+                                ) : (
+                                    <div className="h-full flex items-center justify-center text-slate-400">No spend data</div>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Vendor Comparison Chart */}
+                        <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+                            <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2"><BarChart size={18} className="text-purple-500" /> Vendor Item Rate Comparison</h3>
+                            <div className="h-72">
+                                {itemVendorComparisonData.data.length > 0 ? (
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <RechartsBarChart data={itemVendorComparisonData.data}>
+                                            <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                                            <XAxis dataKey="name" tick={{ fontSize: 12 }} />
+                                            <YAxis tick={{ fontSize: 12 }} />
+                                            <Tooltip contentStyle={{ borderRadius: '12px' }} />
+                                            <Legend wrapperStyle={{ fontSize: '12px' }} />
+                                            {itemVendorComparisonData.vendors.map((vendor, index) => (
+                                                <Bar key={vendor} dataKey={vendor} fill={['#10b981', '#3b82f6', '#f59e0b', '#8b5cf6'][index % 4]} radius={[4, 4, 0, 0]} />
+                                            ))}
+                                        </RechartsBarChart>
+                                    </ResponsiveContainer>
+                                ) : (
+                                    <div className="h-full flex items-center justify-center text-slate-400">No vendor data</div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Quick Analytics Summary */}
+                    <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm">
+                        <div className="p-4 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
+                            <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2"><Archive size={16} /> Procurement History Detail</h3>
+                            <button onClick={() => {
+                                const rows = vendorExpenses.map(e => ({ Date: e.date, Item: state.feed.find(x => x.id === e.feedItemId)?.name || '-', Vendor: vendorEntities.find(x => x.id === e.supplier)?.name || 'Cash', Rate: e.rate, Amount: e.amount, QtyWt: e.weight > 0 ? e.weight + ' kg' : e.quantity, Status: e.paymentStatus }));
+                                const csvStr = [Object.keys(rows[0] || {}).join(','), ...rows.map(r => Object.values(r).map(x => `"${x}"`).join(','))].join('\n');
+                                const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csvStr], { type: 'text/csv' })); a.download = 'history.csv'; a.click();
+                            }} className="flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-2 rounded-lg hover:bg-emerald-100 transition-colors">
+                                <Download size={13} /> Export Data
+                            </button>
+                        </div>
+                        <div className="max-h-80 overflow-y-auto">
+                            <table className="w-full text-left text-sm">
+                                <thead className="bg-white sticky top-0 border-b border-slate-200">
+                                    <tr className="text-xs text-slate-500 font-bold uppercase tracking-wider">
+                                        <th className="p-4">Date</th>
+                                        <th className="p-4">Item</th>
+                                        <th className="p-4">Vendor</th>
+                                        <th className="p-4 text-right">Qty/Wt</th>
+                                        <th className="p-4 text-right">Total (PKR)</th>
+                                        <th className="p-4 text-center">Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {vendorExpenses.length === 0 ? (
+                                        <tr><td colSpan={6} className="text-center py-8 text-slate-400 font-medium">No procurement logs found.</td></tr>
+                                    ) : (
+                                        vendorExpenses.map((exp, idx) => (
+                                            <tr key={idx} className="hover:bg-slate-50 transition-colors">
+                                                <td className="p-4 font-medium text-slate-700">{exp.date}</td>
+                                                <td className="p-4 font-bold text-slate-800">{state.feed.find(x => x.id === exp.feedItemId)?.name || '-'}</td>
+                                                <td className="p-4 text-slate-600">{exp.supplier === CASH_LABEL ? 'Cash' : vendorEntities.find(v => v.id === exp.supplier)?.name}</td>
+                                                <td className="p-4 text-right text-slate-600">{exp.weight > 0 ? `${exp.weight} kg` : exp.quantity}</td>
+                                                <td className="p-4 text-right font-bold text-emerald-600">{exp.amount.toLocaleString()}</td>
+                                                <td className="p-4 text-center">
+                                                    <span className={`text-[10px] font-black px-2 py-1 rounded-full ${exp.paymentStatus === 'PAID' ? 'bg-emerald-100 text-emerald-700' : exp.paymentStatus === 'PENDING' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>{exp.paymentStatus}</span>
+                                                </td>
+                                            </tr>
+                                        ))
+                                    )}
+                                </tbody>
+                            </table>
                         </div>
                     </div>
                 </div>
