@@ -336,6 +336,56 @@ export const backendService = {
         return handleResponse(res);
     },
 
+    /** Aggregated reporting — same base URL as financials/operations (VITE_API_URL unchanged). */
+    getReportsInventoryMovement: async (params: { farmId?: string; startDate: string; endDate: string }): Promise<
+        { feedItemId: string; name: string; openingStock: number; qtyReceived: number; qtyConsumed: number; closingStock: number; variance: number }[]
+    > => {
+        const sp = new URLSearchParams();
+        sp.set('startDate', params.startDate);
+        sp.set('endDate', params.endDate);
+        if (params.farmId != null && params.farmId !== '') sp.set('farmId', params.farmId);
+        const res = await fetch(`${API_BASE_URL}/reports/inventory-movement?${sp}`, { headers: apiHeaders() });
+        return handleResponse(res);
+    },
+    getReportsAnimalProfitability: async (params: { farmId: string; status?: string }): Promise<
+        { animalId: string; tagId: string; category: string; status: string; purchaseCost: number; feedCost: number; medicalCost: number; totalCost: number; saleValue: number; profit: number }[]
+    > => {
+        const sp = new URLSearchParams();
+        sp.set('farmId', params.farmId);
+        if (params.status && params.status !== 'ALL') sp.set('status', params.status);
+        const res = await fetch(`${API_BASE_URL}/reports/animal-profitability?${sp}`, { headers: apiHeaders() });
+        return handleResponse(res);
+    },
+    getReportsFinancialOverview: async (params: {
+        farmId?: string;
+        interval?: 'monthly' | 'weekly' | 'daily';
+        startDate?: string;
+        endDate?: string;
+        accrual?: boolean;
+    }): Promise<{
+        metrics: { totalRevenue: number; totalExpenses: number; profit: number };
+        revenueByCategory: { name: string; value: number }[];
+        expenseByCategory: { name: string; value: number }[];
+        timeSeries: { period: string; revenue: number; expenses: number; profit: number }[];
+    }> => {
+        const sp = new URLSearchParams();
+        if (params.farmId != null && params.farmId !== '') sp.set('farmId', params.farmId);
+        if (params.interval) sp.set('interval', params.interval);
+        if (params.startDate) sp.set('startDate', params.startDate);
+        if (params.endDate) sp.set('endDate', params.endDate);
+        sp.set('accrual', String(params.accrual ?? false));
+        const res = await fetch(`${API_BASE_URL}/reports/financial-overview?${sp}`, { headers: apiHeaders() });
+        return handleResponse(res);
+    },
+    getReportsVendorPayables: async (params: { farmId?: string }): Promise<
+        { vendorKey: string; vendor: string; totalBilled: number; totalPaid: number; outstanding: number; overdueAmount: number }[]
+    > => {
+        const sp = new URLSearchParams();
+        if (params.farmId != null && params.farmId !== '') sp.set('farmId', params.farmId);
+        const res = await fetch(`${API_BASE_URL}/reports/vendor-payables?${sp}`, { headers: apiHeaders() });
+        return handleResponse(res);
+    },
+
     // Categories (chart of accounts)
     getCategories: async (type?: string): Promise<{ id: string; type: string; name: string; code?: string; parentId?: string; sortOrder?: number }[]> => {
         const url = type ? `${API_BASE_URL}/categories?type=${encodeURIComponent(type)}` : `${API_BASE_URL}/categories`;

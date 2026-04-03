@@ -1,14 +1,16 @@
 
-import React, { useState, useMemo } from 'react';
-import { AppState, Livestock, Expense, Sale } from '../types';
+import React, { useState, useMemo, useEffect } from 'react';
+import { AppState, Sale } from '../types';
+import { backendService } from '../services/backendService';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell, AreaChart, Area } from 'recharts';
 import { FileText, Download, Filter, TrendingUp, DollarSign, Activity, Calendar, Package, AlertTriangle, CheckCircle, Layers } from 'lucide-react';
 
 interface Props {
     state: AppState;
+    currentFarmId: string | null;
 }
 
-export const Reports: React.FC<Props> = ({ state }) => {
+export const Reports: React.FC<Props> = ({ state, currentFarmId }) => {
     const [activeReport, setActiveReport] = useState<'FINANCIAL' | 'HERD' | 'OPERATIONS' | 'DETAILED_LOGS' | 'FEED' | 'INVENTORY'>('FINANCIAL');
     const [dateRange, setDateRange] = useState({ start: '', end: '' });
     const [logPeriod, setLogPeriod] = useState<'DAILY' | 'WEEKLY' | 'MONTHLY'>('DAILY');
@@ -28,6 +30,11 @@ export const Reports: React.FC<Props> = ({ state }) => {
     const [finSub, setFinSub] = useState<'OVERVIEW' | 'ANIMAL_PROFITABILITY'>('OVERVIEW');
     const [finAccrual, setFinAccrual] = useState<boolean>(true);
     const [finAnimalStatus, setFinAnimalStatus] = useState<string>('ALL');
+
+    const [finOverviewServer, setFinOverviewServer] = useState<Awaited<ReturnType<typeof backendService.getReportsFinancialOverview>> | null>(null);
+    const [invMovementServer, setInvMovementServer] = useState<Awaited<ReturnType<typeof backendService.getReportsInventoryMovement>> | undefined>(undefined);
+    const [animalPlServer, setAnimalPlServer] = useState<Awaited<ReturnType<typeof backendService.getReportsAnimalProfitability>> | undefined>(undefined);
+    const [reportsLoading, setReportsLoading] = useState<{ financial?: boolean; movement?: boolean; animalPl?: boolean }>({});
 
     // Compute date window for feed reports
     const feedDateWindow = useMemo(() => {
@@ -174,7 +181,7 @@ export const Reports: React.FC<Props> = ({ state }) => {
         return { start: d.toISOString().split('T')[0], end };
     }, [invPeriod]);
 
-    const inventoryMovement = useMemo(() => {
+    const inventoryMovementClient = useMemo(() => {
         const feedItems = state.feed.filter(f => f.category === 'FEED' || !f.category || f.feedType);
         return feedItems.filter(f => invCategoryFilter === 'ALL' || f.feedType === invCategoryFilter).map(item => {
             const expensesInPeriod = state.expenses.filter(e => e.feedItemId === item.id && e.date >= invDateWindow.start && e.date <= invDateWindow.end);
@@ -185,6 +192,27 @@ export const Reports: React.FC<Props> = ({ state }) => {
             return { name: item.name, type: item.feedType || '—', unit: item.unit || 'KG', openingStock: Math.max(0, openingStock), qtyReceived, qtyConsumed, closingStock: item.quantity, variance: 0 };
         });
     }, [state.feed, state.expenses, state.consumptionLogs, invDateWindow, invCategoryFilter]);
+
+    const inventoryMovement = useMemo(() => {
+        if (currentFarmId && Array.isArray(invMovementServer)) {
+            return invMovementServer.map(row => {
+                const item = state.feed.find(f => f.id === row.feedItemId);
+                const type = item?.feedType || '—';
+                if (invCategoryFilter !== 'ALL' && type !== invCategoryFilter) return null;
+                return {
+                    name: row.name,
+                    type,
+                    unit: item?.unit || 'KG',
+                    openingStock: row.openingStock,
+                    qtyReceived: row.qtyReceived,
+                    qtyConsumed: row.qtyConsumed,
+                    closingStock: row.closingStock,
+                    variance: row.variance,
+                };
+            }).filter(Boolean) as { name: string; type: string; unit: string; openingStock: number; qtyReceived: number; qtyConsumed: number; closingStock: number; variance: number }[];
+        }
+        return inventoryMovementClient;
+    }, [currentFarmId, invMovementServer, inventoryMovementClient, state.feed, invCategoryFilter]);
 
     const FEED_COLORS = ['#10b981', '#3b82f6', '#f59e0b', '#8b5cf6', '#ef4444', '#14b8a6'];
 
@@ -243,7 +271,59 @@ export const Reports: React.FC<Props> = ({ state }) => {
         return { start: d.toISOString().split('T')[0], end };
     }, [finPeriod]);
 
-    const { finMetrics, finRevenueByCategory, finExpenseByCategory } = useMemo(() => {
+    useEffect(() => {
+        if (activeReport !== 'FINANCIAL' || finSub !== 'OVERVIEW') {
+            setFinOverviewServer(null);
+            return;
+        }
+        let cancelled = false;
+        setReportsLoading(p => ({ ...p, financial: true }));
+        backendService.getReportsFinancialOverview({
+            farmId: currentFarmId || undefined,
+            interval: 'monthly',
+            startDate: finDateWindow.start,
+            endDate: finDateWindow.end,
+            accrual: finAccrual,
+        })
+            .then(data => { if (!cancelled) setFinOverviewServer(data); })
+            .catch(() => { if (!cancelled) setFinOverviewServer(null); })
+            .finally(() => { if (!cancelled) setReportsLoading(p => ({ ...p, financial: false })); });
+        return () => { cancelled = true; };
+    }, [activeReport, finSub, currentFarmId, finDateWindow.start, finDateWindow.end, finAccrual]);
+
+    useEffect(() => {
+        if (activeReport !== 'INVENTORY' || invSub !== 'MOVEMENT' || !currentFarmId) {
+            setInvMovementServer(undefined);
+            return;
+        }
+        let cancelled = false;
+        setReportsLoading(p => ({ ...p, movement: true }));
+        backendService.getReportsInventoryMovement({
+            farmId: currentFarmId,
+            startDate: invDateWindow.start,
+            endDate: invDateWindow.end,
+        })
+            .then(data => { if (!cancelled) setInvMovementServer(data); })
+            .catch(() => { if (!cancelled) setInvMovementServer(undefined); })
+            .finally(() => { if (!cancelled) setReportsLoading(p => ({ ...p, movement: false })); });
+        return () => { cancelled = true; };
+    }, [activeReport, invSub, currentFarmId, invDateWindow.start, invDateWindow.end]);
+
+    useEffect(() => {
+        if (activeReport !== 'FINANCIAL' || finSub !== 'ANIMAL_PROFITABILITY' || !currentFarmId) {
+            setAnimalPlServer(undefined);
+            return;
+        }
+        let cancelled = false;
+        setReportsLoading(p => ({ ...p, animalPl: true }));
+        backendService.getReportsAnimalProfitability({ farmId: currentFarmId, status: finAnimalStatus })
+            .then(data => { if (!cancelled) setAnimalPlServer(data); })
+            .catch(() => { if (!cancelled) setAnimalPlServer(undefined); })
+            .finally(() => { if (!cancelled) setReportsLoading(p => ({ ...p, animalPl: false })); });
+        return () => { cancelled = true; };
+    }, [activeReport, finSub, currentFarmId, finAnimalStatus]);
+
+    const { finMetrics: finMetricsClient, finRevenueByCategory: finRevClient, finExpenseByCategory: finExpClient } = useMemo(() => {
         const expenses = state.expenses.filter(e => e.date >= finDateWindow.start && e.date <= finDateWindow.end);
         const sales = state.sales.filter(s => s.date >= finDateWindow.start && s.date <= finDateWindow.end);
 
@@ -263,7 +343,11 @@ export const Reports: React.FC<Props> = ({ state }) => {
             accrualExp = cashExp - (inventoryPurchased - inventoryConsumed);
         }
 
-        const revCats = sales.reduce((acc, s) => { acc[s.category] = (acc[s.category] || 0) + s.amount; return acc; }, {} as Record<string, number>);
+        const revCats = sales.reduce((acc, s) => {
+            const key = (s as Sale & { category?: string }).category ?? s.itemType ?? 'OTHER';
+            acc[key] = (acc[key] || 0) + s.amount;
+            return acc;
+        }, {} as Record<string, number>);
         const expCats = expenses.reduce((acc, e) => { acc[e.category] = (acc[e.category] || 0) + e.amount; return acc; }, {} as Record<string, number>);
 
         const revData = Object.keys(revCats).map(name => ({ name, value: revCats[name] }));
@@ -272,15 +356,33 @@ export const Reports: React.FC<Props> = ({ state }) => {
         return { finMetrics: { revenue: cashRev, expenses: accrualExp, profit: cashRev - accrualExp }, finRevenueByCategory: revData, finExpenseByCategory: expData };
     }, [state.expenses, state.sales, finDateWindow, finAccrual, state.consumptionLogs, state.treatmentLogs]);
 
-    const animalProfitability = useMemo(() => {
+    const finMetrics = finOverviewServer != null && finOverviewServer.metrics
+        ? { revenue: finOverviewServer.metrics.totalRevenue, expenses: finOverviewServer.metrics.totalExpenses, profit: finOverviewServer.metrics.profit }
+        : finMetricsClient;
+    const finRevenueByCategory = finOverviewServer != null && finOverviewServer.revenueByCategory ? finOverviewServer.revenueByCategory : finRevClient;
+    const finExpenseByCategory = finOverviewServer != null && finOverviewServer.expenseByCategory ? finOverviewServer.expenseByCategory : finExpClient;
+
+    const monthlyChartData = useMemo(() => {
+        if (finOverviewServer?.timeSeries?.length) {
+            return finOverviewServer.timeSeries.map(t => ({
+                name: t.period,
+                Revenue: t.revenue,
+                Expenses: t.expenses,
+                Profit: t.profit,
+            }));
+        }
+        return monthlyData;
+    }, [finOverviewServer, monthlyData]);
+
+    const animalProfitabilityClient = useMemo(() => {
         return state.livestock.filter(a => finAnimalStatus === 'ALL' || a.status === finAnimalStatus).map(animal => {
-            const feedCost = (state.consumptionLogs || []).filter(l => l.animalId === animal.tagId).reduce((sum, l) => sum + l.cost, 0);
-            const medicalCost = (state.treatmentLogs || []).filter(l => l.animalId === animal.tagId).reduce((sum, l) => sum + l.cost, 0);
-            const purchaseCost = animal.purchaseCost || 0;
+            const feedCost = (state.consumptionLogs || []).filter(l => l.animalId === animal.id || l.animalId === animal.tagId).reduce((sum, l) => sum + l.cost, 0);
+            const medicalCost = (state.treatmentLogs || []).filter(l => l.animalId === animal.id || l.animalId === animal.tagId).reduce((sum, l) => sum + l.cost, 0);
+            const purchaseCost = animal.purchasePrice ?? 0;
             const totalCost = purchaseCost + feedCost + medicalCost;
             let saleValue = 0;
             if (animal.status === 'SOLD') {
-                const saleRecord = state.sales.find(s => s.category === 'ANIMAL' && s.description?.includes(animal.tagId));
+                const saleRecord = state.sales.find(s => s.itemType === 'ANIMAL' && (s.soldAnimalIds?.includes(animal.id) || (animal.tagId && s.description?.includes(animal.tagId))));
                 saleValue = saleRecord ? saleRecord.amount : 0;
             }
             return {
@@ -289,6 +391,23 @@ export const Reports: React.FC<Props> = ({ state }) => {
             };
         }).sort((a,b) => b.profit - a.profit);
     }, [state.livestock, state.consumptionLogs, state.treatmentLogs, state.sales, finAnimalStatus]);
+
+    const animalProfitability = useMemo(() => {
+        if (currentFarmId && Array.isArray(animalPlServer)) {
+            return animalPlServer.map(r => ({
+                id: r.tagId || r.animalId,
+                category: r.category,
+                status: r.status,
+                purchaseCost: r.purchaseCost,
+                feedCost: r.feedCost,
+                medicalCost: r.medicalCost,
+                totalCost: r.totalCost,
+                saleValue: r.saleValue,
+                profit: r.profit,
+            }));
+        }
+        return animalProfitabilityClient;
+    }, [currentFarmId, animalPlServer, animalProfitabilityClient]);
 
     // --- HERD CALCS ---
     const calculateHerdStats = () => {
@@ -885,7 +1004,7 @@ export const Reports: React.FC<Props> = ({ state }) => {
                                     <h3 className="font-bold text-gray-800 mb-4 text-sm flex items-center gap-2"><TrendingUp size={15} className="text-emerald-500"/> Profit & Loss Trend (Last 6 Mo)</h3>
                                     <div className="h-64">
                                         <ResponsiveContainer width="100%" height="100%">
-                                            <AreaChart data={monthlyData} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
+                                            <AreaChart data={monthlyChartData} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
                                                 <defs>
                                                     <linearGradient id="colorProfit" x1="0" y1="0" x2="0" y2="1">
                                                         <stop offset="5%" stopColor="#10B981" stopOpacity={0.3}/>

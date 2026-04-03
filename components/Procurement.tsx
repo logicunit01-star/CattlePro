@@ -1,4 +1,5 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { backendService } from '../services/backendService';
 import { AppState, Expense, FeedInventory, ExpenseCategory } from '../types';
 import { Truck, ShoppingCart, User, AlertTriangle, CheckCircle, Clock, Search, Layers, Archive, Activity, RefreshCw, MinusCircle, Edit2, X, Save, Plus, Package, TrendingUp, BarChart, DollarSign, ArrowRight, Filter, Download } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart as RechartsBarChart, Bar, PieChart, Pie, Cell } from 'recharts';
@@ -56,6 +57,19 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
     const totalStockValue = feedItems.reduce((sum, item) => sum + (item.quantity * item.unitCost), 0);
     const lowStockCount = feedItems.filter(i => i.quantity <= i.reorderLevel).length;
     const [searchTerm, setSearchTerm] = useState('');
+    const [vendorPayablesReport, setVendorPayablesReport] = useState<Awaited<ReturnType<typeof backendService.getReportsVendorPayables>> | undefined>(undefined);
+
+    useEffect(() => {
+        if (!state.currentFarmId) {
+            setVendorPayablesReport(undefined);
+            return;
+        }
+        let cancelled = false;
+        backendService.getReportsVendorPayables({ farmId: state.currentFarmId })
+            .then(rows => { if (!cancelled) setVendorPayablesReport(rows); })
+            .catch(() => { if (!cancelled) setVendorPayablesReport(undefined); });
+        return () => { cancelled = true; };
+    }, [state.currentFarmId, state.expenses.length]);
 
     const vendorExpenses = useMemo(() => {
         let expenses = state.expenses.filter(e => e.category === 'FEED');
@@ -491,6 +505,35 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                             <p className="text-xs text-slate-500 font-medium mt-4">Linked entity accounts</p>
                         </div>
                     </div>
+
+                    {vendorPayablesReport && vendorPayablesReport.length > 0 && (
+                        <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm overflow-x-auto">
+                            <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2"><DollarSign size={18} className="text-indigo-500" /> Vendor payables (all categories)</h3>
+                            <p className="text-xs text-slate-500 mb-3">Aggregated from bills/expenses by supplier (server report).</p>
+                            <table className="min-w-full text-xs">
+                                <thead>
+                                    <tr className="text-left text-slate-500 border-b border-slate-100">
+                                        <th className="py-2 pr-4">Vendor</th>
+                                        <th className="py-2 pr-4 text-right">Total billed</th>
+                                        <th className="py-2 pr-4 text-right">Total paid</th>
+                                        <th className="py-2 pr-4 text-right">Outstanding</th>
+                                        <th className="py-2 text-right">Overdue</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {vendorPayablesReport.slice(0, 12).map(row => (
+                                        <tr key={row.vendorKey} className="border-b border-slate-50 hover:bg-slate-50/80">
+                                            <td className="py-2.5 font-semibold text-slate-700">{row.vendor}</td>
+                                            <td className="py-2.5 text-right text-slate-600">{row.totalBilled.toLocaleString()}</td>
+                                            <td className="py-2.5 text-right text-emerald-600">{row.totalPaid.toLocaleString()}</td>
+                                            <td className="py-2.5 text-right font-bold text-amber-600">{row.outstanding.toLocaleString()}</td>
+                                            <td className="py-2.5 text-right text-red-500 font-bold">{row.overdueAmount.toLocaleString()}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
 
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                         <div className="lg:col-span-2 bg-white rounded-3xl border border-slate-200 p-6 shadow-sm">

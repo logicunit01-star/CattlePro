@@ -1308,7 +1308,7 @@ const App: React.FC = () => {
                 onDeleteFeed={async (id) => { try { await backendService.deleteFeed(id); setState(p => ({ ...p, feed: p.feed.filter(f => f.id !== id) })); } catch (e) { alert('Failed to delete feed item'); } }}
               />
             )}
-            {activeView === 'REPORTS' && <Reports state={{
+            {activeView === 'REPORTS' && <Reports currentFarmId={state.currentFarmId} state={{
               ...state,
               livestock: state.currentFarmId ? state.livestock.filter(l => l.farmId === state.currentFarmId) : (state.currentLocationId ? state.livestock.filter(l => state.farms.find(f => f.id === l.farmId)?.locationId === state.currentLocationId) : []),
               expenses: state.currentFarmId ? state.expenses.filter(e => e.farmId === state.currentFarmId) : (state.currentLocationId ? state.expenses.filter(e => state.farms.find(f => f.id === e.farmId)?.locationId === state.currentLocationId) : []),
