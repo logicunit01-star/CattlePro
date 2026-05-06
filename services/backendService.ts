@@ -625,6 +625,148 @@ export const backendService = {
         return handleResponse(res);
     },
 
+    // --- API GAP CHANGES: USERS & NOTIFICATIONS ---
+    getUsers: async (): Promise<any[]> => {
+        const res = await fetch(`${API_BASE_URL}/users`, { headers: apiHeaders() });
+        return handleResponse(res);
+    },
+    createUser: async (data: any): Promise<any> => {
+        const res = await fetch(`${API_BASE_URL}/users`, { method: 'POST', headers: apiHeaders(true), body: JSON.stringify(data) });
+        return handleResponse(res);
+    },
+    updateUser: async (id: string, data: any): Promise<any> => {
+        const res = await fetch(`${API_BASE_URL}/users/${id}`, { method: 'PUT', headers: apiHeaders(true), body: JSON.stringify(data) });
+        return handleResponse(res);
+    },
+    deleteUser: async (id: string): Promise<void> => {
+        const res = await fetch(`${API_BASE_URL}/users/${id}`, { method: 'DELETE', headers: apiHeaders() });
+        await handleDeleteResponse(res);
+    },
+    getNotifications: async (status?: string): Promise<any[]> => {
+        const url = status ? `${API_BASE_URL}/notifications?status=${encodeURIComponent(status)}` : `${API_BASE_URL}/notifications`;
+        const res = await fetch(url, { headers: apiHeaders() });
+        return handleResponse(res);
+    },
+    createNotification: async (data: any): Promise<any> => {
+        const res = await fetch(`${API_BASE_URL}/notifications`, { method: 'POST', headers: apiHeaders(true), body: JSON.stringify(data) });
+        return handleResponse(res);
+    },
+    markNotificationRead: async (id: string): Promise<any> => {
+        const res = await fetch(`${API_BASE_URL}/notifications/${id}/read`, { method: 'PATCH', headers: apiHeaders() });
+        return handleResponse(res);
+    },
+    registerDevice: async (deviceInfo: any): Promise<any> => {
+        const res = await fetch(`${API_BASE_URL}/notifications/register-device`, { method: 'POST', headers: apiHeaders(true), body: JSON.stringify(deviceInfo) });
+        return handleResponse(res);
+    },
+    updateNotificationPreferences: async (preferences: any): Promise<any> => {
+        const res = await fetch(`${API_BASE_URL}/notifications/preferences`, { method: 'POST', headers: apiHeaders(true), body: JSON.stringify(preferences) });
+        return handleResponse(res);
+    },
+
+    // --- API GAP CHANGES: PALAI ---
+    getPalaiClients: async (farmId?: string): Promise<Entity[]> => {
+        const url = farmId ? `${API_BASE_URL}/palai/clients?farmId=${encodeURIComponent(farmId)}` : `${API_BASE_URL}/palai/clients`;
+        const res = await fetch(url, { headers: apiHeaders() });
+        return handleResponse(res);
+    },
+    createPalaiClient: async (data: Entity): Promise<Entity> => {
+        const res = await fetch(`${API_BASE_URL}/palai/clients`, { method: 'POST', headers: apiHeaders(true), body: JSON.stringify(data) });
+        return handleResponse(res);
+    },
+    createPalaiInvoice: async (data: Sale): Promise<Sale> => {
+        const res = await fetch(`${API_BASE_URL}/palai/invoices`, { method: 'POST', headers: apiHeaders(true), body: JSON.stringify(data) });
+        return handleResponse(res);
+    },
+    payPalaiInvoice: async (id: string, payment: { amount: number, date: string, paymentMethod?: string, notes?: string }): Promise<any> => {
+        const res = await fetch(`${API_BASE_URL}/palai/invoices/${id}/payments`, { method: 'POST', headers: apiHeaders(true), body: JSON.stringify(payment) });
+        return handleResponse(res);
+    },
+    assignPalaiLivestock: async (request: { livestockId: string; clientId: string }): Promise<void> => {
+        const res = await fetch(`${API_BASE_URL}/palai/assignments`, { method: 'POST', headers: apiHeaders(true), body: JSON.stringify(request) });
+        await handleDeleteResponse(res);
+    },
+    getPalaiSummary: async (farmId?: string): Promise<any> => {
+        const url = farmId ? `${API_BASE_URL}/palai/summary?farmId=${encodeURIComponent(farmId)}` : `${API_BASE_URL}/palai/summary`;
+        const res = await fetch(url, { headers: apiHeaders() });
+        return handleResponse(res);
+    },
+
+    // --- API GAP CHANGES: LIVESTOCK PATCHES ---
+    patchLivestockStatus: async (id: string, request: { status?: string, palaiCustomerId?: string }): Promise<void> => {
+        const res = await fetch(`${API_BASE_URL}/livestock/${id}/status`, { method: 'PATCH', headers: apiHeaders(true), body: JSON.stringify(request) });
+        await handleDeleteResponse(res);
+    },
+    patchPalaiAssignment: async (id: string, assignment: any): Promise<void> => {
+        const res = await fetch(`${API_BASE_URL}/livestock/${id}/palai-assignment`, { method: 'PATCH', headers: apiHeaders(true), body: JSON.stringify(assignment) });
+        await handleDeleteResponse(res);
+    },
+
+    // --- API GAP CHANGES: FINANCE TARGETED PAYMENTS & ENTITY LEDGER ---
+    expensePayment: async (id: string, payment: { amount: number, date: string, paymentMethod?: string, notes?: string }): Promise<any> => {
+        const res = await fetch(`${API_BASE_URL}/finance/expenses/${id}/payments`, { method: 'POST', headers: apiHeaders(true), body: JSON.stringify(payment) });
+        return handleResponse(res);
+    },
+    salePayment: async (id: string, payment: { amount: number, date: string, paymentMethod?: string, notes?: string }): Promise<any> => {
+        const res = await fetch(`${API_BASE_URL}/finance/sales/${id}/payments`, { method: 'POST', headers: apiHeaders(true), body: JSON.stringify(payment) });
+        return handleResponse(res);
+    },
+    balanceAdjustment: async (id: string, request: { amount: number, direction: string, date: string, reason?: string }): Promise<Entity> => {
+        const res = await fetch(`${API_BASE_URL}/entities/${id}/balance-adjustment`, { method: 'PATCH', headers: apiHeaders(true), body: JSON.stringify(request) });
+        return handleResponse(res);
+    },
+    getEntityLedger: async (id: string): Promise<LedgerRecord[]> => {
+        const res = await fetch(`${API_BASE_URL}/entities/${id}/ledger`, { headers: apiHeaders() });
+        return handleResponse(res);
+    },
+    getFinanceSummary: async (farmId?: string, from?: string, to?: string): Promise<any> => {
+        const sp = new URLSearchParams();
+        if (farmId) sp.set('farmId', farmId);
+        if (from) sp.set('from', from);
+        if (to) sp.set('to', to);
+        const res = await fetch(`${API_BASE_URL}/finance/summary?${sp}`, { headers: apiHeaders() });
+        return handleResponse(res);
+    },
+
+    // --- API GAP CHANGES: PROCUREMENT & INVENTORY ---
+    feedPurchase: async (request: any): Promise<any> => {
+        const res = await fetch(`${API_BASE_URL}/procurement/feed-purchases`, { method: 'POST', headers: apiHeaders(true), body: JSON.stringify(request) });
+        return handleResponse(res);
+    },
+    adjustFeedById: async (id: string, request: { feedItemId?: string, direction: string, quantity: number, reason?: string }): Promise<FeedInventory> => {
+        const res = await fetch(`${API_BASE_URL}/operations/feed/${id}/adjustments`, { method: 'POST', headers: apiHeaders(true), body: JSON.stringify(request) });
+        return handleResponse(res);
+    },
+    adjustFeed: async (request: { feedItemId: string, direction: string, quantity: number, reason?: string }): Promise<FeedInventory> => {
+        const res = await fetch(`${API_BASE_URL}/operations/feed/adjustments`, { method: 'POST', headers: apiHeaders(true), body: JSON.stringify(request) });
+        return handleResponse(res);
+    },
+    getLowStock: async (farmId?: string): Promise<FeedInventory[]> => {
+        const url = farmId ? `${API_BASE_URL}/operations/low-stock?farmId=${encodeURIComponent(farmId)}` : `${API_BASE_URL}/operations/low-stock`;
+        const res = await fetch(url, { headers: apiHeaders() });
+        return handleResponse(res);
+    },
+    getLowStockFeed: async (farmId?: string): Promise<FeedInventory[]> => {
+        const url = farmId ? `${API_BASE_URL}/operations/feed/low-stock?farmId=${encodeURIComponent(farmId)}` : `${API_BASE_URL}/operations/feed/low-stock`;
+        const res = await fetch(url, { headers: apiHeaders() });
+        return handleResponse(res);
+    },
+    getInventoryValuation: async (farmId?: string): Promise<any[]> => {
+        const url = farmId ? `${API_BASE_URL}/operations/inventory/valuation?farmId=${encodeURIComponent(farmId)}` : `${API_BASE_URL}/operations/inventory/valuation`;
+        const res = await fetch(url, { headers: apiHeaders() });
+        return handleResponse(res);
+    },
+
+    // --- API GAP CHANGES: ADVANCED OPERATIONS ---
+    processDietPlanById: async (id: string, request: { dietPlanIds?: string[], date?: string, animalIds?: string[] }): Promise<any> => {
+        const res = await fetch(`${API_BASE_URL}/operations/diet-plans/${id}/process`, { method: 'POST', headers: apiHeaders(true), body: JSON.stringify(request) });
+        return handleResponse(res);
+    },
+    deleteConsumptionLogsBatch: async (ids: string[]): Promise<void> => {
+        const res = await fetch(`${API_BASE_URL}/operations/consumption-logs/delete-batch`, { method: 'POST', headers: apiHeaders(true), body: JSON.stringify(ids) });
+        await handleDeleteResponse(res);
+    },
+
     // Auth (Mock – used when no URL params)
     login: async (email: string, password: string): Promise<{ user: { name: string; email: string }, token: string }> => {
         await new Promise(resolve => setTimeout(resolve, 1000));

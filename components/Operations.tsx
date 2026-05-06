@@ -3,8 +3,9 @@ import React, { useState, useEffect } from 'react';
 import { AppState, Livestock, FeedInventory, Infrastructure, DietPlan, TreatmentProtocol, TreatmentLog, TreatmentItem, MaintenanceRecord, ExpenseCategory } from '../types';
 import { backendService } from '../services/backendService';
 import { Warehouse, Construction, AlertCircle, Plus, Trash2, Edit2, Tag, X, Save, CheckCircle, ArrowLeft, Utensils, CalendarClock, Beef, Upload, Image as ImageIcon, Stethoscope, Pill, Calendar, ChevronRight, RotateCcw, PlayCircle, ListChecks, Users, FlaskConical } from 'lucide-react';
+import { ActivityFeed } from './ActivityFeed';
 
-export type OperationsTab = 'FEED' | 'MEDICINE' | 'SUPPLIES' | 'INFRA' | 'DIET';
+export type OperationsTab = 'ACTIVITY' | 'FEED' | 'MEDICINE' | 'SUPPLIES' | 'INFRA' | 'DIET';
 
 interface Props {
     state: AppState;
@@ -33,7 +34,7 @@ interface Props {
 
 export const Operations: React.FC<Props> = ({
     state,
-    initialTab = 'FEED',
+    initialTab = 'ACTIVITY',
     onTabChange,
     onAddFeed,
     onUpdateFeed,
@@ -632,35 +633,54 @@ export const Operations: React.FC<Props> = ({
             {viewMode === 'LIST' && (
                 <div className="border-b border-gray-200 flex space-x-6 overflow-x-auto">
                     <button
+                        onClick={() => setActiveTabAndNotify('ACTIVITY')}
+                        className={`pb-3 px-2 font-medium text-sm transition-colors border-b-2 whitespace-nowrap ${activeTab === 'ACTIVITY' ? 'border-emerald-500 text-emerald-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                        title="View chronological activity feed of operations"
+                    >
+                        Activity Feed
+                    </button>
+                    <button
                         onClick={() => setActiveTabAndNotify('FEED')}
                         className={`pb-3 px-2 font-medium text-sm transition-colors border-b-2 whitespace-nowrap ${activeTab === 'FEED' ? 'border-emerald-500 text-emerald-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                        title="Manage feed and nutrition inventory"
                     >
                         Feed Stock
                     </button>
                     <button
                         onClick={() => setActiveTabAndNotify('MEDICINE')}
                         className={`pb-3 px-2 font-medium text-sm transition-colors border-b-2 whitespace-nowrap ${activeTab === 'MEDICINE' ? 'border-emerald-500 text-emerald-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                        title="Manage veterinary medicines and protocols"
                     >
                         Medicine Cabinet
                     </button>
                     <button
                         onClick={() => setActiveTabAndNotify('SUPPLIES')}
                         className={`pb-3 px-2 font-medium text-sm transition-colors border-b-2 whitespace-nowrap ${activeTab === 'SUPPLIES' ? 'border-emerald-500 text-emerald-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                        title="Manage general farm supplies"
                     >
                         Farm Supplies
                     </button>
                     <button
                         onClick={() => setActiveTabAndNotify('INFRA')}
                         className={`pb-3 px-2 font-medium text-sm transition-colors border-b-2 whitespace-nowrap ${activeTab === 'INFRA' ? 'border-emerald-500 text-emerald-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                        title="Manage buildings, vehicles, and equipment"
                     >
                         Fixed Assets
                     </button>
                     <button
                         onClick={() => setActiveTabAndNotify('DIET')}
                         className={`pb-3 px-2 font-medium text-sm transition-colors border-b-2 whitespace-nowrap ${activeTab === 'DIET' ? 'border-emerald-500 text-emerald-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                        title="Configure diet plans and daily rations"
                     >
                         Diets
                     </button>
+                </div>
+            )}
+
+            {/* --- ACTIVITY CONTENT --- */}
+            {activeTab === 'ACTIVITY' && (
+                <div className="animate-fade-in py-6">
+                    <ActivityFeed state={state} />
                 </div>
             )}
 

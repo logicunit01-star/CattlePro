@@ -5,6 +5,8 @@ import { COMMON_VACCINES, FEED_PLANS } from '../constants';
 import { uploadImage } from '../services/uploadService';
 import { Search, Plus, Tag, Scale, Settings, ArrowLeft, Save, Calendar, MapPin, Eye, Stethoscope, Dna, User, Phone, ScrollText, LineChart, Image as ImageIcon, Upload, Edit2, Milk, Droplets, Beef, Sprout, FileText, CheckCircle2, Baby, Info, Trash2, Clock, ChevronRight, DollarSign, Skull, LayoutGrid, List, ArrowUpDown } from 'lucide-react';
 import { LineChart as RechartsLine, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
+import { ActivityFeed } from './ActivityFeed';
+import { AppState } from '../types';
 
 interface Props {
     livestock: Livestock[];
@@ -33,11 +35,12 @@ interface Props {
     inventory: FeedInventory[];
     onAddSale: (sale: Sale) => Promise<void>;
     allLivestock?: Livestock[];
+    state?: AppState;
 }
 
 type ViewMode = 'LIST' | 'ANIMAL_FORM' | 'DETAILS';
 
-export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species, categories, entities = [], infrastructure = [], onAddLivestock, onUpdateLivestock, onDeleteLivestock, onAddMedicalRecord, onAddBreedingRecord, onAddWeightRecord, onAddMilkRecord, onUpdateBreedingRecord, onDeleteBreedingRecord, onBulkVaccinate, onBulkMove, pagination, onPageChange, onSortChange, onSearchChange, onCategoryChange, inventory, onAddSale, allLivestock }) => {
+export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species, categories, entities = [], infrastructure = [], onAddLivestock, onUpdateLivestock, onDeleteLivestock, onAddMedicalRecord, onAddBreedingRecord, onAddWeightRecord, onAddMilkRecord, onUpdateBreedingRecord, onDeleteBreedingRecord, onBulkVaccinate, onBulkMove, pagination, onPageChange, onSortChange, onSearchChange, onCategoryChange, inventory, onAddSale, allLivestock, state }) => {
     const T = {
         animal: species === 'CATTLE' ? 'Animal' : 'Goat',
         sire: species === 'CATTLE' ? 'Bull' : 'Buck',
@@ -53,10 +56,21 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
     /** List of all animals of this species (across categories) for globally unique tag IDs. */
     const listForTagId = (allLivestock && allLivestock.length > 0 ? allLivestock : livestock).filter(l => l.species === species);
 
-    /** Generate next Tag ID for this species: EX:BR-xxx (cattle) or EX:GT-xxx (goat). Uses all animals of this species so IDs are unique across categories. Optionally consider currentTagId when computing next (e.g. for Regenerate). */
-    const generateNextTagId = (currentTagId?: string): string => {
-        const prefix = species === 'CATTLE' ? 'EX:BR-' : 'EX:GT-';
-        const re = species === 'CATTLE' ? /^EX:BR-(\d+)$/i : /^EX:GT-(\d+)$/i;
+    const getCategoryPrefix = (cat: string) => {
+        const catStr = cat.toUpperCase();
+        if (catStr.includes('BREED')) return 'BR';
+        if (catStr.includes('MEAT')) return 'ME';
+        if (catStr.includes('DAIRY')) return 'DR';
+        if (catStr.includes('TRAD')) return 'TR';
+        if (catStr.includes('CALF') || catStr.includes('KID')) return 'YG';
+        return catStr.substring(0, 2);
+    };
+
+    /** Generate next Tag ID based on category: EX-BR-xxx or EX-ME-xxx. */
+    const generateNextTagId = (category: string, currentTagId?: string): string => {
+        const prefixStr = getCategoryPrefix(category);
+        const prefix = `EX-${prefixStr}-`;
+        const re = new RegExp(`^${prefix}(\\d+)$`, 'i');
         let max = 0;
         listForTagId.forEach((l) => {
             const m = (l.tagId || '').trim().match(re);
@@ -79,7 +93,7 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
     React.useEffect(() => { if (pagination?.searchQ !== undefined) setServerSearchInput(pagination.searchQ); }, [pagination?.searchQ]);
     const searchInputValue = pagination ? serverSearchInput : searchTerm;
     const setSearchInputValue = (v: string) => { if (pagination && onSearchChange) { setServerSearchInput(v); onSearchChange(v); } else setSearchTerm(v); };
-    const [viewLayout, setViewLayout] = useState<'GRID' | 'TABLE'>('TABLE');
+    const [viewLayout, setViewLayout] = useState<'GRID' | 'TABLE' | 'TIMELINE'>('TABLE');
     const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' }>({ key: 'tagId', direction: 'asc' });
 
     const [selectedAnimalId, setSelectedAnimalId] = useState<string | null>(null);
@@ -115,6 +129,7 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
     // Form States
     const [animalForm, setAnimalForm] = useState<Omit<Partial<Livestock>, 'serviceDetails'> & { serviceDetails?: Partial<ServiceDetails> }>({
         tagId: '', category: categories[0], breed: '', gender: 'MALE', weight: 0, dob: '', purchaseDate: '', purchasePrice: 0, status: 'ACTIVE', location: '', notes: '', imageUrl: '', medicalHistory: [], breedingHistory: [], weightHistory: [], milkProductionHistory: [],
+        ownership: 'OWNED', palaiCustomerId: '',
         serviceDetails: { feedPlan: 'BASIC', monthlyFee: 0, specialInstructions: '' }
     });
 
@@ -154,9 +169,10 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
     const handleOpenAdd = () => {
         setImageUploadError(null);
         setFormErrors({});
-        const nextTagId = generateNextTagId();
+        const nextTagId = generateNextTagId(activeCategoryTab);
         setAnimalForm({
             tagId: nextTagId, category: activeCategoryTab, breed: '', gender: 'MALE', weight: 0, dob: '', purchaseDate: '', purchasePrice: 0, status: 'ACTIVE', location: '', notes: '', imageUrl: '', medicalHistory: [], breedingHistory: [], weightHistory: [], milkProductionHistory: [],
+            ownership: 'OWNED', palaiCustomerId: '',
             serviceDetails: { feedPlan: 'BASIC', monthlyFee: 0, specialInstructions: '' }
         });
         setIsPregnantEntry(false);
@@ -595,13 +611,13 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                     </button>
                     <h2 className="text-2xl font-bold text-gray-800">{isEditing ? 'Edit Details' : `Register New ${T.animal}`}</h2>
                 </div>
-                <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-8 max-w-4xl mx-auto">
+                <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-8 max-w-5xl mx-auto">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
                         <div className="space-y-6">
                             <h4 className="text-sm font-bold text-emerald-600 uppercase tracking-widest border-b border-emerald-50 pb-2">Profile & Identification</h4>
-                            <div className="flex items-center gap-6">
-                                <div className="space-y-1">
-                                    <div className="w-40 h-40 bg-gray-50 rounded-2xl border-2 border-dashed border-gray-300 flex items-center justify-center overflow-hidden relative group cursor-pointer hover:border-emerald-400 transition-all">
+                            <div className="flex flex-col sm:flex-row items-center sm:items-start gap-6">
+                                <div className="space-y-1 shrink-0">
+                                    <div className="w-32 h-32 sm:w-40 sm:h-40 bg-gray-50 rounded-2xl border-2 border-dashed border-gray-300 flex items-center justify-center overflow-hidden relative group cursor-pointer hover:border-emerald-400 transition-all">
                                         {imageUploading && (
                                             <div className="absolute inset-0 bg-black/50 flex items-center justify-center z-10">
                                                 <div className="w-8 h-8 border-2 border-white border-t-transparent rounded-full animate-spin" />
@@ -615,19 +631,31 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                                     </div>
                                     {imageUploadError && <p className="text-xs text-red-600">{imageUploadError}</p>}
                                 </div>
-                                <div className="flex-1 space-y-4">
+                                <div className="flex-1 space-y-4 w-full">
                                     <div>
                                         <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Tag ID *</label>
                                         <div className="flex gap-2 items-center">
                                             <input type="text" value={animalForm.tagId} onChange={e => setAnimalForm({ ...animalForm, tagId: e.target.value })} className="flex-1 border-b-2 border-gray-100 focus:border-emerald-500 py-2 outline-none font-bold text-lg" placeholder={T.tagPlaceholder} />
-                                            <button type="button" onClick={() => setAnimalForm(prev => ({ ...prev, tagId: generateNextTagId(prev.tagId) }))} className="text-xs font-bold text-emerald-600 hover:text-emerald-700 whitespace-nowrap" title="Generate next Tag ID">New</button>
+                                            <button type="button" onClick={() => setAnimalForm(prev => ({ ...prev, tagId: generateNextTagId(prev.category || activeCategoryTab, prev.tagId) }))} className="text-xs font-bold text-emerald-600 hover:text-emerald-700 whitespace-nowrap" title="Generate next Tag ID">New</button>
                                         </div>
                                     </div>
-                                    <div>
-                                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Category</label>
-                                        <select value={animalForm.category} onChange={e => setAnimalForm({ ...animalForm, category: e.target.value })} className="w-full border-b-2 border-gray-100 focus:border-emerald-500 py-2 outline-none">
-                                            {categories.map(c => <option key={c} value={c}>{c}</option>)}
-                                        </select>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Category</label>
+                                            <select value={animalForm.category} onChange={e => {
+                                                const newCat = e.target.value;
+                                                setAnimalForm(prev => ({ ...prev, category: newCat, tagId: generateNextTagId(newCat) }));
+                                            }} className="w-full border-b-2 border-gray-100 focus:border-emerald-500 py-2 outline-none">
+                                                {categories.map(c => <option key={c} value={c}>{c}</option>)}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Ownership</label>
+                                            <select value={animalForm.ownership || 'OWNED'} onChange={e => setAnimalForm({ ...animalForm, ownership: e.target.value as 'OWNED'|'PALAI' })} className="w-full border-b-2 border-gray-100 focus:border-emerald-500 py-2 outline-none">
+                                                <option value="OWNED">Farm Owned</option>
+                                                <option value="PALAI">Palai (Third-Party)</option>
+                                            </select>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -702,10 +730,19 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                         </div>
 
                         {/* Palai Specific Options */}
-                        {animalForm.category === 'Palai' && (
+                        {animalForm.ownership === 'PALAI' && (
                             <div className="col-span-1 md:col-span-2 bg-blue-50 rounded-2xl p-6 border border-blue-100">
                                 <h4 className="text-sm font-bold text-blue-800 uppercase tracking-widest mb-4 flex items-center gap-2"><User size={16} /> Palai Contract Details</h4>
-                                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                                    <div>
+                                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Palai Customer *</label>
+                                        <select value={animalForm.palaiCustomerId || ''} onChange={e => setAnimalForm({ ...animalForm, palaiCustomerId: e.target.value })} className="w-full bg-white border border-blue-200 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500">
+                                            <option value="">Select Customer...</option>
+                                            {entities?.filter(e => e.type === 'PALAI_CLIENT').map(c => (
+                                                <option key={c.id} value={c.id}>{c.name}</option>
+                                            ))}
+                                        </select>
+                                    </div>
                                     <div>
                                         <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Rate Per Month (PKR)</label>
                                         <input type="number" value={animalForm.palaiProfile?.ratePerMonth || 0} onChange={e => setAnimalForm({ ...animalForm, palaiProfile: { ...animalForm.palaiProfile, ratePerMonth: parseFloat(e.target.value), startDate: animalForm.palaiProfile?.startDate || new Date().toISOString().split('T')[0] } })} className="w-full bg-white border border-blue-200 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500" />
@@ -966,6 +1003,7 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                 <div className="flex bg-white/50 backdrop-blur-sm rounded-xl p-1.5 shadow-sm border border-slate-200/60 overflow-x-auto no-scrollbar gap-2">
                     {[
                         { id: 'INFO', label: 'Overview', icon: Info },
+                        { id: 'GALLERY', label: 'Gallery', icon: ImageIcon },
                         { id: 'MEDICAL', label: 'Medical', icon: Stethoscope },
                         { id: 'WEIGHT', label: 'Weight', icon: Scale },
                         { id: 'BREEDING', label: 'Breeding', icon: Dna, hide: selectedAnimal.gender !== 'FEMALE' },
@@ -1101,6 +1139,59 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                                         <p className="text-sm text-emerald-700 leading-relaxed italic">"{selectedAnimal.notes || 'No special instructions recorded for this animal.'}"</p>
                                     </div>
                                 </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {detailTab === 'GALLERY' && (
+                        <div className="p-8 lg:p-12 animate-fade-in">
+                            <div className="flex justify-between items-center mb-10">
+                                <div>
+                                    <h3 className="text-2xl font-black text-gray-800">Media Gallery</h3>
+                                    <p className="text-sm text-gray-400">Photos and documents for this animal</p>
+                                </div>
+                                <div className="relative group overflow-hidden bg-emerald-600 text-white px-6 py-3 rounded-2xl font-bold flex items-center gap-2 shadow-lg shadow-emerald-100 cursor-pointer">
+                                    {imageUploading && (
+                                        <div className="absolute inset-0 bg-emerald-700 flex items-center justify-center z-10">
+                                            <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                        </div>
+                                    )}
+                                    <Plus size={20} /> UPLOAD PHOTO
+                                    <input type="file" accept="image/*" className="absolute inset-0 opacity-0 cursor-pointer z-20" disabled={imageUploading} onChange={async (e) => {
+                                        const file = e.target.files?.[0];
+                                        if (!file) return;
+                                        try {
+                                            const url = await uploadImage(file);
+                                            const newGallery = [...(selectedAnimal.galleryImages || []), url];
+                                            await onUpdateLivestock({ ...selectedAnimal, galleryImages: newGallery });
+                                        } catch (err: any) {
+                                            alert("Upload failed: " + err.message);
+                                        }
+                                    }} />
+                                </div>
+                            </div>
+                            
+                            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+                                {selectedAnimal.galleryImages && selectedAnimal.galleryImages.length > 0 ? (
+                                    selectedAnimal.galleryImages.map((img, idx) => (
+                                        <div key={idx} className="relative group rounded-3xl overflow-hidden shadow-sm border border-gray-100 aspect-square">
+                                            <img src={img} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" alt={`Gallery Image ${idx + 1}`} />
+                                            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-4">
+                                                <button onClick={() => window.open(img, '_blank')} className="p-2 bg-white rounded-full text-gray-800 hover:text-emerald-600 transition-colors" title="View Full"><Eye size={20}/></button>
+                                                <button onClick={async () => {
+                                                    if(!confirm("Remove image from gallery?")) return;
+                                                    const newGallery = selectedAnimal.galleryImages!.filter((_, i) => i !== idx);
+                                                    await onUpdateLivestock({ ...selectedAnimal, galleryImages: newGallery });
+                                                }} className="p-2 bg-red-500 rounded-full text-white hover:bg-red-600 transition-colors" title="Delete"><Trash2 size={20}/></button>
+                                            </div>
+                                        </div>
+                                    ))
+                                ) : (
+                                    <div className="col-span-full text-center py-20 bg-gray-50 rounded-3xl border-2 border-dashed border-gray-100 text-gray-400">
+                                        <ImageIcon className="mx-auto mb-4 opacity-20" size={60} />
+                                        <p className="font-black uppercase text-xs tracking-widest">No Gallery Images Yet</p>
+                                    </div>
+                                )}
                             </div>
                         </div>
                     )}
@@ -1646,11 +1737,18 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
 
             <div className="flex justify-between px-2 mb-4 items-center">
                 <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
-                    <button onClick={() => setViewLayout('GRID')} className={`p-2 rounded-lg transition-all ${viewLayout === 'GRID' ? 'bg-white shadow-sm text-emerald-600' : 'text-slate-400 hover:text-slate-600'}`}><LayoutGrid size={18} /></button>
-                    <button onClick={() => setViewLayout('TABLE')} className={`p-2 rounded-lg transition-all ${viewLayout === 'TABLE' ? 'bg-white shadow-sm text-emerald-600' : 'text-slate-400 hover:text-slate-600'}`}><List size={18} /></button>
+                    <button onClick={() => setViewLayout('TIMELINE')} title="Chronological Feed" className={`p-2 rounded-lg transition-all ${viewLayout === 'TIMELINE' ? 'bg-white shadow-sm text-emerald-600' : 'text-slate-400 hover:text-slate-600'}`}><Clock size={18} /></button>
+                    <button onClick={() => setViewLayout('GRID')} title="Grid View" className={`p-2 rounded-lg transition-all ${viewLayout === 'GRID' ? 'bg-white shadow-sm text-emerald-600' : 'text-slate-400 hover:text-slate-600'}`}><LayoutGrid size={18} /></button>
+                    <button onClick={() => setViewLayout('TABLE')} title="Table View" className={`p-2 rounded-lg transition-all ${viewLayout === 'TABLE' ? 'bg-white shadow-sm text-emerald-600' : 'text-slate-400 hover:text-slate-600'}`}><List size={18} /></button>
                 </div>
                 <button onClick={() => setIsBatchMode(!isBatchMode)} className={`text-xs font-bold px-4 py-2 rounded-lg transition-all ${isBatchMode ? 'bg-gray-800 text-white shadow-lg' : 'bg-white text-gray-500 border border-gray-200 hover:bg-gray-50'}`}>{isBatchMode ? 'EXIT BATCH MODE' : 'ENABLE BATCH ACTIONS'}</button>
             </div>
+
+            {viewLayout === 'TIMELINE' && state && (
+                <div className="bg-slate-50/50 p-6 rounded-3xl border border-slate-100">
+                    <ActivityFeed state={state} />
+                </div>
+            )}
 
             {viewLayout === 'GRID' ? (
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">

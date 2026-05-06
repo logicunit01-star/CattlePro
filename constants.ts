@@ -1,7 +1,7 @@
 
 import { Livestock, Expense, ExpenseCategory, FeedInventory, Infrastructure, Sale, DietPlan, Breeder, Entity, Invoice, Farm, Location } from './types';
 
-export const FIXED_CATEGORIES = ['Breeding', 'Meat', 'Dairy', 'Palai', 'Calf'];
+export const FIXED_CATEGORIES = ['Breeding', 'Meat', 'Dairy', 'Palai', 'Calf', 'Trading'];
 
 export const FEED_PLANS = {
   BASIC: { name: 'Basic Grazing', description: 'Pasture grazing + Basic Hay' },

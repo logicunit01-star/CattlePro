@@ -223,6 +223,7 @@ export interface Livestock {
   status: LivestockStatus;
   location?: string; // Barn/Pen within the farm (derived context can be useful)
   imageUrl?: string;
+  galleryImages?: string[];
   notes?: string;
   medicalHistory: MedicalRecord[];
   breedingHistory: InseminationRecord[];

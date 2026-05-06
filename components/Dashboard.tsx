@@ -1,10 +1,11 @@
 import React from 'react';
 import { AppState, Livestock } from '../types';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, LineChart, Line, AreaChart, Area } from 'recharts';
-import { DollarSign, TrendingUp, AlertTriangle, Activity, Milk, Calendar, ArrowRight, CheckCircle, Syringe, Stethoscope, HelpCircle } from 'lucide-react';
+import { DollarSign, TrendingUp, AlertTriangle, Activity, Milk, Calendar, ArrowRight, CheckCircle, Syringe, Stethoscope, HelpCircle, MapPin, Users, Settings } from 'lucide-react';
 import { backendService } from '../services/backendService';
+import { ActivityFeed } from './ActivityFeed';
 
-type DashboardView = 'CATTLE_MANAGER' | 'GOAT_MANAGER' | 'FINANCE' | 'OPERATIONS' | 'SALES' | 'PROCUREMENT' | 'REPORTS' | 'ENTITIES';
+type DashboardView = 'CATTLE_MANAGER' | 'GOAT_MANAGER' | 'FINANCE' | 'OPERATIONS' | 'SALES' | 'PROCUREMENT' | 'REPORTS' | 'ENTITIES' | 'SETTINGS';
 
 interface Props {
   state: AppState;
@@ -20,6 +21,7 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
   const [dateFilter, setDateFilter] = React.useState<'7_DAYS' | '30_DAYS' | '90_DAYS' | 'ALL'>('30_DAYS');
   const [speciesFilter, setSpeciesFilter] = React.useState<'ALL' | 'CATTLE' | 'GOAT'>('ALL');
   const [healthSort, setHealthSort] = React.useState<'DATE' | 'COST'>('DATE');
+  const [activeFilter, setActiveFilter] = React.useState<string | undefined>(undefined);
   const [summaryData, setSummaryData] = React.useState<{ totalExpenses: number; totalRevenue: number; netProfit: number } | null>(null);
   const [kpisData, setKpisData] = React.useState<{ totalLivestock: number; activeAnimals: number; deceasedCount: number; sickCount: number; totalExpenses: number; totalRevenue: number; netProfit: number } | null>(null);
   const [milkTrendData, setMilkTrendData] = React.useState<{ date: string; liters: number }[] | null>(null);
@@ -158,6 +160,37 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
   const sickRatio = totalLivestock > 0 ? sickCountForScore / totalLivestock : 0;
   const farmHealthScore = Math.max(0, 100 - (mortalityRate * 2) - (sickRatio * 100 * 1.5));
 
+  if (state.farms.length === 0) {
+    return (
+      <div className="space-y-8 animate-fade-in pb-10 max-w-5xl mx-auto mt-10">
+        <div className="text-center mb-12">
+          <h2 className="text-4xl font-extrabold text-slate-800 tracking-tight mb-4 font-display">Welcome to CattlePro!</h2>
+          <p className="text-lg text-slate-500 font-medium max-w-2xl mx-auto">Let's get your instance set up so you can start managing your livestock operations with enterprise-grade tools.</p>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="bg-white p-8 rounded-3xl shadow-lg border border-emerald-100 premium-card relative overflow-hidden group">
+            <div className="bg-emerald-50 w-16 h-16 rounded-2xl flex items-center justify-center text-emerald-600 mb-6 group-hover:scale-110 transition-transform"><MapPin size={32} /></div>
+            <h3 className="text-xl font-bold text-slate-800 mb-2">1. Create Farm</h3>
+            <p className="text-slate-500 text-sm mb-8">Set up your first farm and location to start tracking animals.</p>
+            <button onClick={() => onNavigate?.('SETTINGS', { filterCategory: 'GENERAL' })} className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl transition-colors shadow-emerald-200 shadow-lg">Setup Now</button>
+          </div>
+          <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-200 premium-card relative overflow-hidden group hover:border-blue-200">
+            <div className="bg-blue-50 w-16 h-16 rounded-2xl flex items-center justify-center text-blue-600 mb-6 group-hover:scale-110 transition-transform"><DollarSign size={32} /></div>
+            <h3 className="text-xl font-bold text-slate-800 mb-2">2. Finance Config</h3>
+            <p className="text-slate-500 text-sm mb-8">Set your base currency and default cost centers for accounting.</p>
+            <button onClick={() => onNavigate?.('SETTINGS', { filterCategory: 'GENERAL' })} className="w-full py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition-colors">Configure</button>
+          </div>
+          <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-200 premium-card relative overflow-hidden group hover:border-purple-200">
+            <div className="bg-purple-50 w-16 h-16 rounded-2xl flex items-center justify-center text-purple-600 mb-6 group-hover:scale-110 transition-transform"><Users size={32} /></div>
+            <h3 className="text-xl font-bold text-slate-800 mb-2">3. Invite Team</h3>
+            <p className="text-slate-500 text-sm mb-8">Add managers and workers to your instance to collaborate.</p>
+            <button onClick={() => onNavigate?.('SETTINGS', { filterCategory: 'USERS' })} className="w-full py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition-colors">Add Users</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-8 animate-fade-in pb-10">
 
@@ -283,172 +316,17 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
       {/* MAIN CONTENT GRID */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
-        {/* LEFT COL: Charts */}
+        {/* LEFT COL: Operations Feed */}
         <div className="lg:col-span-2 space-y-6">
-
-          {/* Milk Production Trend */}
-          <div role="button" tabIndex={0} onClick={() => onNavigate?.(speciesFilter === 'GOAT' ? 'GOAT_MANAGER' : 'CATTLE_MANAGER', { filterCategory: 'Dairy' })} onKeyDown={e => e.key === 'Enter' && onNavigate?.(speciesFilter === 'GOAT' ? 'GOAT_MANAGER' : 'CATTLE_MANAGER', { filterCategory: 'Dairy' })} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 premium-card cursor-pointer hover:shadow-md transition-shadow">
-            <div className="flex justify-between items-center mb-6">
-              <h3 className="font-bold text-slate-800 flex items-center gap-2 font-display"><Milk size={20} className="text-sky-500" /> Milk Production Trend</h3>
-            </div>
-            <div className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={milkData}>
-                  <defs>
-                    <linearGradient id="colorMilk" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#0ea5e9" stopOpacity={0.1} />
-                      <stop offset="95%" stopColor="#0ea5e9" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                  <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12, fontWeight: 600 }} />
-                  <YAxis axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12, fontWeight: 600 }} />
-                  <Tooltip contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} />
-                  <Area type="monotone" dataKey="liters" stroke="#0ea5e9" strokeWidth={4} fillOpacity={1} fill="url(#colorMilk)" />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
+          <div className="mb-6 flex justify-between items-center">
+             <h3 className="text-2xl font-bold text-slate-800 tracking-tight font-display">Farm Operations Feed {activeFilter && <span className="text-emerald-600 text-sm ml-2 bg-emerald-50 px-2 py-1 rounded-lg">Filtered: {activeFilter}</span>}</h3>
+             <span title="The feed displays all recent events chronologically. You can add new events directly from here." className="bg-emerald-50 text-emerald-700 px-3 py-1 rounded-lg text-xs font-bold uppercase tracking-wider cursor-help">
+               Live Updates
+             </span>
           </div>
-
-          {/* Expense Breakdown */}
-          <div role="button" tabIndex={0} onClick={() => onNavigate?.('FINANCE')} onKeyDown={e => e.key === 'Enter' && onNavigate?.('FINANCE')} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 premium-card cursor-pointer hover:shadow-md transition-shadow">
-            <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2 font-display"><DollarSign size={20} className="text-emerald-600" /> Expense Analysis</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-center">
-              <div className="h-64 w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie data={pieData} cx="50%" cy="50%" innerRadius={60} outerRadius={80} paddingAngle={5} dataKey="value" stroke="none">
-                      {pieData.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />)}
-                    </Pie>
-                    <Tooltip formatter={(value) => `PKR ${value.toLocaleString()}`} contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-              <div>
-                <div className="space-y-3">
-                  {pieData.slice(0, 5).map((entry, idx) => (
-                    <div key={idx} className="flex items-center justify-between text-sm group cursor-default">
-                      <div className="flex items-center gap-2">
-                        <div className="w-3 h-3 rounded-full transition-transform group-hover:scale-125" style={{ backgroundColor: COLORS[idx % COLORS.length] }}></div>
-                        <span className="text-slate-600 font-bold">{entry.name}</span>
-                      </div>
-                      <span className="font-extrabold text-slate-800">{(entry.value / totalExpenses * 100).toFixed(1)}%</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* HERD GROWTH TREND (NEW) */}
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 premium-card">
-            <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2 font-display"><TrendingUp size={20} className="text-emerald-500" /> Herd Growth Dynamics</h3>
-            <div className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                {(() => {
-                  const data = filteredLivestock.filter(l => isDateInRange(l.purchaseDate || l.dob || '')).reduce((acc, l) => {
-                    const d = (l.purchaseDate || l.dob || '').slice(0, 7) || 'Unknown'; // YYYY-MM
-                    if (d === 'Unknown') return acc;
-                    const existing = acc.find(x => x.month === d);
-                    if (existing) existing[l.species === 'CATTLE' ? 'cattle' : 'goats'] += 1;
-                    else acc.push({ month: d, cattle: l.species === 'CATTLE' ? 1 : 0, goats: l.species === 'GOAT' ? 1 : 0 });
-                    return acc;
-                  }, [] as any[]).sort((a, b) => a.month.localeCompare(b.month));
-
-                  return (
-                    <AreaChart data={data}>
-                      <defs>
-                        <linearGradient id="colorCattleTrend" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#3b82f6" stopOpacity={0.1} /><stop offset="95%" stopColor="#3b82f6" stopOpacity={0} /></linearGradient>
-                        <linearGradient id="colorGoatTrend" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#f59e0b" stopOpacity={0.1} /><stop offset="95%" stopColor="#f59e0b" stopOpacity={0} /></linearGradient>
-                      </defs>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                      <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#94a3b8', fontWeight: 'bold' }} />
-                      <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#94a3b8', fontWeight: 'bold' }} />
-                      <Tooltip contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} />
-                      <Area type="monotone" dataKey="cattle" name="Cattle Added" stroke="#3b82f6" fillOpacity={1} fill="url(#colorCattleTrend)" strokeWidth={3} />
-                      <Area type="monotone" dataKey="goats" name="Goats Added" stroke="#f59e0b" fillOpacity={1} fill="url(#colorGoatTrend)" strokeWidth={3} />
-                    </AreaChart>
-                  );
-                })()}
-              </ResponsiveContainer>
-            </div>
-          </div>
-
-          {/* HEALTH INCIDENT HEATMAP (MOCK) */}
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 premium-card">
-            <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2 font-display"><Activity size={20} className="text-red-500" /> Health Incident Activity</h3>
-            <div className="h-48">
-              <ResponsiveContainer width="100%" height="100%">
-                {(() => {
-                  const heatData = filteredLivestock.flatMap(l => l.medicalHistory).filter(m => (m.type === 'TREATMENT' || m.type === 'CHECKUP') && isDateInRange(m.date)).reduce((acc, m) => {
-                    const d = m.date.slice(5); // MM-DD
-                    const existing = acc.find(x => x.date === d);
-                    if (existing) existing.count += 1;
-                    else acc.push({ date: d, count: 1 });
-                    return acc;
-                  }, [] as any[]).sort((a, b) => a.date.localeCompare(b.date));
-
-                  return (
-                    <BarChart data={heatData}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                      <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#94a3b8', fontWeight: 'bold' }} />
-                      <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#94a3b8', fontWeight: 'bold' }} allowDecimals={false} />
-                      <Tooltip cursor={{ fill: '#fef2f2' }} contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} />
-                      <Bar dataKey="count" name="Sick Consultations" fill="#ef4444" radius={[4, 4, 0, 0]} barSize={24} />
-                    </BarChart>
-                  );
-                })()}
-              </ResponsiveContainer>
-            </div>
-          </div>
-
-          {/* FEED & NUTRITION STATUS (NEW) */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div role="button" tabIndex={0} onClick={() => onNavigate?.('OPERATIONS', { operationsTab: 'FEED' })} onKeyDown={e => e.key === 'Enter' && onNavigate?.('OPERATIONS', { operationsTab: 'FEED' })} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 premium-card cursor-pointer hover:shadow-md transition-shadow">
-              <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2 font-display"><Activity size={20} className="text-orange-500" /> Feed Inventory Status</h3>
-              <div className="space-y-3">
-                {state.feed.filter(f => f.category !== 'MEDICINE').slice(0, 4).map(item => {
-                  const dailyUsage = state.dietPlans
-                    .filter(p => p.status === 'ACTIVE')
-                    .flatMap(p => p.items)
-                    .filter(i => i.inventoryId === item.id)
-                    .reduce((sum, i) => sum + (i.quantity * (state.dietPlans.find(dp => dp.items.includes(i))?.totalAnimals || 0)), 0);
-
-                  // Estimate days remaining (mock simplistic logic if dailyUsage is 0, assume 30 days)
-                  const daysRemaining = dailyUsage > 0 ? Math.floor(item.quantity / dailyUsage) : 99;
-                  const statusColor = daysRemaining < 7 ? 'text-red-500 bg-red-50' : (daysRemaining < 14 ? 'text-amber-500 bg-amber-50' : 'text-emerald-500 bg-emerald-50');
-
-                  return (
-                    <div key={item.id} className="flex justify-between items-center p-2 rounded-lg hover:bg-slate-50">
-                      <div>
-                        <p className="font-bold text-sm text-slate-700">{item.name}</p>
-                        <p className="text-xs text-slate-400">{item.quantity} {item.unit || 'kg'} in stock</p>
-                      </div>
-                      <div className={`px-2 py-1 rounded text-xs font-bold ${statusColor}`}>
-                        {daysRemaining === 99 ? 'Stable' : `${daysRemaining} Days Left`}
-                      </div>
-                    </div>
-                  );
-                })}
-                {state.feed.length === 0 && <p className="text-sm text-slate-400 italic">No feed inventory.</p>}
-              </div>
-            </div>
-
-            <div role="button" tabIndex={0} onClick={() => onNavigate?.('OPERATIONS', { operationsTab: 'FEED' })} onKeyDown={e => e.key === 'Enter' && onNavigate?.('OPERATIONS', { operationsTab: 'FEED' })} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 premium-card cursor-pointer hover:shadow-md transition-shadow">
-              <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2 font-display"><DollarSign size={20} className="text-blue-500" /> Filtered Feed Costs</h3>
-              <div className="h-48">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={feedCostsData && feedCostsData.length > 0 ? feedCostsData.map(d => ({ date: d.date.slice(5), FeedCost: d.amount })) : dateRangeArray.map(date => ({ date: date.slice(5), FeedCost: filteredExpenses.filter(e => e.category === 'FEED' && e.date === date).reduce((sum, e) => sum + e.amount, 0) }))}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                    <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#94a3b8' }} />
-                    <Tooltip cursor={{ fill: '#f8fafc' }} contentStyle={{ borderRadius: '8px', border: 'none' }} />
-                    <Bar dataKey="FeedCost" fill="#3b82f6" radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          </div>
+          <ActivityFeed state={state} filterType={activeFilter} />
         </div>
+
 
         {/* RIGHT COL: Widgets */}
         <div className="space-y-6">
@@ -518,7 +396,7 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* PRODUCTION ANALYTICS */}
-          <div role="button" tabIndex={0} onClick={() => onNavigate?.(speciesFilter === 'GOAT' ? 'GOAT_MANAGER' : 'CATTLE_MANAGER', { filterCategory: 'Dairy' })} onKeyDown={e => e.key === 'Enter' && onNavigate?.(speciesFilter === 'GOAT' ? 'GOAT_MANAGER' : 'CATTLE_MANAGER', { filterCategory: 'Dairy' })} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 premium-card cursor-pointer hover:shadow-md transition-shadow">
+          <div role="button" tabIndex={0} onClick={() => setActiveFilter(activeFilter === 'MILK' ? undefined : 'MILK')} onKeyDown={e => e.key === 'Enter' && setActiveFilter(activeFilter === 'MILK' ? undefined : 'MILK')} className={`bg-white p-6 rounded-2xl shadow-sm border premium-card cursor-pointer hover:shadow-md transition-shadow ${activeFilter === 'MILK' ? 'border-sky-500 ring-2 ring-sky-100' : 'border-slate-100'}`} title="Click to filter feed by Milk logs">
             <div className="flex justify-between items-center mb-4">
               <h3 className="font-bold text-slate-800 flex items-center gap-2 font-display">
                 <Milk size={20} className="text-sky-500" />
@@ -562,13 +440,13 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
           </div>
 
           {/* HEALTH ANALYTICS */}
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 premium-card">
+          <div role="button" tabIndex={0} onClick={() => setActiveFilter(activeFilter === 'HEALTH' ? undefined : 'HEALTH')} onKeyDown={e => e.key === 'Enter' && setActiveFilter(activeFilter === 'HEALTH' ? undefined : 'HEALTH')} className={`bg-white p-6 rounded-2xl shadow-sm border premium-card cursor-pointer hover:shadow-md transition-shadow ${activeFilter === 'HEALTH' ? 'border-red-500 ring-2 ring-red-100' : 'border-slate-100'}`} title="Click to filter feed by Health logs">
             <div className="flex justify-between items-center mb-4">
               <h3 className="font-bold text-slate-800 flex items-center gap-2 font-display">
                 <Activity size={20} className="text-red-500" />
                 Recent Health Events
               </h3>
-              <select value={healthSort} onChange={e => setHealthSort(e.target.value as any)} className="bg-slate-50 border border-slate-200 text-xs font-bold text-slate-600 rounded drop-shadow-sm px-2 py-1 focus:outline-none">
+              <select value={healthSort} onChange={e => { e.stopPropagation(); setHealthSort(e.target.value as any); }} onClick={e => e.stopPropagation()} className="bg-slate-50 border border-slate-200 text-xs font-bold text-slate-600 rounded drop-shadow-sm px-2 py-1 focus:outline-none">
                 <option value="DATE">Latest</option>
                 <option value="COST">Highest Cost</option>
               </select>

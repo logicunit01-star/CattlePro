@@ -299,6 +299,20 @@ const App: React.FC = () => {
     setIsAuthenticated(false);
   };
 
+  const handleSyncLocations = async () => {
+    try {
+      const [locs, fms] = await Promise.all([
+        backendService.getLocations().catch(() => []),
+        backendService.getFarms().catch(() => [])
+      ]);
+      setState(prev => ({ ...prev, locations: locs, farms: fms }));
+      alert("Locations and Farms synchronized successfully.");
+    } catch (e: any) {
+      console.error("Sync failed:", e);
+      alert("Sync failed: " + e.message);
+    }
+  };
+
   const handleCreateLocation = async (name: string, type: 'CITY' | 'REGION') => {
     try {
       const loc = await backendService.createLocation({
@@ -1031,44 +1045,6 @@ const App: React.FC = () => {
             <span className="font-bold text-gray-800">CattleOps</span>
           </div>
 
-          {/* CONTEXT SELECTORS (CENTER) */}
-          <div className="hidden md:flex items-center gap-2">
-            {/* LOCATION SELECTOR */}
-            <div className="flex items-center gap-2 bg-slate-100 p-1.5 rounded-lg border border-slate-200">
-              <div className="bg-white p-1.5 rounded shadow-sm text-sky-600"><MapPin size={18} /></div>
-              <div className="relative group">
-                <select
-                  value={state.currentLocationId || ''}
-                  onChange={(e) => setState(prev => ({ ...prev, currentLocationId: e.target.value || null, currentFarmId: null }))}
-                  className="bg-transparent font-bold text-slate-700 text-sm focus:outline-none cursor-pointer pr-6 appearance-none min-w-[120px]"
-                >
-                  <option value="">All Cities</option>
-                  {state.locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-                </select>
-                <ChevronDown size={14} className="absolute right-0 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-              </div>
-              <button type="button" onClick={() => setShowAddCityModal(true)} className="p-1.5 rounded bg-sky-100 text-sky-600 hover:bg-sky-200" title="Add City"><PlusCircle size={18} /></button>
-            </div>
-
-            {/* FARM SELECTOR */}
-            <div className="flex items-center gap-2 bg-slate-100 p-1.5 rounded-lg border border-slate-200">
-              <div className="bg-white p-1.5 rounded shadow-sm text-emerald-600"><Building2 size={18} /></div>
-              <div className="relative group">
-                <select
-                  value={state.currentFarmId || ''}
-                  onChange={(e) => setState(prev => ({ ...prev, currentFarmId: e.target.value || null }))}
-                  className="bg-transparent font-bold text-slate-700 text-sm focus:outline-none cursor-pointer pr-6 appearance-none min-w-[150px]"
-                >
-                  <option value="">{state.currentLocationId ? 'All Farms in City' : 'All Farms (Global)'}</option>
-                  {state.farms.filter(f => !state.currentLocationId || f.locationId === state.currentLocationId).map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
-                </select>
-                <ChevronDown size={14} className="absolute right-0 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-              </div>
-              <button type="button" onClick={() => setShowAddFarmModal(true)} className="p-1.5 rounded bg-emerald-100 text-emerald-600 hover:bg-emerald-200" title="Add Farm"><PlusCircle size={18} /></button>
-              {state.currentFarmId && <div className="text-[10px] font-bold bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded uppercase tracking-wider">{state.farms.find(f => f.id === state.currentFarmId)?.type}</div>}
-            </div>
-          </div>
-
           {/* Add City Modal */}
           {showAddCityModal && (
             <AddCityModal onClose={() => setShowAddCityModal(false)} onSubmit={handleCreateLocation} />
@@ -1079,6 +1055,20 @@ const App: React.FC = () => {
           )}
 
           <div className="hidden lg:flex items-center gap-4 ml-auto">
+
+            {/* Context Tooltip */}
+            <div className="relative group cursor-pointer flex items-center gap-2 text-slate-500 hover:text-emerald-600 transition-colors bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200">
+              <MapPin size={16} />
+              <span className="text-sm font-bold truncate max-w-[150px]">
+                {state.currentFarmId ? state.farms.find(f => f.id === state.currentFarmId)?.name : (state.currentLocationId ? state.locations.find(l => l.id === state.currentLocationId)?.name : 'Global View')}
+              </span>
+              
+              <div className="absolute right-0 top-full mt-2 w-64 bg-slate-800 text-white text-xs rounded-lg p-3 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 shadow-xl">
+                <div className="mb-1"><span className="text-slate-400">City:</span> {state.currentLocationId ? state.locations.find(l => l.id === state.currentLocationId)?.name : 'All Cities'}</div>
+                <div><span className="text-slate-400">Farm:</span> {state.currentFarmId ? state.farms.find(f => f.id === state.currentFarmId)?.name : 'All Farms'}</div>
+                <div className="mt-2 pt-2 border-t border-slate-700 text-slate-300 italic">Change this in Settings</div>
+              </div>
+            </div>
 
             <div className="flex items-center gap-2 text-gray-600">
               <User size={18} />
@@ -1136,7 +1126,7 @@ const App: React.FC = () => {
                 onSortChange={(sortBy, sortDirection) => setLivestockPageRequest(prev => ({ ...prev, sortBy, sortDirection, number: 0 }))}
                 onSearchChange={(q) => setLivestockPageRequest(prev => ({ ...prev, q, number: 0 }))}
                 onCategoryChange={(category) => setLivestockPageRequest(prev => ({ ...prev, category, number: 0 }))}
-                inventory={state.feed} onAddSale={handleCreateSale}
+                inventory={state.feed} onAddSale={handleCreateSale} state={state}
               />
             )}
             {activeView === 'GOAT_MANAGER' && (
@@ -1156,7 +1146,7 @@ const App: React.FC = () => {
                 onSortChange={(sortBy, sortDirection) => setLivestockPageRequest(prev => ({ ...prev, sortBy, sortDirection, number: 0 }))}
                 onSearchChange={(q) => setLivestockPageRequest(prev => ({ ...prev, q, number: 0 }))}
                 onCategoryChange={(category) => setLivestockPageRequest(prev => ({ ...prev, category, number: 0 }))}
-                inventory={state.feed} onAddSale={handleCreateSale}
+                inventory={state.feed} onAddSale={handleCreateSale} state={state}
               />
             )}
             {activeView === 'PALAI' && (
@@ -1327,7 +1317,19 @@ const App: React.FC = () => {
               />
             )}
             {activeView === 'AI' && <GeminiAdvisor state={state} />}
-            {activeView === 'SETTINGS' && <SettingsModule />}
+            {activeView === 'SETTINGS' && (
+              <SettingsModule
+                locations={state.locations}
+                farms={state.farms}
+                currentLocationId={state.currentLocationId}
+                currentFarmId={state.currentFarmId}
+                onSetLocation={(id) => setState(prev => ({ ...prev, currentLocationId: id, currentFarmId: null }))}
+                onSetFarm={(id) => setState(prev => ({ ...prev, currentFarmId: id }))}
+                onSyncLocations={handleSyncLocations}
+                onAddCity={() => setShowAddCityModal(true)}
+                onAddFarm={() => setShowAddFarmModal(true)}
+              />
+            )}
           </div>
         </main>
       </div>

@@ -27,9 +27,13 @@ export const Reports: React.FC<Props> = ({ state, currentFarmId }) => {
 
     // --- FINANCIAL REPORT STATE ---
     const [finPeriod, setFinPeriod] = useState<'7_DAYS' | '30_DAYS' | '90_DAYS' | 'THIS_MONTH' | 'LAST_MONTH' | 'ALL'>('ALL');
-    const [finSub, setFinSub] = useState<'OVERVIEW' | 'ANIMAL_PROFITABILITY'>('OVERVIEW');
+    const [finSub, setFinSub] = useState<'OVERVIEW' | 'ANIMAL_PROFITABILITY' | 'CUSTOM_EXPENSE'>('OVERVIEW');
     const [finAccrual, setFinAccrual] = useState<boolean>(true);
     const [finAnimalStatus, setFinAnimalStatus] = useState<string>('ALL');
+
+    const [customExpenseStartDate, setCustomExpenseStartDate] = useState<string>('');
+    const [customExpenseEndDate, setCustomExpenseEndDate] = useState<string>('');
+    const [customExpenseType, setCustomExpenseType] = useState<string>('ALL');
 
     const [finOverviewServer, setFinOverviewServer] = useState<Awaited<ReturnType<typeof backendService.getReportsFinancialOverview>> | null>(null);
     const [invMovementServer, setInvMovementServer] = useState<Awaited<ReturnType<typeof backendService.getReportsInventoryMovement>> | undefined>(undefined);
@@ -933,6 +937,106 @@ export const Reports: React.FC<Props> = ({ state, currentFarmId }) => {
                         </div>
                     )}
 
+                    {/* ══ CUSTOM EXPENSE SUB-TAB ══ */}
+                    {invSub === 'CUSTOM_EXPENSE' && (
+                        <div className="space-y-6 animate-fade-in-up">
+                            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
+                                <h3 className="font-bold text-slate-800 text-lg mb-4 flex items-center gap-2"><Filter size={18} className="text-emerald-500"/> Custom Procurement & Expense Builder</h3>
+                                <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Start Date</label>
+                                        <input type="date" className="w-full p-2 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-emerald-500" value={customExpenseStartDate} onChange={e => setCustomExpenseStartDate(e.target.value)} />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">End Date</label>
+                                        <input type="date" className="w-full p-2 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-emerald-500" value={customExpenseEndDate} onChange={e => setCustomExpenseEndDate(e.target.value)} />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Category / Type</label>
+                                        <select className="w-full p-2 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-emerald-500" value={customExpenseType} onChange={e => setCustomExpenseType(e.target.value)}>
+                                            <option value="ALL">All Categories</option>
+                                            <option value="FEED">Feed</option>
+                                            <option value="VACCINE">Vaccine / Medical</option>
+                                            <option value="LABOR">Labor</option>
+                                            <option value="MAINTENANCE">Maintenance</option>
+                                            <option value="INFRASTRUCTURE">Infrastructure</option>
+                                            <option value="OTHER">Other Expenses</option>
+                                        </select>
+                                    </div>
+                                    <div className="flex items-end">
+                                        <button onClick={() => {
+                                            const csvHeader = "Date,Category,Description,Amount\n";
+                                            const csvContent = state.expenses.filter(e => {
+                                                if (customExpenseStartDate && e.date < customExpenseStartDate) return false;
+                                                if (customExpenseEndDate && e.date > customExpenseEndDate) return false;
+                                                if (customExpenseType !== 'ALL' && e.category !== customExpenseType) return false;
+                                                return true;
+                                            }).map(e => `${e.date},${e.category},"${e.description || ''}",${e.amount}`).join('\n');
+                                            
+                                            const blob = new Blob([csvHeader + csvContent], { type: 'text/csv' });
+                                            const url = window.URL.createObjectURL(blob);
+                                            const a = document.createElement('a');
+                                            a.setAttribute('hidden', '');
+                                            a.setAttribute('href', url);
+                                            a.setAttribute('download', `custom_expenses_${new Date().getTime()}.csv`);
+                                            document.body.appendChild(a);
+                                            a.click();
+                                            document.body.removeChild(a);
+                                        }} className="w-full bg-emerald-600 text-white px-4 py-2 rounded-lg font-bold flex justify-center items-center gap-2 shadow-sm hover:bg-emerald-700 transition-colors">
+                                            <Download size={16}/> EXPORT CSV
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {(() => {
+                                    const filtered = state.expenses.filter(e => {
+                                        if (customExpenseStartDate && e.date < customExpenseStartDate) return false;
+                                        if (customExpenseEndDate && e.date > customExpenseEndDate) return false;
+                                        if (customExpenseType !== 'ALL' && e.category !== customExpenseType) return false;
+                                        return true;
+                                    }).sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+                                    const total = filtered.reduce((s,x) => s + x.amount, 0);
+
+                                    return (
+                                        <>
+                                            <div className="mb-4 bg-slate-50 p-4 rounded-xl border border-slate-100 flex justify-between items-center">
+                                                <span className="text-sm font-bold text-slate-500 uppercase">Total Selected Expenses</span>
+                                                <span className="text-2xl font-black text-emerald-600">PKR {total.toLocaleString()}</span>
+                                            </div>
+                                            <div className="max-h-[500px] overflow-y-auto border border-slate-100 rounded-xl">
+                                                <table className="min-w-full text-xs">
+                                                    <thead className="bg-slate-50 sticky top-0 z-10 shadow-sm shadow-slate-100">
+                                                        <tr>
+                                                            <th className="px-4 py-2.5 text-left font-bold text-slate-500 uppercase text-[10px]">Date</th>
+                                                            <th className="px-4 py-2.5 text-left font-bold text-slate-500 uppercase text-[10px]">Category</th>
+                                                            <th className="px-4 py-2.5 text-left font-bold text-slate-500 uppercase text-[10px]">Description</th>
+                                                            <th className="px-4 py-2.5 text-right font-bold text-slate-500 uppercase text-[10px]">Amount</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody className="divide-y divide-slate-50">
+                                                        {filtered.map(e => (
+                                                            <tr key={e.id} className="hover:bg-slate-50 transition-colors">
+                                                                <td className="px-4 py-3 font-semibold text-slate-700">{e.date}</td>
+                                                                <td className="px-4 py-3"><span className="px-2 py-0.5 rounded text-[9px] font-bold uppercase bg-slate-200 text-slate-700">{e.category}</span></td>
+                                                                <td className="px-4 py-3 text-slate-500">{e.description || '-'}</td>
+                                                                <td className="px-4 py-3 text-right font-bold text-slate-800">PKR {e.amount.toLocaleString()}</td>
+                                                            </tr>
+                                                        ))}
+                                                        {filtered.length === 0 && (
+                                                            <tr>
+                                                                <td colSpan={4} className="px-4 py-10 text-center text-slate-400 font-bold">No expenses found for the selected criteria.</td>
+                                                            </tr>
+                                                        )}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </>
+                                    );
+                                })()}
+                            </div>
+                        </div>
+                    )}
+
                 </div>
             )}
 
@@ -947,7 +1051,10 @@ export const Reports: React.FC<Props> = ({ state, currentFarmId }) => {
                                 <Activity size={14} /> Financial Overview
                             </button>
                             <button onClick={() => setFinSub('ANIMAL_PROFITABILITY')} className={`px-5 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${ finSub === 'ANIMAL_PROFITABILITY' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700' }`}>
-                                <Package size={14} /> Profitability by Animal
+                                <Package size={14} /> Animal P&L
+                            </button>
+                            <button onClick={() => setFinSub('CUSTOM_EXPENSE')} className={`px-5 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${ finSub === 'CUSTOM_EXPENSE' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700' }`}>
+                                <Filter size={14} /> Custom Report
                             </button>
                         </div>
                         <div className="flex flex-wrap gap-2 items-center">
