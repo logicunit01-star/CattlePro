@@ -13,8 +13,102 @@ interface Props {
 export const PalaiManager: React.FC<Props> = ({ state, onUpdateLivestock, onAddExpense }) => {
     const [activeTab, setActiveTab] = useState<'OVERVIEW' | 'CUSTOMERS' | 'ANIMALS' | 'PACKAGES'>('OVERVIEW');
     const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
+    const [customerTab, setCustomerTab] = useState<'ANIMALS' | 'LEDGER' | 'INVOICE'>('ANIMALS');
 
-    // Filter animals that are marked as PALAI
+    const [palaiClients, setPalaiClients] = useState<Entity[]>([]);
+    const [palaiSummary, setPalaiSummary] = useState<any>(null);
+    const [isLoading, setIsLoading] = useState(true);
+
+    // Form States
+    const [invoiceDateRange, setInvoiceDateRange] = useState({ start: '', end: '' });
+    const [isGeneratingInvoice, setIsGeneratingInvoice] = useState(false);
+
+    const [customerLedger, setCustomerLedger] = useState<any[]>([]);
+    const [isLoadingLedger, setIsLoadingLedger] = useState(false);
+
+    const [paymentAmount, setPaymentAmount] = useState(0);
+    const [isProcessingPayment, setIsProcessingPayment] = useState(false);
+
+    useEffect(() => {
+        fetchPalaiData();
+    }, [state.currentFarmId]);
+
+    const fetchPalaiData = async () => {
+        try {
+            setIsLoading(true);
+            const farmId = state.currentFarmId || undefined;
+            const [clients, summary] = await Promise.all([
+                backendService.getPalaiClients(farmId).catch(() => []),
+                backendService.getPalaiSummary(farmId).catch(() => null)
+            ]);
+            setPalaiClients(clients);
+            setPalaiSummary(summary);
+        } catch (err) {
+            console.error("Failed to fetch Palai data", err);
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    const handleGenerateInvoice = async () => {
+        if (!selectedCustomerId || !invoiceDateRange.start || !invoiceDateRange.end) return;
+        setIsGeneratingInvoice(true);
+        try {
+            const payload = {
+                farmId: state.currentFarmId || undefined,
+                customerId: selectedCustomerId,
+                billingPeriodStart: invoiceDateRange.start,
+                billingPeriodEnd: invoiceDateRange.end
+            };
+            await backendService.createPalaiInvoice(payload);
+            alert("Invoice generated successfully! The engine has calculated the total based on animal plans.");
+            setCustomerTab('LEDGER');
+            handleViewLedger(selectedCustomerId);
+            fetchPalaiData();
+        } catch (err) {
+            console.error(err);
+            alert("Failed to generate invoice");
+        } finally {
+            setIsGeneratingInvoice(false);
+        }
+    };
+
+    const handleViewLedger = async (customerId: string) => {
+        setCustomerTab('LEDGER');
+        setIsLoadingLedger(true);
+        try {
+            const records = await backendService.getEntityLedger(customerId);
+            setCustomerLedger(records);
+        } catch (err) {
+            console.error("Failed to load ledger", err);
+        } finally {
+            setIsLoadingLedger(false);
+        }
+    };
+
+    const handleRecordPayment = async () => {
+        if (!selectedCustomerId || paymentAmount <= 0) return;
+        setIsProcessingPayment(true);
+        try {
+            await backendService.createPayment({
+                entityId: selectedCustomerId,
+                amount: paymentAmount,
+                date: new Date().toISOString(),
+                notes: 'Palai Service Payment'
+            });
+            alert("Payment recorded successfully!");
+            setPaymentAmount(0);
+            handleViewLedger(selectedCustomerId);
+            fetchPalaiData();
+        } catch (err) {
+            console.error(err);
+            alert("Failed to record payment");
+        } finally {
+            setIsProcessingPayment(false);
+        }
+    };
+
+    // Derived from global state to maintain realtime sync for animals
     const palaiAnimals = state.livestock.filter(l => l.ownership === 'PALAI');
 
     const customerStats = palaiClients.map(cust => {
