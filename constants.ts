@@ -1,7 +1,7 @@
 
 import { Livestock, Expense, ExpenseCategory, FeedInventory, Infrastructure, Sale, DietPlan, Breeder, Entity, Invoice, Farm, Location } from './types';
 
-export const FIXED_CATEGORIES = ['Breeding', 'Meat', 'Dairy', 'Palai'];
+export const FIXED_CATEGORIES = ['Breeding', 'Meat', 'Dairy', 'Palai', 'Calf', 'Trading'];
 
 export const FEED_PLANS = {
   BASIC: { name: 'Basic Grazing', description: 'Pasture grazing + Basic Hay' },
@@ -428,6 +428,7 @@ export const MOCK_DIET_PLANS: DietPlan[] = [
     targetId: 'Milking Cows',
     targetName: 'Milking Cows',
     status: 'ACTIVE',
+    distributionMode: 'PER_ANIMAL',
     startDate: '2023-11-01',
     items: [
       { id: 'item-1', inventoryId: 'f1', inventoryName: 'Alfalfa Hay', quantity: 15, unit: 'kg', costPerUnit: 30 },

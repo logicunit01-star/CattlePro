@@ -32,8 +32,8 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
         localStorage.setItem('user', JSON.stringify(result.user));
         onLoginSuccess(result.user, result.token);
       } else {
-        const adminEmail = import.meta.env.VITE_ADMIN_EMAIL;
-        const adminPassword = import.meta.env.VITE_ADMIN_PASSWORD;
+        const adminEmail = (import.meta as any).env.VITE_ADMIN_EMAIL;
+        const adminPassword = (import.meta as any).env.VITE_ADMIN_PASSWORD;
         if (username !== adminEmail || password !== adminPassword) {
           setError('Invalid username or password. Please try again.');
           setIsLoading(false);

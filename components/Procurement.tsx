@@ -1,6 +1,8 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { backendService } from '../services/backendService';
 import { AppState, Expense, FeedInventory, ExpenseCategory } from '../types';
-import { Truck, ShoppingCart, User, AlertTriangle, CheckCircle, Clock, Search, Layers, Archive, Activity, RefreshCw, MinusCircle, Edit2, X, Save, Plus, Package, TrendingUp, BarChart, DollarSign, ArrowRight } from 'lucide-react';
+import { Truck, ShoppingCart, User, AlertTriangle, CheckCircle, Clock, Search, Layers, Archive, Activity, RefreshCw, MinusCircle, Edit2, X, Save, Plus, Package, TrendingUp, BarChart, DollarSign, ArrowRight, Filter, Download } from 'lucide-react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart as RechartsBarChart, Bar, PieChart, Pie, Cell } from 'recharts';
 
 interface Props {
     state: AppState;
@@ -15,7 +17,7 @@ const FEED_TYPES = ['GRASS', 'TMR', 'WANDA', 'OTHER'];
 const UNIT_OPTIONS = ['KG', 'TON', 'BUNDLE', 'BAG'];
 
 export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpense, onAddFeed, onUpdateInventory, onDeleteFeed }) => {
-    const [activeTab, setActiveTab] = useState<'DASHBOARD' | 'PROCUREMENT' | 'INVENTORY' | 'SUPPLIERS'>('DASHBOARD');
+    const [activeTab, setActiveTab] = useState<'DASHBOARD' | 'PROCUREMENT' | 'INVENTORY' | 'SUPPLIERS' | 'ANALYTICS'>('DASHBOARD');
 
     // VENDOR ENTITIES LOGIC - STRICT INTEGRATION
     const vendorEntities = useMemo(() => state.entities.filter(ent => ent.type === 'VENDOR'), [state.entities]);
@@ -55,6 +57,19 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
     const totalStockValue = feedItems.reduce((sum, item) => sum + (item.quantity * item.unitCost), 0);
     const lowStockCount = feedItems.filter(i => i.quantity <= i.reorderLevel).length;
     const [searchTerm, setSearchTerm] = useState('');
+    const [vendorPayablesReport, setVendorPayablesReport] = useState<Awaited<ReturnType<typeof backendService.getReportsVendorPayables>> | undefined>(undefined);
+
+    useEffect(() => {
+        if (!state.currentFarmId) {
+            setVendorPayablesReport(undefined);
+            return;
+        }
+        let cancelled = false;
+        backendService.getReportsVendorPayables({ farmId: state.currentFarmId })
+            .then(rows => { if (!cancelled) setVendorPayablesReport(rows); })
+            .catch(() => { if (!cancelled) setVendorPayablesReport(undefined); });
+        return () => { cancelled = true; };
+    }, [state.currentFarmId, state.expenses.length]);
 
     const vendorExpenses = useMemo(() => {
         let expenses = state.expenses.filter(e => e.category === 'FEED');
@@ -68,6 +83,108 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
     const pendingBills = dashboardVendorExpenses.filter(e => e.paymentStatus === 'PENDING' || e.paymentStatus === 'PARTIAL').reduce((sum, e) => sum + e.amount, 0);
     const monthlySpend = dashboardVendorExpenses.filter(e => e.date.startsWith(new Date().toISOString().slice(0, 7))).reduce((sum, e) => sum + e.amount, 0);
 
+    const priceTrendData = useMemo(() => {
+        const grouped: Record<string, any> = {};
+        vendorExpenses.forEach(e => {
+            const item = state.feed.find(f => f.id === e.feedItemId);
+            if (!item) return;
+            const key = new Date(e.date).toLocaleDateString('en-GB', { month: 'short', year: '2-digit' }); // e.g. Oct 26
+            if (!grouped[key]) grouped[key] = { name: key };
+            const ratePerKg = e.weight > 0 ? (e.amount / e.weight) : e.rate;
+            if (!grouped[key][item.name]) grouped[key][item.name] = { sum: 0, count: 0 };
+            grouped[key][item.name].sum += ratePerKg;
+            grouped[key][item.name].count += 1;
+        });
+        return Object.values(grouped).map(g => {
+            const finalObj: any = { name: g.name };
+            Object.keys(g).forEach(k => { if (k !== 'name') finalObj[k] = Math.round(g[k].sum / g[k].count); });
+            return finalObj;
+        });
+    }, [vendorExpenses, state.feed]);
+
+    const itemVendorComparisonData = useMemo(() => {
+        const itemVendors: Record<string, any> = {};
+        const vendorsSet = new Set<string>();
+
+        vendorExpenses.forEach(e => {
+            const item = state.feed.find(f => f.id === e.feedItemId);
+            if (!item) return;
+            const vendorObj = vendorEntities.find(v => v.id === e.supplier);
+            const vendorName = vendorObj ? vendorObj.name : (e.supplier === 'CASH' ? 'Cash' : 'Unknown');
+            vendorsSet.add(vendorName);
+            const ratePerKg = e.weight > 0 ? (e.amount / e.weight) : e.rate;
+
+            if (!itemVendors[item.name]) itemVendors[item.name] = { name: item.name };
+            if (!itemVendors[item.name][`${vendorName}_sum`]) {
+                itemVendors[item.name][`${vendorName}_sum`] = 0;
+                itemVendors[item.name][`${vendorName}_count`] = 0;
+            }
+            itemVendors[item.name][`${vendorName}_sum`] += ratePerKg;
+            itemVendors[item.name][`${vendorName}_count`] += 1;
+        });
+
+        const chartData = Object.values(itemVendors).map((iv: any) => {
+            const finalObj: any = { name: iv.name };
+            vendorsSet.forEach((v: string) => {
+                if (iv[`${v}_count`]) {
+                    finalObj[v] = Math.round(iv[`${v}_sum`] / iv[`${v}_count`]);
+                }
+            });
+            return finalObj;
+        });
+
+        return { data: chartData, vendors: Array.from(vendorsSet) };
+    }, [vendorExpenses, state.feed, vendorEntities]);
+
+    // NEW EXOTIC procurement data stats
+    const monthlySpendTrend = useMemo(() => {
+        const m = new Map<string, number>();
+        vendorExpenses.forEach(e => {
+            const month = e.date.substring(0, 7);
+            m.set(month, (m.get(month) || 0) + e.amount);
+        });
+        return Array.from(m.entries()).sort((a,b) => a[0].localeCompare(b[0])).map(([month, Total]) => ({ name: month, Total })).slice(-12);
+    }, [vendorExpenses]);
+
+    const topPurchasedItems = useMemo(() => {
+        const m = new Map<string, { qty: number, cost: number, bg: string }>();
+        vendorExpenses.forEach(e => {
+            const item = state.feed.find(f => f.id === e.feedItemId);
+            if (!item) return;
+            const ex = m.get(item.name) || { qty: 0, cost: 0, bg: item.feedType === 'GRASS' ? 'bg-emerald-500' : item.feedType === 'TMR' ? 'bg-blue-500' : 'bg-amber-500' };
+            m.set(item.name, { ...ex, qty: ex.qty + (e.weight || e.quantity || 0), cost: ex.cost + e.amount });
+        });
+        return Array.from(m.entries()).map(([name, data]) => ({ name, ...data })).sort((a,b) => b.cost - a.cost).slice(0, 5);
+    }, [vendorExpenses, state.feed]);
+
+    const vendorSpendDist = useMemo(() => {
+        const m = new Map<string, number>();
+        vendorExpenses.forEach(e => {
+            const vendorName = e.supplier === CASH_LABEL ? 'Cash' : (vendorEntities.find(v => v.id === e.supplier)?.name || 'Unknown');
+            m.set(vendorName, (m.get(vendorName) || 0) + e.amount);
+        });
+        return Array.from(m.entries()).map(([name, value]) => ({ name, value })).sort((a,b) => b.value - a.value);
+    }, [vendorExpenses, vendorEntities]);
+
+    const payablesAging = useMemo(() => {
+        const pending = vendorExpenses.filter(e => e.paymentStatus !== 'PAID');
+        const now = new Date().getTime();
+        let current = 0, days30 = 0, days60 = 0, days90 = 0;
+        pending.forEach(e => {
+            const diff = (now - new Date(e.date).getTime()) / (1000 * 3600 * 24);
+            if (diff <= 30) current += e.amount;
+            else if (diff <= 60) days30 += e.amount;
+            else if (diff <= 90) days60 += e.amount;
+            else days90 += e.amount;
+        });
+        return [
+            { name: '0-30 Days', amount: current, fill: '#10b981' },
+            { name: '31-60 Days', amount: days30, fill: '#f59e0b' },
+            { name: '61-90 Days', amount: days60, fill: '#f97316' },
+            { name: '> 90 Days', amount: days90, fill: '#ef4444' }
+        ].filter(x => x.amount > 0);
+    }, [vendorExpenses]);
+
     // Available items for procurement depending on category
     const availableProcurementItems = feedItems.filter(f => f.feedType === procurementForm.feedCategory || (!f.feedType && procurementForm.feedCategory === 'OTHER'));
 
@@ -80,15 +197,26 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
         const selectedItem = state.feed.find(f => f.id === procurementForm.feedTypeId);
         if (!selectedItem) return alert("Invalid Feed Item Selected.");
 
-        // Define unit behavior precisely based on Inventory settings, not merely the UI tab
-        const isQtyBased = ['BAG', 'BUNDLE'].includes((selectedItem.unit || '').toUpperCase());
+        // Define unit behavior: BAG/BUNDLE (or WANDA/TMR) = quantity in native unit (bags); else weight in kg.
+        const isQtyBased = ['BAG', 'BUNDLE'].includes((selectedItem.unit || '').toUpperCase()) || ['WANDA', 'TMR'].includes(selectedItem.feedType || '');
         const addedValue = isQtyBased ? procurementForm.quantity : procurementForm.weight;
+        const assumedWeightPerUnit = selectedItem.weightPerUnit || 40;
 
-        if (isQtyBased && (!procurementForm.quantity || !procurementForm.weight)) return alert("Quantity (Bags) and Total Weight are required.");
+        // If they left weight blank but filled quantity (for legacy data), auto compute it
+        if (isQtyBased && procurementForm.quantity && !procurementForm.weight) {
+            procurementForm.weight = procurementForm.quantity * assumedWeightPerUnit;
+        }
+
+        if (isQtyBased && (!procurementForm.quantity || !procurementForm.weight)) return alert("Quantity (Bags/Bundles) and Total Weight are required.");
         if (!isQtyBased && !procurementForm.weight) return alert("Total Weight is required.");
 
-        const totalCost = isQtyBased ? (procurementForm.quantity * procurementForm.rate) : (procurementForm.weight * procurementForm.rate);
-        const desc = isQtyBased ? `Purchase: ${selectedItem.name} (Qty: ${procurementForm.quantity}, Wt: ${procurementForm.weight} kg)` : `Purchase: ${selectedItem.name} (${procurementForm.weight} ${selectedItem.unit})`;
+        // CORRECTED COST FORMULA:
+        // If it's bag-based, the user enters Rate per Bag. If KG-based, Rate per KG.
+        const totalCost = isQtyBased && procurementForm.quantity > 0
+            ? procurementForm.quantity * procurementForm.rate
+            : procurementForm.weight * procurementForm.rate;
+
+        const desc = isQtyBased ? `Purchase: ${selectedItem.name} (Qty: ${procurementForm.quantity} ${selectedItem.unit}s, Wt: ${procurementForm.weight} kg)` : `Purchase: ${selectedItem.name} (${procurementForm.weight} kg)`;
 
         const expense: Expense = {
             id: Math.random().toString(36).substr(2, 9),
@@ -110,11 +238,11 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
         try {
             await onAddExpense(expense);
 
-            // Auto-update inventory
+            // Auto-update inventory (Keep unitCost native to the Unit e.g. Per Bag)
             onUpdateInventory({
                 ...selectedItem,
-                quantity: selectedItem.quantity + addedValue,
-                unitCost: procurementForm.rate, // update last tracking cost
+                quantity: selectedItem.quantity + (isQtyBased ? procurementForm.quantity : addedValue),
+                unitCost: procurementForm.rate,
                 defaultSupplier: procurementForm.vendorId !== CASH_LABEL ? procurementForm.vendorId : selectedItem.defaultSupplier
             });
 
@@ -134,14 +262,23 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
         const selectedItem = state.feed.find(f => f.id === procurementForm.feedTypeId);
         if (!selectedItem) return;
 
-        const isQtyBased = ['BAG', 'BUNDLE'].includes((selectedItem.unit || '').toUpperCase());
-        const newAddedValue = isQtyBased ? procurementForm.quantity : procurementForm.weight;
+        const isQtyBased = ['BAG', 'BUNDLE'].includes((selectedItem.unit || '').toUpperCase()) || ['WANDA', 'TMR'].includes(selectedItem.feedType || '');
+        const newAddedValue = procurementForm.weight;
+        const assumedWeightPerUnit = selectedItem.weightPerUnit || 40;
+
+        if (isQtyBased && procurementForm.quantity && !procurementForm.weight) {
+            procurementForm.weight = procurementForm.quantity * assumedWeightPerUnit;
+        }
 
         if (isQtyBased && (!procurementForm.quantity || !procurementForm.weight)) return alert("Quantity and Weight missing.");
         if (!isQtyBased && !procurementForm.weight) return alert("Weight is required.");
 
-        const totalCost = isQtyBased ? (procurementForm.quantity * procurementForm.rate) : (procurementForm.weight * procurementForm.rate);
-        const desc = isQtyBased ? `Purchase: ${selectedItem.name} (Qty: ${procurementForm.quantity}, Wt: ${procurementForm.weight} kg)` : `Purchase: ${selectedItem.name} (${procurementForm.weight} ${selectedItem.unit})`;
+        // CORRECTED COST FORMULA:
+        const totalCost = isQtyBased && procurementForm.quantity > 0
+            ? procurementForm.quantity * procurementForm.rate
+            : procurementForm.weight * procurementForm.rate;
+
+        const desc = isQtyBased ? `Purchase: ${selectedItem.name} (Qty: ${procurementForm.quantity} ${selectedItem.unit}s, Wt: ${procurementForm.weight} kg)` : `Purchase: ${selectedItem.name} (${procurementForm.weight} kg)`;
 
         const updated: Expense = {
             ...editingExpense,
@@ -165,14 +302,13 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
             let prevAddedValue = 0;
 
             if (prevItem) {
-                const prevIsQtyBased = ['BAG', 'BUNDLE'].includes((prevItem.unit || '').toUpperCase());
-                prevAddedValue = prevIsQtyBased ? (editingExpense.quantity || 0) : (editingExpense.weight || 0);
+                prevAddedValue = isQtyBased ? (editingExpense.quantity || 0) : (editingExpense.weight || 0);
 
                 // If it's modifying the exact same item ID
                 if (prevItem.id === selectedItem.id) {
                     onUpdateInventory({
                         ...selectedItem,
-                        quantity: selectedItem.quantity - prevAddedValue + newAddedValue,
+                        quantity: selectedItem.quantity - prevAddedValue + (isQtyBased ? procurementForm.quantity : newAddedValue),
                         unitCost: procurementForm.rate,
                         defaultSupplier: procurementForm.vendorId !== CASH_LABEL ? procurementForm.vendorId : selectedItem.defaultSupplier
                     });
@@ -181,7 +317,7 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                     onUpdateInventory({ ...prevItem, quantity: prevItem.quantity - prevAddedValue });
                     onUpdateInventory({
                         ...selectedItem,
-                        quantity: selectedItem.quantity + newAddedValue,
+                        quantity: selectedItem.quantity + (isQtyBased ? procurementForm.quantity : newAddedValue),
                         unitCost: procurementForm.rate,
                         defaultSupplier: procurementForm.vendorId !== CASH_LABEL ? procurementForm.vendorId : selectedItem.defaultSupplier
                     });
@@ -190,7 +326,7 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                 // If it was somehow not linked accurately before, just add to the new item
                 onUpdateInventory({
                     ...selectedItem,
-                    quantity: selectedItem.quantity + newAddedValue,
+                    quantity: selectedItem.quantity + (isQtyBased ? procurementForm.quantity : newAddedValue),
                     unitCost: procurementForm.rate,
                     defaultSupplier: procurementForm.vendorId !== CASH_LABEL ? procurementForm.vendorId : selectedItem.defaultSupplier
                 });
@@ -259,14 +395,19 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
     };
 
     const handleRecordUsage = (item: FeedInventory) => {
-        const qtyStr = prompt(`Current stock: ${item.quantity.toLocaleString()} ${item.unit}\nAmount of ${item.name} consumed (in ${item.unit})?`);
+        const isQtyBased = ['BAG', 'BUNDLE'].includes((item.unit || '').toUpperCase());
+        const wpu = item.weightPerUnit || 40;
+        const stockDisplay = isQtyBased
+            ? `${item.quantity.toLocaleString()} ${item.unit}s (≈ ${(item.quantity * wpu).toLocaleString()} KG total)`
+            : `${item.quantity.toLocaleString()} KG`;
+        const qtyStr = prompt(`Current stock: ${stockDisplay}\n\nEnter amount of ${item.name} consumed in KG:`);
         if (!qtyStr) return;
-        const consumed = parseFloat(qtyStr);
-        if (isNaN(consumed) || consumed <= 0) return alert("Invalid amount");
-        if (consumed > item.quantity) return alert("Cannot consume more than available stock!");
-
-        onUpdateInventory({ ...item, quantity: item.quantity - consumed });
-        alert(`Successfully deducted ${consumed} ${item.unit} of ${item.name}.`);
+        const consumedKg = parseFloat(qtyStr);
+        if (isNaN(consumedKg) || consumedKg <= 0) return alert("Invalid amount");
+        const toDeduct = isQtyBased ? consumedKg / wpu : consumedKg;
+        if (toDeduct > (item.quantity ?? 0)) return alert("Cannot consume more than available stock!");
+        onUpdateInventory({ ...item, quantity: (item.quantity ?? 0) - toDeduct });
+        alert(`Successfully deducted ${consumedKg} KG${isQtyBased ? ` (${toDeduct.toFixed(3)} ${item.unit}s)` : ''} of ${item.name}.`);
     };
 
     // Helper: Map Vendor ID to display Name
@@ -304,6 +445,7 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
             <div className="flex flex-wrap gap-2 bg-white p-1.5 rounded-2xl border border-slate-200 shadow-sm w-fit">
                 {[
                     { id: 'DASHBOARD', label: 'Overview', icon: BarChart },
+                    { id: 'ANALYTICS', label: 'Analytics', icon: Activity },
                     { id: 'PROCUREMENT', label: 'Procure', icon: Truck },
                     { id: 'INVENTORY', label: 'Inventory', icon: Package },
                     { id: 'SUPPLIERS', label: 'Vendors', icon: User }
@@ -364,11 +506,56 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                         </div>
                     </div>
 
+                    {vendorPayablesReport && vendorPayablesReport.length > 0 && (
+                        <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm overflow-x-auto">
+                            <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2"><DollarSign size={18} className="text-indigo-500" /> Vendor payables (all categories)</h3>
+                            <p className="text-xs text-slate-500 mb-3">Aggregated from bills/expenses by supplier (server report).</p>
+                            <table className="min-w-full text-xs">
+                                <thead>
+                                    <tr className="text-left text-slate-500 border-b border-slate-100">
+                                        <th className="py-2 pr-4">Vendor</th>
+                                        <th className="py-2 pr-4 text-right">Total billed</th>
+                                        <th className="py-2 pr-4 text-right">Total paid</th>
+                                        <th className="py-2 pr-4 text-right">Outstanding</th>
+                                        <th className="py-2 text-right">Overdue</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {vendorPayablesReport.slice(0, 12).map(row => (
+                                        <tr key={row.vendorKey} className="border-b border-slate-50 hover:bg-slate-50/80">
+                                            <td className="py-2.5 font-semibold text-slate-700">{row.vendor}</td>
+                                            <td className="py-2.5 text-right text-slate-600">{row.totalBilled.toLocaleString()}</td>
+                                            <td className="py-2.5 text-right text-emerald-600">{row.totalPaid.toLocaleString()}</td>
+                                            <td className="py-2.5 text-right font-bold text-amber-600">{row.outstanding.toLocaleString()}</td>
+                                            <td className="py-2.5 text-right text-red-500 font-bold">{row.overdueAmount.toLocaleString()}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                        <div className="lg:col-span-2 bg-white rounded-3xl border border-slate-200 p-6 flex flex-col justify-center items-center h-72 shadow-sm text-center">
-                            <BarChart className="text-slate-200 mb-4" size={64} />
-                            <h3 className="text-lg font-bold text-slate-700">Procurement & Analytics</h3>
-                            <p className="text-sm font-medium text-slate-400 max-w-sm mt-2">Comprehensive graphs for historical consumption limits and feed category distribution will be generated here as data populates.</p>
+                        <div className="lg:col-span-2 bg-white rounded-3xl border border-slate-200 p-6 shadow-sm">
+                            <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2"><TrendingUp size={18} className="text-emerald-500" /> Monthly Procurement Spend</h3>
+                            <div className="h-64">
+                                {monthlySpendTrend.length > 0 ? (
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <LineChart data={monthlySpendTrend} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+                                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
+                                            <XAxis dataKey="name" tick={{ fontSize: 12, fill: '#64748b', fontWeight: 600 }} axisLine={false} tickLine={false} />
+                                            <YAxis tick={{ fontSize: 12, fill: '#64748b', fontWeight: 600 }} axisLine={false} tickLine={false} tickFormatter={(value) => `v${value >= 1000 ? (value/1000).toFixed(0)+'k' : value}`} />
+                                            <Tooltip formatter={(value: number) => `PKR ${value.toLocaleString()}`} contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)' }} />
+                                            <Line type="monotone" dataKey="Total" stroke="#10b981" strokeWidth={4} dot={{ stroke: '#10b981', strokeWidth: 2, r: 6, fill: '#fff' }} activeDot={{ r: 8 }} />
+                                        </LineChart>
+                                    </ResponsiveContainer>
+                                ) : (
+                                    <div className="h-full flex flex-col items-center justify-center text-slate-400">
+                                        <TrendingUp size={48} className="mb-2 opacity-20" />
+                                        <p className="text-sm font-bold">No procurement history</p>
+                                    </div>
+                                )}
+                            </div>
                         </div>
                         <div className="lg:col-span-1 bg-gradient-to-b from-slate-50 to-white rounded-3xl border border-slate-200 p-6 shadow-sm">
                             <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2"><Package size={18} className="text-slate-500" /> Inventory Value Spread</h3>
@@ -390,6 +577,164 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                     );
                                 })}
                             </div>
+                            <div className="mt-8 space-y-4">
+                                <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2 text-sm"><Layers size={16} className="text-blue-500" /> Top Purchased Items</h3>
+                                {topPurchasedItems.map(item => (
+                                    <div key={item.name}>
+                                        <div className="flex justify-between text-xs font-bold text-slate-600 mb-1">
+                                            <span>{item.name}</span>
+                                            <span>PKR {(item.cost/1000).toFixed(1)}k</span>
+                                        </div>
+                                        <div className="w-full bg-slate-100 rounded-full h-1.5">
+                                            <div className={`${item.bg} h-1.5 rounded-full`} style={{ width: `${Math.min(100, (item.cost / (topPurchasedItems[0]?.cost || 1)) * 100)}%` }}></div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {activeTab === 'ANALYTICS' && (
+                <div className="space-y-6 animate-fade-in-up">
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        {/* Price Trend Chart */}
+                        <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+                            <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2"><TrendingUp size={18} className="text-emerald-500" /> Item Price Trend (PKR)</h3>
+                            <div className="h-72">
+                                {priceTrendData.length > 0 ? (
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <LineChart data={priceTrendData}>
+                                            <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                                            <XAxis dataKey="name" tick={{ fontSize: 12 }} />
+                                            <YAxis tick={{ fontSize: 12 }} />
+                                            <Tooltip contentStyle={{ borderRadius: '12px' }} />
+                                            <Legend wrapperStyle={{ fontSize: '12px' }} />
+                                            {feedItems.map((item, idx) => (
+                                                <Line key={item.id} type="monotone" dataKey={item.name} stroke={['#10b981', '#3b82f6', '#f59e0b', '#8b5cf6', '#ef4444'][idx % 5]} strokeWidth={3} dot={{ r: 4 }} connectNulls activeDot={{ r: 6 }} />
+                                            ))}
+                                        </LineChart>
+                                    </ResponsiveContainer>
+                                ) : (
+                                    <div className="h-full flex items-center justify-center text-slate-400">No sufficient data for pricing trend</div>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Payables Aging */}
+                        <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+                            <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2"><Clock size={18} className="text-red-500" /> Payables Aging Summary</h3>
+                            <div className="h-72">
+                                {payablesAging.length > 0 ? (
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <RechartsBarChart data={payablesAging} layout="vertical" margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+                                            <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+                                            <XAxis type="number" tickFormatter={(v) => `\${v >= 1000 ? v/1000+'k' : v}`} />
+                                            <YAxis dataKey="name" type="category" tick={{ fontSize: 12, fontWeight: 600 }} width={80} />
+                                            <Tooltip formatter={(value: number) => `PKR ${value.toLocaleString()}`} cursor={{ fill: 'transparent' }} contentStyle={{ borderRadius: '12px' }} />
+                                            <Bar dataKey="amount" radius={[0, 4, 4, 0]} barSize={32}>
+                                                {payablesAging.map((entry, index) => (
+                                                    <Cell key={`cell-${index}`} fill={entry.fill} />
+                                                ))}
+                                            </Bar>
+                                        </RechartsBarChart>
+                                    </ResponsiveContainer>
+                                ) : (
+                                    <div className="h-full flex items-center justify-center text-emerald-500 font-bold gap-2">
+                                        <CheckCircle size={24} /> No aging payables
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Vendor Spend Dist */}
+                        <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+                            <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2"><User size={18} className="text-blue-500" /> Spend by Vendor</h3>
+                            <div className="h-72">
+                                {vendorSpendDist.length > 0 ? (
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <PieChart>
+                                            <Pie data={vendorSpendDist} cx="50%" cy="50%" innerRadius={60} outerRadius={90} paddingAngle={4} dataKey="value">
+                                                {vendorSpendDist.map((_, i) => <Cell key={i} fill={['#10b981', '#3b82f6', '#f59e0b', '#8b5cf6', '#ef4444', '#14b8a6'][i % 6]} />)}
+                                            </Pie>
+                                            <Tooltip formatter={(v: number) => `PKR ${v.toLocaleString()}`} contentStyle={{ borderRadius: '12px' }} />
+                                            <Legend />
+                                        </PieChart>
+                                    </ResponsiveContainer>
+                                ) : (
+                                    <div className="h-full flex items-center justify-center text-slate-400">No spend data</div>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Vendor Comparison Chart */}
+                        <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+                            <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2"><BarChart size={18} className="text-purple-500" /> Vendor Item Rate Comparison</h3>
+                            <div className="h-72">
+                                {itemVendorComparisonData.data.length > 0 ? (
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <RechartsBarChart data={itemVendorComparisonData.data}>
+                                            <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                                            <XAxis dataKey="name" tick={{ fontSize: 12 }} />
+                                            <YAxis tick={{ fontSize: 12 }} />
+                                            <Tooltip contentStyle={{ borderRadius: '12px' }} />
+                                            <Legend wrapperStyle={{ fontSize: '12px' }} />
+                                            {itemVendorComparisonData.vendors.map((vendor, index) => (
+                                                <Bar key={vendor} dataKey={vendor} fill={['#10b981', '#3b82f6', '#f59e0b', '#8b5cf6'][index % 4]} radius={[4, 4, 0, 0]} />
+                                            ))}
+                                        </RechartsBarChart>
+                                    </ResponsiveContainer>
+                                ) : (
+                                    <div className="h-full flex items-center justify-center text-slate-400">No vendor data</div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Quick Analytics Summary */}
+                    <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm">
+                        <div className="p-4 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
+                            <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2"><Archive size={16} /> Procurement History Detail</h3>
+                            <button onClick={() => {
+                                const rows = vendorExpenses.map(e => ({ Date: e.date, Item: state.feed.find(x => x.id === e.feedItemId)?.name || '-', Vendor: vendorEntities.find(x => x.id === e.supplier)?.name || 'Cash', Rate: e.rate, Amount: e.amount, QtyWt: e.weight > 0 ? e.weight + ' kg' : e.quantity, Status: e.paymentStatus }));
+                                const csvStr = [Object.keys(rows[0] || {}).join(','), ...rows.map(r => Object.values(r).map(x => `"${x}"`).join(','))].join('\n');
+                                const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csvStr], { type: 'text/csv' })); a.download = 'history.csv'; a.click();
+                            }} className="flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-2 rounded-lg hover:bg-emerald-100 transition-colors">
+                                <Download size={13} /> Export Data
+                            </button>
+                        </div>
+                        <div className="max-h-80 overflow-y-auto">
+                            <table className="w-full text-left text-sm">
+                                <thead className="bg-white sticky top-0 border-b border-slate-200">
+                                    <tr className="text-xs text-slate-500 font-bold uppercase tracking-wider">
+                                        <th className="p-4">Date</th>
+                                        <th className="p-4">Item</th>
+                                        <th className="p-4">Vendor</th>
+                                        <th className="p-4 text-right">Qty/Wt</th>
+                                        <th className="p-4 text-right">Total (PKR)</th>
+                                        <th className="p-4 text-center">Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {vendorExpenses.length === 0 ? (
+                                        <tr><td colSpan={6} className="text-center py-8 text-slate-400 font-medium">No procurement logs found.</td></tr>
+                                    ) : (
+                                        vendorExpenses.map((exp, idx) => (
+                                            <tr key={idx} className="hover:bg-slate-50 transition-colors">
+                                                <td className="p-4 font-medium text-slate-700">{exp.date}</td>
+                                                <td className="p-4 font-bold text-slate-800">{state.feed.find(x => x.id === exp.feedItemId)?.name || '-'}</td>
+                                                <td className="p-4 text-slate-600">{exp.supplier === CASH_LABEL ? 'Cash' : vendorEntities.find(v => v.id === exp.supplier)?.name}</td>
+                                                <td className="p-4 text-right text-slate-600">{exp.weight > 0 ? `${exp.weight} kg` : exp.quantity}</td>
+                                                <td className="p-4 text-right font-bold text-emerald-600">{exp.amount.toLocaleString()}</td>
+                                                <td className="p-4 text-center">
+                                                    <span className={`text-[10px] font-black px-2 py-1 rounded-full ${exp.paymentStatus === 'PAID' ? 'bg-emerald-100 text-emerald-700' : exp.paymentStatus === 'PENDING' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>{exp.paymentStatus}</span>
+                                                </td>
+                                            </tr>
+                                        ))
+                                    )}
+                                </tbody>
+                            </table>
                         </div>
                     </div>
                 </div>
@@ -463,16 +808,17 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                             <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 space-y-4">
                                 {(() => {
                                     const selectedItem = state.feed.find(f => f.id === procurementForm.feedTypeId);
-                                    const isQtyBased = selectedItem && ['BAG', 'BUNDLE'].includes((selectedItem.unit || '').toUpperCase());
+                                    const isQtyBased = selectedItem && (['BAG', 'BUNDLE'].includes((selectedItem.unit || '').toUpperCase()) || ['WANDA', 'TMR'].includes(selectedItem.feedType || ''));
+                                    const assumedWeightPerUnit = selectedItem?.weightPerUnit || 40;
 
                                     if (isQtyBased) {
                                         return (
                                             <div className="grid grid-cols-2 gap-3">
                                                 <div>
-                                                    <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1">Qty ({selectedItem.unit}) <span className="text-red-500">*</span></label>
+                                                    <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1">Qty ({selectedItem?.unit === 'kg' ? 'BAGs' : (selectedItem?.unit || 'BAGs')}) <span className="text-red-500">*</span></label>
                                                     <input type="number" min={0} value={procurementForm.quantity || ''} onChange={e => {
                                                         const q = parseFloat(e.target.value) || 0;
-                                                        setProcurementForm(p => ({ ...p, quantity: q, weight: selectedItem.weightPerUnit ? q * selectedItem.weightPerUnit : p.weight }));
+                                                        setProcurementForm(p => ({ ...p, quantity: q, weight: q * assumedWeightPerUnit }));
                                                     }} className="w-full border border-slate-200 focus:border-emerald-500 text-sm font-bold text-slate-700 rounded-xl px-3 py-2 outline-none" placeholder="0" />
                                                 </div>
                                                 <div>
@@ -491,7 +837,10 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                     }
                                 })()}
                                 <div>
-                                    <label className="block text-[11px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Unit Rate (PKR) <span className="text-red-500">*</span></label>
+                                    <label className="block text-[11px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Rate per {(() => {
+                                        const i = state.feed.find(f => f.id === procurementForm.feedTypeId);
+                                        return i && ['BAG', 'BUNDLE'].includes((i.unit || '').toUpperCase()) ? (i.unit || 'BAG') : 'KG';
+                                    })()} (PKR) <span className="text-red-500">*</span></label>
                                     <input type="number" min={0} value={procurementForm.rate || ''} onChange={e => setProcurementForm({ ...procurementForm, rate: parseFloat(e.target.value) || 0 })} className="w-full border border-slate-200 focus:border-emerald-500 text-sm font-bold text-slate-700 rounded-xl px-4 py-2.5 outline-none" placeholder="0.00" />
                                 </div>
                             </div>
@@ -519,7 +868,11 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                     <div className="absolute top-0 right-0 p-2 opacity-10"><DollarSign size={48} /></div>
                                     <span className="text-[10px] font-black text-emerald-600 uppercase tracking-wider">Total Value</span>
                                     <span className="text-2xl font-black text-emerald-800 mb-3 block">
-                                        PKR {(procurementForm.feedCategory === 'GRASS' ? (procurementForm.weight || 0) * (procurementForm.rate || 0) : (procurementForm.quantity || 0) * (procurementForm.rate || 0)).toLocaleString()}
+                                        PKR {(() => {
+                                            const i = state.feed.find(f => f.id === procurementForm.feedTypeId);
+                                            const isQ = i && ['BAG', 'BUNDLE'].includes((i.unit || '').toUpperCase());
+                                            return (isQ && (procurementForm.quantity || 0) > 0) ? ((procurementForm.quantity || 0) * (procurementForm.rate || 0)).toLocaleString() : ((procurementForm.weight || 0) * (procurementForm.rate || 0)).toLocaleString();
+                                        })()}
                                     </span>
                                     {editingExpense ? (
                                         <button type="button" onClick={handleUpdateExpenseSubmit} className="w-full bg-slate-800 text-white font-bold py-2.5 rounded-xl hover:bg-slate-700 flex items-center justify-center gap-2 shadow-md transition-all z-10"><Save size={16} /> Update</button>
@@ -634,7 +987,7 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                             </select>
                                         </div>
                                         <div>
-                                            <label className="block text-[11px] font-black text-slate-500 uppercase tracking-wider mb-1.5">UOM</label>
+                                            <label className="block text-[11px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Purchase Unit Format</label>
                                             <select value={newItemForm.unit} onChange={e => setNewItemForm({ ...newItemForm, unit: e.target.value })} className="w-full border border-slate-200 focus:border-emerald-500 text-sm font-bold text-slate-700 rounded-xl px-3 py-3 outline-none bg-slate-50 focus:bg-white transition-colors">
                                                 {UNIT_OPTIONS.map(u => <option key={u} value={u}>{u}</option>)}
                                             </select>
@@ -652,16 +1005,16 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                 <div className="space-y-4">
                                     <div className="grid grid-cols-2 gap-3">
                                         <div>
-                                            <label className="block text-[11px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Limit/Alert</label>
+                                            <label className="block text-[11px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Limit/Alert ({newItemForm.unit || 'KG'})</label>
                                             <input type="number" min={0} value={newItemForm.reorderLevel} onChange={e => setNewItemForm({ ...newItemForm, reorderLevel: parseInt(e.target.value) || 0 })} className="w-full border border-slate-200 focus:border-emerald-500 text-sm font-bold text-slate-700 rounded-xl px-4 py-3 outline-none bg-slate-50 focus:bg-white transition-colors" />
                                         </div>
                                         <div>
-                                            <label className="block text-[11px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Initial Qty</label>
+                                            <label className="block text-[11px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Initial Stock ({newItemForm.unit})</label>
                                             <input type="number" min={0} value={newItemForm.quantity} onChange={e => setNewItemForm({ ...newItemForm, quantity: parseFloat(e.target.value) || 0 })} className="w-full border border-slate-200 focus:border-emerald-500 text-sm font-bold text-slate-700 rounded-xl px-4 py-3 outline-none bg-slate-50 focus:bg-white transition-colors disabled:opacity-50" disabled={!!editingItem} title={editingItem ? "Update quantity via Purchase or Usage" : ""} />
                                         </div>
                                     </div>
                                     <div>
-                                        <label className="block text-[11px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Base Rate (PKR)</label>
+                                        <label className="block text-[11px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Base Rate (PKR / {newItemForm.unit})</label>
                                         <input type="number" min={0} value={newItemForm.unitCost} onChange={e => setNewItemForm({ ...newItemForm, unitCost: parseFloat(e.target.value) || 0 })} className="w-full border border-slate-200 focus:border-emerald-500 text-sm font-bold text-slate-700 rounded-xl px-4 py-3 outline-none bg-slate-50 focus:bg-white transition-colors" />
                                     </div>
                                 </div>
@@ -701,15 +1054,22 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                     <div className="px-6 py-4 flex items-center justify-between bg-slate-50/50">
                                         <div>
                                             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Available Stock</p>
-                                            <div className="flex items-end gap-1.5 mt-0.5">
-                                                <span className={`text-2xl font-black ${isLow ? 'text-red-500' : 'text-slate-800'}`}>{item.quantity.toLocaleString()}</span>
-                                                <span className="text-sm font-bold text-slate-500 pb-0.5">{item.unit}</span>
+                                            <div className="flex flex-col mt-0.5">
+                                                <div className="flex items-end gap-1.5">
+                                                    <span className={`text-2xl font-black ${isLow ? 'text-red-500' : 'text-slate-800'}`}>{item.quantity.toLocaleString()}</span>
+                                                    <span className="text-sm font-bold text-slate-500 pb-0.5 uppercase">{item.unit || 'KG'}</span>
+                                                </div>
+                                                {['BAG', 'BUNDLE'].includes((item.unit || '').toUpperCase()) && item.weightPerUnit && item.weightPerUnit > 0 && (
+                                                    <p className="text-xs font-bold text-slate-400 mt-1 bg-slate-100 px-2 py-0.5 rounded-md inline-block w-fit">
+                                                        ≈ {(item.quantity * item.weightPerUnit).toLocaleString()} KG Total
+                                                    </p>
+                                                )}
                                             </div>
                                             {isLow && <p className="text-[10px] font-bold text-red-500 flex items-center gap-1 mt-1"><AlertTriangle size={10} /> Restock Needed</p>}
                                         </div>
                                         <div className="text-right">
                                             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Moving Cost</p>
-                                            <p className="text-sm font-black text-slate-700 mt-0.5 border border-slate-200 bg-white px-2 py-1 rounded-lg shadow-sm">PKR {item.unitCost.toLocaleString()}</p>
+                                            <p className="text-sm font-black text-slate-700 mt-0.5 border border-slate-200 bg-white px-2 py-1 rounded-lg shadow-sm">PKR {item.unitCost.toLocaleString()} / {item.unit?.toUpperCase() || 'KG'}</p>
                                         </div>
                                     </div>
                                     <div className="px-6 py-4 flex gap-2">
@@ -795,6 +1155,60 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                 <User size={32} className="mx-auto text-slate-200 mb-3" />
                                 <p className="text-sm font-medium text-slate-500">No active Vendors created in internal ledger.</p>
                                 <p className="text-xs text-slate-400 mt-1">Please create via Financials / Ledger configuration.</p>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Detailed Vendor Analytics */}
+                    <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 mt-8">
+                        {priceTrendData.length > 0 && (
+                            <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+                                <h3 className="text-lg font-black text-slate-800 mb-6 flex items-center gap-2"><TrendingUp className="text-emerald-500" /> Date Variation Analytics (Cost/KG)</h3>
+                                <div className="h-80 w-full">
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <LineChart data={priceTrendData}>
+                                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                                            <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
+                                            <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} axisLine={false} tickLine={false} tickFormatter={(val) => `PKR ${val}`} />
+                                            <Tooltip
+                                                contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                                                itemStyle={{ fontSize: '12px', fontWeight: 'bold' }}
+                                                labelStyle={{ fontSize: '10px', color: '#64748b', fontWeight: 'bold' }}
+                                            />
+                                            <Legend wrapperStyle={{ fontSize: '12px', fontWeight: 'bold', paddingTop: '10px' }} />
+                                            {Array.from(new Set(state.feed.map(f => f.name))).map((name, i) => (
+                                                <Line key={name} type="monotone" dataKey={name} name={name} stroke={`hsl(${i * 45 + 150}, 70%, 50%)`} strokeWidth={3} dot={{ r: 4, strokeWidth: 2 }} activeDot={{ r: 6 }} connectNulls />
+                                            ))}
+                                        </LineChart>
+                                    </ResponsiveContainer>
+                                </div>
+                                <p className="text-xs font-medium text-slate-500 mt-4 text-center">Averaged per-KG rates across recent invoices dynamically graphed per product.</p>
+                            </div>
+                        )}
+
+                        {itemVendorComparisonData.data.length > 0 && (
+                            <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+                                <h3 className="text-lg font-black text-slate-800 mb-6 flex items-center gap-2"><BarChart className="text-blue-500" /> Vendor Price Comparison per Item (Cost/KG)</h3>
+                                <div className="h-80 w-full">
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <RechartsBarChart data={itemVendorComparisonData.data}>
+                                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                                            <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
+                                            <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} axisLine={false} tickLine={false} tickFormatter={(val) => `PKR ${val}`} />
+                                            <Tooltip
+                                                contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                                                cursor={{ fill: '#f8fafc' }}
+                                                itemStyle={{ fontSize: '12px', fontWeight: 'bold' }}
+                                                labelStyle={{ fontSize: '10px', color: '#64748b', fontWeight: 'bold' }}
+                                            />
+                                            <Legend wrapperStyle={{ fontSize: '12px', fontWeight: 'bold', paddingTop: '10px' }} />
+                                            {itemVendorComparisonData.vendors.map((v, i) => (
+                                                <Bar key={v} dataKey={v} name={v} fill={`hsl(${i * 60 + 200}, 75%, 60%)`} radius={[4, 4, 0, 0]} maxBarSize={50} />
+                                            ))}
+                                        </RechartsBarChart>
+                                    </ResponsiveContainer>
+                                </div>
+                                <p className="text-xs font-medium text-slate-500 mt-4 text-center">Visualizes base pricing differentials to support economic purchasing.</p>
                             </div>
                         )}
                     </div>

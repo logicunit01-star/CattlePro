@@ -43,6 +43,9 @@ export interface MedicalRecord {
   notes: string;
   nextDueDate?: string;
   imageUrl?: string;
+  inventoryId?: string;
+  quantityUsed?: number;
+  vendorId?: string;
 }
 
 export interface MedicineInventory {
@@ -220,6 +223,7 @@ export interface Livestock {
   status: LivestockStatus;
   location?: string; // Barn/Pen within the farm (derived context can be useful)
   imageUrl?: string;
+  galleryImages?: string[];
   notes?: string;
   medicalHistory: MedicalRecord[];
   breedingHistory: InseminationRecord[];
@@ -230,6 +234,7 @@ export interface Livestock {
   sireId?: string; // Father
   accumulatedFeedCost?: number;
   accumulatedMedicalCost?: number;
+  deathDate?: string;
 }
 
 export interface AppState {
@@ -270,6 +275,11 @@ export interface Expense {
   supplier?: string;
   paymentStatus?: 'PAID' | 'PENDING' | 'PARTIAL';
   paymentDate?: string;
+  amountPaid?: number;
+  isSystemGenerated?: boolean;
+  referenceType?: string;
+  /** When set, this expense is removed when the feed ledger is reversed. */
+  processedFeedLedgerId?: string;
   // Procurement (FEED): so edit form matches new purchase entry
   feedCategory?: string;  // GRASS, TMR, WANDA
   feedItemId?: string;    // FeedInventory id
@@ -323,6 +333,7 @@ export interface FeedInventory {
   location?: string;
   feedType?: 'GRASS' | 'TMR' | 'WANDA' | 'OTHER';
   defaultSupplier?: string;
+  vendorId?: string;
   description?: string;
 }
 

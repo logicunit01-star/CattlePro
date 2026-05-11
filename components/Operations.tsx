@@ -1,9 +1,11 @@
 
 import React, { useState, useEffect } from 'react';
 import { AppState, Livestock, FeedInventory, Infrastructure, DietPlan, TreatmentProtocol, TreatmentLog, TreatmentItem, MaintenanceRecord, ExpenseCategory } from '../types';
-import { Warehouse, Construction, AlertCircle, Plus, Trash2, Edit2, Tag, X, Save, CheckCircle, ArrowLeft, Utensils, CalendarClock, Beef, Upload, Image as ImageIcon, Stethoscope, Pill } from 'lucide-react';
+import { backendService } from '../services/backendService';
+import { Warehouse, Construction, AlertCircle, Plus, Trash2, Edit2, Tag, X, Save, CheckCircle, ArrowLeft, Utensils, CalendarClock, Beef, Upload, Image as ImageIcon, Stethoscope, Pill, Calendar, ChevronRight, RotateCcw, PlayCircle, ListChecks, Users, FlaskConical } from 'lucide-react';
+import { ActivityFeed } from './ActivityFeed';
 
-export type OperationsTab = 'FEED' | 'MEDICINE' | 'SUPPLIES' | 'INFRA' | 'DIET';
+export type OperationsTab = 'ACTIVITY' | 'FEED' | 'MEDICINE' | 'SUPPLIES' | 'INFRA' | 'DIET';
 
 interface Props {
     state: AppState;
@@ -23,6 +25,8 @@ interface Props {
     onUpdateTreatmentProtocol: (plan: TreatmentProtocol) => void | Promise<void>;
     onDeleteTreatmentProtocol: (id: string) => void | Promise<void>;
     onLogTreatment: (logs: TreatmentLog[]) => void | Promise<void>;
+    /** When set, protocol apply uses atomic backend bulk endpoint instead of building logs client-side. */
+    onApplyProtocol?: (protocolId: string, targetAnimalIds: string[], performedBy?: string) => Promise<void>;
     onAddExpense: (expense: any) => Promise<void>;
     onReverseFeedLedger: (ledgerId: string) => Promise<void>;
     onClearFeedLedger: () => Promise<void>;
@@ -30,7 +34,7 @@ interface Props {
 
 export const Operations: React.FC<Props> = ({
     state,
-    initialTab = 'FEED',
+    initialTab = 'ACTIVITY',
     onTabChange,
     onAddFeed,
     onUpdateFeed,
@@ -46,6 +50,7 @@ export const Operations: React.FC<Props> = ({
     onUpdateTreatmentProtocol,
     onDeleteTreatmentProtocol,
     onLogTreatment,
+    onApplyProtocol,
     onAddExpense,
     onReverseFeedLedger,
     onClearFeedLedger
@@ -61,7 +66,7 @@ export const Operations: React.FC<Props> = ({
         setActiveTab(tab);
         onTabChange?.(tab);
     };
-    const [viewMode, setViewMode] = useState<'LIST' | 'FORM' | 'PROTOCOL' | 'SERVICE' | 'LEDGER'>('LIST');
+    const [viewMode, setViewMode] = useState<'LIST' | 'FORM' | 'PROTOCOL' | 'SERVICE' | 'LEDGER' | 'BACKDATE'>('LIST');
 
     // --- SERVICE STATE ---
     const [servicingAsset, setServicingAsset] = useState<Infrastructure | null>(null);
@@ -98,6 +103,81 @@ export const Operations: React.FC<Props> = ({
         name: '', status: 'DRAFT', scheduleType: 'RECURRING', items: [], targetType: 'CATEGORY'
     });
     const [applyingProtocol, setApplyingProtocol] = useState<TreatmentProtocol | null>(null);
+    const [medicineExpirations, setMedicineExpirations] = useState<{ id: string; name: string; batchNumber: string; expiryDate: string; daysUntilExpiry: number; quantity: number; unit: string }[]>([]);
+
+    useEffect(() => {
+        if (activeTab === 'MEDICINE') {
+            backendService.getMedicineExpirations(30).then(setMedicineExpirations).catch(() => setMedicineExpirations([]));
+        }
+    }, [activeTab]);
+
+    // --- BACKDATE PROCESSING STATE ---
+    const [bdStartDate, setBdStartDate] = useState<string>(() => {
+        const d = new Date(); d.setDate(d.getDate() - 7);
+        return d.toISOString().split('T')[0];
+    });
+    const [bdEndDate, setBdEndDate] = useState<string>(new Date().toISOString().split('T')[0]);
+    const [bdSelectedPlanIds, setBdSelectedPlanIds] = useState<string[]>([]);
+    const [bdAnimalOverride, setBdAnimalOverride] = useState<'PLAN_DEFAULT' | 'CUSTOM'>('PLAN_DEFAULT');
+    const [bdSelectedAnimalIds, setBdSelectedAnimalIds] = useState<string[]>([]);
+    const [bdProcessing, setBdProcessing] = useState(false);
+    const [bdResults, setBdResults] = useState<{ date: string; planId: string; planName: string; status: 'SUCCESS' | 'SKIP' | 'ERROR'; message: string; totalCost?: number; animalsCount?: number }[]>([]);
+    const [bdStep, setBdStep] = useState<'CONFIG' | 'PREVIEW' | 'DONE'>('CONFIG');
+
+    const bdDateRange = (): string[] => {
+        const dates: string[] = [];
+        if (!bdStartDate || !bdEndDate) return dates;
+        const start = new Date(bdStartDate);
+        const end = new Date(bdEndDate);
+        if (start > end) return dates;
+        const cur = new Date(start);
+        while (cur <= end) {
+            dates.push(cur.toISOString().split('T')[0]);
+            cur.setDate(cur.getDate() + 1);
+        }
+        return dates;
+    };
+
+    const bdTotalDays = bdDateRange().length;
+    const bdSelectedPlans = state.dietPlans.filter(p => bdSelectedPlanIds.includes(p.id));
+
+    const handleBackdateProcess = async () => {
+        if (!state.currentFarmId) return alert('Please select a farm first.');
+        if (bdSelectedPlanIds.length === 0) return alert('Select at least one diet plan.');
+        const dates = bdDateRange();
+        if (dates.length === 0) return alert('Invalid date range.');
+        if (dates.length > 90) return alert('Date range cannot exceed 90 days at once.');
+        if (!confirm(`This will process ${bdSelectedPlanIds.length} plan(s) across ${dates.length} day(s) (${dates.length * bdSelectedPlanIds.length} total runs). Continue?`)) return;
+
+        setBdProcessing(true);
+        setBdStep('DONE');
+        setBdResults([]);
+        const results: typeof bdResults = [];
+
+        for (const date of dates) {
+            for (const planId of bdSelectedPlanIds) {
+                const plan = state.dietPlans.find(p => p.id === planId);
+                try {
+                    const overrideIds = bdAnimalOverride === 'CUSTOM' && bdSelectedAnimalIds.length > 0 ? bdSelectedAnimalIds : undefined;
+                    const res = await backendService.processDietPlans({ dietPlanIds: [planId], date, ...(overrideIds ? { animalIds: overrideIds } : {}) });
+                    results.push({
+                        date,
+                        planId,
+                        planName: plan?.name || planId,
+                        status: res.success ? 'SUCCESS' : 'SKIP',
+                        message: res.message || 'Processed',
+                        totalCost: res.totalCost,
+                        animalsCount: (res as any).totalAnimalsFed ?? (res as any).animalsFed,
+                    });
+                } catch (e: any) {
+                    results.push({ date, planId, planName: plan?.name || planId, status: 'ERROR', message: e?.message || 'Unknown error' });
+                }
+            }
+        }
+
+        setBdResults(results);
+        setBdProcessing(false);
+    };
 
     // --- HELPERS ---
     const openAddProtocol = () => {
@@ -109,21 +189,15 @@ export const Operations: React.FC<Props> = ({
     const handleApplyProtocol = async (protocol: TreatmentProtocol) => {
         if (!state.currentFarmId) return alert("Select a farm first");
 
-        const confirmMsg = `Apply protocol "${protocol.name}"?\nThis will deduct stock and log treatments for ${protocol.targetName || 'all targets'}.`;
-        if (!confirm(confirmMsg)) return;
-
-        const performDate = new Date().toISOString().split('T')[0];
-        const logs: TreatmentLog[] = [];
-
-        // Determine animals
-        let animalsToTreat = [];
-        if (protocol.targetType === 'INDIVIDUAL' && protocol.targetId) {
-            const animal = state.livestock.find(l => l.id === protocol.targetId);
-            if (animal) animalsToTreat.push(animal);
-        } else if (protocol.targetType === 'CATEGORY' && protocol.targetId) {
+        let animalsToTreat: Livestock[] = [];
+        if (protocol.targetType === 'INDIVIDUAL') {
+            const ids: string[] = (protocol as any).targetIds?.length ? (protocol as any).targetIds : (protocol.targetId ? [protocol.targetId] : []);
+            if (ids.length) animalsToTreat = state.livestock.filter(l => ids.includes(l.id) && l.farmId === state.currentFarmId && l.status === 'ACTIVE');
+        }
+        if (animalsToTreat.length === 0 && protocol.targetType === 'CATEGORY' && protocol.targetName) {
             animalsToTreat = state.livestock.filter(l => l.category === protocol.targetName && l.farmId === state.currentFarmId && l.status === 'ACTIVE');
-        } else {
-            // Fallback or GROUP logic
+        }
+        if (animalsToTreat.length === 0) {
             animalsToTreat = state.livestock.filter(l => l.farmId === state.currentFarmId && l.status === 'ACTIVE');
         }
 
@@ -132,30 +206,47 @@ export const Operations: React.FC<Props> = ({
             return;
         }
 
-        let animalsProcessed = 0;
+        const confirmMsg = `Apply protocol "${protocol.name}" to ${animalsToTreat.length} animal(s)? This will deduct medicine stock and log treatments.`;
+        if (!confirm(confirmMsg)) return;
+
+        try {
+            if (onApplyProtocol) {
+                await onApplyProtocol(protocol.id, animalsToTreat.map(a => a.id), 'Manager');
+                alert(`Protocol applied to ${animalsToTreat.length} animal(s).`);
+                return;
+            }
+        } catch (e) {
+            console.error(e);
+            alert("Failed to apply protocol.");
+            return;
+        }
+
+        const performDate = new Date().toISOString().split('T')[0];
+        const logs: TreatmentLog[] = [];
         animalsToTreat.forEach(animal => {
-            protocol.items.forEach(item => {
+            (protocol.items || []).forEach((item: TreatmentItem) => {
                 const invItem = state.feed.find(f => f.id === item.inventoryId);
+                const isBulkUnit = ['BOTTLE', 'VIAL', 'BOX', 'PACK'].includes(invItem?.unit?.toUpperCase() || '');
+                const conversionFactor = (isBulkUnit && (invItem?.weightPerUnit || 0) > 0) ? invItem!.weightPerUnit! : 1;
+                const costPerDosage = (invItem?.unitCost || 0) / conversionFactor;
+
                 logs.push({
                     id: Math.random().toString(36).substr(2, 9),
                     farmId: state.currentFarmId!,
                     protocolId: protocol.id,
                     date: performDate,
                     animalId: animal.id,
-
                     itemId: item.inventoryId,
                     medicineName: item.inventoryName,
                     quantityUsed: item.dosage,
-                    cost: (invItem?.unitCost || 0) * item.dosage,
-                    performedBy: 'Manager' // TODO: Get current user
+                    cost: costPerDosage * (item.dosage || 0),
+                    performedBy: 'Manager'
                 });
             });
-            animalsProcessed++;
         });
-
         try {
             await onLogTreatment(logs);
-            alert(`Successfully logged treatments for ${animalsProcessed} animals.`);
+            alert(`Successfully logged treatments for ${animalsToTreat.length} animals.`);
         } catch (e) {
             console.error(e);
             alert("Failed to log treatments.");
@@ -177,14 +268,14 @@ export const Operations: React.FC<Props> = ({
 
     const openAddFeed = () => {
         setEditingFeed(null);
-        setFeedForm({ name: '', quantity: 0, unitCost: 0, reorderLevel: 0, unit: 'kg' });
+        setFeedForm({ name: '', quantity: 0, unitCost: 0, reorderLevel: 0, unit: 'KG', vendorId: '', batchNumber: '', expiryDate: '' });
         setCreateExpense(false);
         setViewMode('FORM');
     };
 
     const openEditFeed = (item: FeedInventory) => {
         setEditingFeed(item);
-        setFeedForm(item);
+        setFeedForm({ ...item, vendorId: item.vendorId || item.defaultSupplier || '' });
         setViewMode('FORM');
     };
 
@@ -209,8 +300,11 @@ export const Operations: React.FC<Props> = ({
 
     const openEditDiet = (plan: DietPlan) => {
         setEditingDiet(plan);
+        const rawIds = plan.targetIds ?? (plan as any).assignedAnimalIds;
+        const targetIds = Array.isArray(rawIds) ? rawIds : (rawIds ? [rawIds] : []);
         setDietForm({
             ...plan,
+            targetIds,
             items: Array.isArray(plan.items) ? plan.items.map(i => ({
                 ...i,
                 id: (i as any).id || Math.random().toString(36).substr(2, 9),
@@ -236,6 +330,7 @@ export const Operations: React.FC<Props> = ({
             unit: feedForm.unit || 'kg',
             batchNumber: feedForm.batchNumber,
             expiryDate: feedForm.expiryDate,
+            vendorId: feedForm.vendorId,
             description: feedForm.description
         };
         try {
@@ -250,7 +345,8 @@ export const Operations: React.FC<Props> = ({
                         date: new Date().toISOString().split('T')[0],
                         amount: item.unitCost * item.quantity,
                         description: `Purchase of ${item.category}: ${item.name}`,
-                        category: expenseCategory
+                        category: expenseCategory,
+                        supplier: item.vendorId
                     });
                 }
             }
@@ -366,6 +462,9 @@ export const Operations: React.FC<Props> = ({
     const handleDietSubmit = async () => {
         if (!dietForm.name || (!dietForm.items || dietForm.items.length === 0)) return alert("Name and at least one ingredient required");
         if (!state.currentFarmId) return alert("Please select a farm first.");
+        if ((dietForm.targetType || '') === 'INDIVIDUAL' && (!dietForm.targetIds || dietForm.targetIds.length === 0)) {
+            return alert("Please select at least one animal under Target Selection when using Individual Animal.");
+        }
 
         const rawItems = dietForm.items || [];
         const items = rawItems
@@ -385,6 +484,7 @@ export const Operations: React.FC<Props> = ({
             name: dietForm.name!,
             targetType: dietForm.targetType || 'CATEGORY',
             targetId: dietForm.targetId,
+            targetIds: dietForm.targetIds || [],
             targetName: dietForm.targetName,
             status: dietForm.status || 'DRAFT',
             distributionMode: dietForm.distributionMode || 'PER_ANIMAL',
@@ -448,6 +548,72 @@ export const Operations: React.FC<Props> = ({
         }
     };
 
+    const getDietPlanAssignedCount = (plan: DietPlan): number => {
+        const farmId = plan.farmId || state.currentFarmId;
+        const activeOnFarm = state.livestock.filter(l => l.status === 'ACTIVE' && (!farmId || l.farmId === farmId));
+        const t = (plan.targetType || '').toUpperCase();
+        if (t === 'INDIVIDUAL') {
+            const ids = plan.targetIds ?? (plan as any).assignedAnimalIds ?? [];
+            return Array.isArray(ids) ? ids.length : 0;
+        }
+        if (t === 'CATEGORY' && (plan.targetName || plan.targetId)) {
+            return activeOnFarm.filter(l => l.category === (plan.targetName || plan.targetId)).length;
+        }
+        if (t === 'ALL') return activeOnFarm.length;
+        return 0;
+    };
+
+    const getDietPlanAssignedAnimals = (plan: DietPlan): Livestock[] => {
+        const farmId = plan.farmId || state.currentFarmId;
+        const activeOnFarm = state.livestock.filter(l => l.status === 'ACTIVE' && (!farmId || l.farmId === farmId));
+        const t = (plan.targetType || '').toUpperCase();
+        if (t === 'INDIVIDUAL') {
+            const ids = plan.targetIds ?? (plan as any).assignedAnimalIds ?? [];
+            const idSet = Array.isArray(ids) ? new Set(ids) : new Set<string>();
+            return activeOnFarm.filter(l => idSet.has(l.id));
+        }
+        if (t === 'CATEGORY' && (plan.targetName || plan.targetId)) {
+            return activeOnFarm.filter(l => l.category === (plan.targetName || plan.targetId));
+        }
+        if (t === 'ALL') return activeOnFarm;
+        return [];
+    };
+
+    const getDietPlanDailyCost = (plan: DietPlan): number => {
+        const animals = getDietPlanAssignedAnimals(plan);
+        const aCount = animals.length;
+        if (aCount === 0 || !plan.items?.length) return 0;
+        const mode = (plan.distributionMode || 'PER_ANIMAL') as string;
+        let total = 0;
+        for (const it of plan.items) {
+            if (!it.inventoryId || (it.quantity ?? 0) <= 0) continue;
+            let deductTotal = 0;
+            if (mode === 'TOTAL_DISTRIBUTED') deductTotal = it.quantity ?? 0;
+            else if (mode === 'PER_HUNDRED_KG_BW') deductTotal = (it.quantity ?? 0) * (animals.reduce((s, a) => s + (a.weight ?? 0), 0) / 100);
+            else deductTotal = (it.quantity ?? 0) * aCount;
+            const fInv = state.feed.find(f => f.id === it.inventoryId);
+            const uiInv = (fInv?.unit || '').toUpperCase();
+            const uiItem = (it.unit || 'KG').toUpperCase();
+            let inventoryDeductionCount = deductTotal;
+            const wpu = (fInv?.weightPerUnit ?? 1) || 1;
+            if (fInv && ['BAG', 'BUNDLE'].includes(uiInv)) {
+                if (uiItem === 'KG') inventoryDeductionCount = deductTotal / wpu;
+                else if (uiItem === 'G') inventoryDeductionCount = (deductTotal / 1000) / wpu;
+            } else if (uiInv === 'TON') {
+                if (uiItem === 'KG') inventoryDeductionCount = deductTotal / 1000;
+                else if (uiItem === 'G') inventoryDeductionCount = deductTotal / 1000000;
+            } else if (uiInv === 'KG') {
+                if (uiItem === 'G') inventoryDeductionCount = deductTotal / 1000;
+                else if (uiItem === 'TON') inventoryDeductionCount = (deductTotal ?? 0) * 1000;
+            } else if (uiInv === 'G') {
+                if (uiItem === 'KG') inventoryDeductionCount = (deductTotal ?? 0) * 1000;
+                else if (uiItem === 'TON') inventoryDeductionCount = (deductTotal ?? 0) * 1000000;
+            }
+            total += inventoryDeductionCount * (fInv?.unitCost ?? 0);
+        }
+        return total;
+    };
+
     return (
         <div className="space-y-6">
             {!state.currentFarmId && !state.currentLocationId && (
@@ -467,35 +633,54 @@ export const Operations: React.FC<Props> = ({
             {viewMode === 'LIST' && (
                 <div className="border-b border-gray-200 flex space-x-6 overflow-x-auto">
                     <button
+                        onClick={() => setActiveTabAndNotify('ACTIVITY')}
+                        className={`pb-3 px-2 font-medium text-sm transition-colors border-b-2 whitespace-nowrap ${activeTab === 'ACTIVITY' ? 'border-emerald-500 text-emerald-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                        title="View chronological activity feed of operations"
+                    >
+                        Activity Feed
+                    </button>
+                    <button
                         onClick={() => setActiveTabAndNotify('FEED')}
                         className={`pb-3 px-2 font-medium text-sm transition-colors border-b-2 whitespace-nowrap ${activeTab === 'FEED' ? 'border-emerald-500 text-emerald-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                        title="Manage feed and nutrition inventory"
                     >
                         Feed Stock
                     </button>
                     <button
                         onClick={() => setActiveTabAndNotify('MEDICINE')}
                         className={`pb-3 px-2 font-medium text-sm transition-colors border-b-2 whitespace-nowrap ${activeTab === 'MEDICINE' ? 'border-emerald-500 text-emerald-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                        title="Manage veterinary medicines and protocols"
                     >
                         Medicine Cabinet
                     </button>
                     <button
                         onClick={() => setActiveTabAndNotify('SUPPLIES')}
                         className={`pb-3 px-2 font-medium text-sm transition-colors border-b-2 whitespace-nowrap ${activeTab === 'SUPPLIES' ? 'border-emerald-500 text-emerald-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                        title="Manage general farm supplies"
                     >
                         Farm Supplies
                     </button>
                     <button
                         onClick={() => setActiveTabAndNotify('INFRA')}
                         className={`pb-3 px-2 font-medium text-sm transition-colors border-b-2 whitespace-nowrap ${activeTab === 'INFRA' ? 'border-emerald-500 text-emerald-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                        title="Manage buildings, vehicles, and equipment"
                     >
                         Fixed Assets
                     </button>
                     <button
                         onClick={() => setActiveTabAndNotify('DIET')}
                         className={`pb-3 px-2 font-medium text-sm transition-colors border-b-2 whitespace-nowrap ${activeTab === 'DIET' ? 'border-emerald-500 text-emerald-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                        title="Configure diet plans and daily rations"
                     >
                         Diets
                     </button>
+                </div>
+            )}
+
+            {/* --- ACTIVITY CONTENT --- */}
+            {activeTab === 'ACTIVITY' && (
+                <div className="animate-fade-in py-6">
+                    <ActivityFeed state={state} />
                 </div>
             )}
 
@@ -504,6 +689,21 @@ export const Operations: React.FC<Props> = ({
                 <>
                     {viewMode === 'LIST' ? (
                         <div className="space-y-6 animate-fade-in">
+                            {medicineExpirations.length > 0 && (
+                                <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+                                    <h4 className="font-bold text-amber-800 flex items-center gap-2 mb-2">
+                                        <AlertCircle size={18} /> Expiring Within 30 Days
+                                    </h4>
+                                    <ul className="space-y-1 text-sm text-amber-900">
+                                        {medicineExpirations.map(m => (
+                                            <li key={m.id} className="flex justify-between items-center">
+                                                <span><strong>{m.name}</strong>{m.batchNumber ? ` (Batch ${m.batchNumber})` : ''} — expires {m.expiryDate}</span>
+                                                <span className="font-bold">{m.daysUntilExpiry} days</span>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            )}
                             {/* Section 1: Medicine Inventory */}
                             <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
                                 <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-blue-50">
@@ -520,6 +720,7 @@ export const Operations: React.FC<Props> = ({
                                             <tr>
                                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Item Name</th>
                                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Stock</th>
+                                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Vendor</th>
                                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Unit Cost</th>
                                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
                                             </tr>
@@ -527,11 +728,20 @@ export const Operations: React.FC<Props> = ({
                                         <tbody className="bg-white divide-y divide-gray-200">
                                             {state.feed.filter(i => i.category === 'MEDICINE').map((item) => (
                                                 <tr key={item.id} className="hover:bg-blue-50/30">
-                                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-800 flex items-center gap-2">
-                                                        <Pill size={16} className="text-blue-400" />
-                                                        {item.name}
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-800">
+                                                        <div className="flex flex-col">
+                                                            <div className="flex items-center gap-2">
+                                                                <Pill size={16} className="text-blue-400" />
+                                                                {item.name}
+                                                            </div>
+                                                            {item.batchNumber && <span className="text-[10px] text-gray-400 ml-6">Batch: {item.batchNumber}</span>}
+                                                            {item.expiryDate && <span className="text-[10px] text-red-400 ml-6">Exp: {item.expiryDate}</span>}
+                                                        </div>
                                                     </td>
                                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 font-bold">{item.quantity} {item.unit}</td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                                        {state.entities?.find(e => e.id === (item.vendorId || item.defaultSupplier))?.name || 'N/A'}
+                                                    </td>
                                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">PKR {item.unitCost}</td>
                                                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                                                         <div className="flex gap-2">
@@ -542,7 +752,7 @@ export const Operations: React.FC<Props> = ({
                                                 </tr>
                                             ))}
                                             {state.feed.filter(i => i.category === 'MEDICINE').length === 0 && (
-                                                <tr><td colSpan={4} className="px-6 py-8 text-center text-gray-400 italic">No medicines in stock.</td></tr>
+                                                <tr><td colSpan={5} className="px-6 py-8 text-center text-gray-400 italic">No medicines in stock.</td></tr>
                                             )}
                                         </tbody>
                                     </table>
@@ -618,6 +828,7 @@ export const Operations: React.FC<Props> = ({
                                             <tr>
                                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Item Name</th>
                                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Current Stock</th>
+                                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Vendor</th>
                                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Unit Cost</th>
                                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
                                                 <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
@@ -633,10 +844,20 @@ export const Operations: React.FC<Props> = ({
                                                         </div>
                                                     </td>
                                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 font-bold">
-                                                        {item.quantity} kg
+                                                        <div className="flex flex-col">
+                                                            <span>{item.quantity.toLocaleString()} {item.unit?.toUpperCase() || 'KG'}</span>
+                                                            {((['BAG', 'BUNDLE'].includes((item.unit || '').toUpperCase()) || ['WANDA', 'TMR'].includes(item.feedType || '')) && (item.weightPerUnit || 40) > 0) ? (
+                                                                <span className="text-[10px] text-gray-400 font-medium whitespace-nowrap">
+                                                                    (≈ {(item.quantity * (item.weightPerUnit || 40)).toLocaleString()} KG)
+                                                                </span>
+                                                            ) : null}
+                                                        </div>
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                                        {state.entities?.find(e => e.id === (item.vendorId || item.defaultSupplier))?.name || 'N/A'}
                                                     </td>
                                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
-                                                        PKR {item.unitCost.toFixed(2)} /kg
+                                                        PKR {item.unitCost.toLocaleString()} / {item.unit?.toUpperCase() || 'KG'}
                                                     </td>
                                                     <td className="px-6 py-4 whitespace-nowrap">
                                                         {item.quantity <= item.reorderLevel ? (
@@ -677,24 +898,69 @@ export const Operations: React.FC<Props> = ({
                             </div>
 
                             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-6">
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">Item Name</label>
-                                    <input type="text" value={feedForm.name} onChange={e => setFeedForm({ ...feedForm, name: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" placeholder="e.g. Alfalfa Hay" />
-                                </div>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                    <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-1">Quantity (kg)</label>
-                                        <input type="number" value={feedForm.quantity} onChange={e => setFeedForm({ ...feedForm, quantity: Number(e.target.value) })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" />
+                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                    <div className="lg:col-span-3">
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Item Name</label>
+                                        <input type="text" value={feedForm.name} onChange={e => setFeedForm({ ...feedForm, name: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" placeholder="e.g. Alfalfa Hay" />
                                     </div>
                                     <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-1">Unit Cost (PKR/kg)</label>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Initial Quantity ({feedForm.unit || 'KG'})</label>
+                                        <input type="number" value={feedForm.quantity} onChange={e => setFeedForm({ ...feedForm, quantity: Number(e.target.value) })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" disabled={!!editingFeed} title={editingFeed ? "Change stock via usage or procurement" : ""} />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Unit Format</label>
+                                        <select value={feedForm.unit} onChange={e => setFeedForm({ ...feedForm, unit: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none bg-white">
+                                            {['KG', 'TON', 'BUNDLE', 'BAG'].map(u => <option key={u} value={u}>{u}</option>)}
+                                        </select>
+                                    </div>
+                                    {['BAG', 'BUNDLE'].includes(feedForm.unit || '') && (
+                                        <div className="animate-fade-in-up">
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Weight Per {feedForm.unit} (KG)</label>
+                                            <input type="number" min={0} step={0.1} value={feedForm.weightPerUnit || ''} onChange={e => setFeedForm({ ...feedForm, weightPerUnit: Number(e.target.value) || 0 })} className="w-full border border-emerald-200 bg-emerald-50 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" placeholder="e.g. 40" />
+                                        </div>
+                                    )}
+                                    <div className="lg:col-span-1 border-t border-gray-100 pt-3">
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Base Cost (PKR / {feedForm.unit || 'KG'})</label>
                                         <input type="number" value={feedForm.unitCost} onChange={e => setFeedForm({ ...feedForm, unitCost: Number(e.target.value) })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" />
                                     </div>
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">Reorder Alert Level (kg)</label>
-                                    <input type="number" value={feedForm.reorderLevel} onChange={e => setFeedForm({ ...feedForm, reorderLevel: Number(e.target.value) })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" />
-                                    <p className="text-xs text-gray-400 mt-1">System will flag "Low Stock" when quantity drops below this.</p>
+                                    <div className="lg:col-span-2 border-t border-gray-100 pt-3">
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Reorder Alert Level ({feedForm.unit || 'KG'})</label>
+                                        <input type="number" value={feedForm.reorderLevel} onChange={e => setFeedForm({ ...feedForm, reorderLevel: Number(e.target.value) })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" />
+                                        <p className="text-xs text-gray-400 mt-1">System flags "Low Stock" when quantity drops below this.</p>
+                                    </div>
+
+                                    <div className="lg:col-span-1">
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Batch Number</label>
+                                        <input type="text" value={feedForm.batchNumber || ''} onChange={e => setFeedForm({ ...feedForm, batchNumber: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" placeholder="e.g. BTC-123" />
+                                    </div>
+                                    <div className="lg:col-span-1">
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Expiry Date</label>
+                                        <input type="date" value={feedForm.expiryDate || ''} onChange={e => setFeedForm({ ...feedForm, expiryDate: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" />
+                                    </div>
+                                    <div className="lg:col-span-1">
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Supplier / Vendor</label>
+                                        <select 
+                                            value={feedForm.vendorId || ''} 
+                                            onChange={e => setFeedForm({ ...feedForm, vendorId: e.target.value })} 
+                                            className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none bg-white"
+                                        >
+                                            <option value="">Select Vendor...</option>
+                                            {state.entities?.filter(e => e.type === 'VENDOR').map(v => (
+                                                <option key={v.id} value={v.id}>{v.name}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+
+                                    <div className="lg:col-span-3">
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Notes / Description</label>
+                                        <input type="text" value={feedForm.description || ''} onChange={e => setFeedForm({ ...feedForm, description: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" placeholder="Storage info or precautions" />
+                                    </div>
+                                    {!editingFeed && (
+                                        <div className="lg:col-span-3 bg-emerald-50 p-3 rounded-lg flex items-center gap-2">
+                                            <input type="checkbox" id="createExp" checked={createExpense} onChange={e => setCreateExpense(e.target.checked)} className="rounded border-emerald-300 text-emerald-600 focus:ring-emerald-500" />
+                                            <label htmlFor="createExp" className="text-sm font-bold text-emerald-700 cursor-pointer">Log as Financial Expense / Vendor Bill</label>
+                                        </div>
+                                    )}
                                 </div>
                                 <div className="pt-4 flex justify-end gap-3">
                                     <button onClick={() => setViewMode('LIST')} className="px-6 py-2 text-gray-500 hover:text-gray-700 font-medium">Cancel</button>
@@ -1104,7 +1370,7 @@ export const Operations: React.FC<Props> = ({
 
             {/* --- FEED & MEDICINE FORM REUSE --- */}
             {
-                ((activeTab === 'FEED' || activeTab === 'MEDICINE' || activeTab === 'SUPPLIES') && viewMode === 'FORM') && (
+                ((activeTab === 'MEDICINE' || activeTab === 'SUPPLIES') && viewMode === 'FORM') && (
                     <div className="animate-fade-in max-w-2xl mx-auto">
                         <div className="flex items-center gap-4 mb-6">
                             <button onClick={() => { setViewMode('LIST'); setEditingFeed(null); }} className="bg-white p-2 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">
@@ -1118,7 +1384,23 @@ export const Operations: React.FC<Props> = ({
                         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-6">
                             <div>
                                 <label className="block text-sm font-medium text-gray-700 mb-1">Item Name *</label>
-                                <input type="text" value={feedForm.name} onChange={e => setFeedForm({ ...feedForm, name: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" placeholder={activeTab === 'MEDICINE' ? "e.g. Ivermectin 10ml" : (activeTab === 'SUPPLIES' ? "e.g. Shovel, Tags" : "e.g. Corn Silage")} />
+                                <input type="text" value={feedForm.name} onChange={e => setFeedForm({ ...feedForm, name: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" placeholder={activeTab === 'MEDICINE' ? "e.g. Ivermectin 1% Injection" : (activeTab === 'SUPPLIES' ? "e.g. Shovel, Tags" : "e.g. Corn Silage")} />
+                                {activeTab === 'MEDICINE' && !editingFeed && (
+                                    <div className="flex flex-wrap gap-2 mt-2">
+                                        <span className="text-xs text-gray-500 mt-1 w-full">Standard Presets (quick-add: configures as Bottle, 100ml default):</span>
+                                        {[
+                                            'FMD Vaccine (Foot & Mouth Disease)',
+                                            'HS Vaccine (Haemorrhagic Septicaemia)',
+                                            'BQ Vaccine (Black Quarter)',
+                                            'LSD Vaccine (Lumpy Skin Disease)',
+                                            'Ivermectin (Endectocide / Dewormer)',
+                                            'Oxytetracycline (Broad-Spectrum Antibiotic)',
+                                            'Multivitamin Injection'
+                                        ].map(med => (
+                                            <button key={med} type="button" onClick={() => setFeedForm({ ...feedForm, name: med, unit: 'bottle', weightPerUnit: 100, category: 'MEDICINE' })} className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 px-2 py-1 rounded-full border border-blue-200 transition-colors">{med}</button>
+                                        ))}
+                                    </div>
+                                )}
                             </div>
 
                             {activeTab === 'SUPPLIES' && (
@@ -1143,10 +1425,12 @@ export const Operations: React.FC<Props> = ({
                                     <select value={feedForm.unit} onChange={e => setFeedForm({ ...feedForm, unit: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none">
                                         {activeTab === 'MEDICINE' ? (
                                             <>
-                                                <option value="ml">ml (Milliliters)</option>
+                                                <option value="ml">ml / cc (Liquid measures)</option>
+                                                <option value="mg">mg (Powders)</option>
                                                 <option value="dose">Dose</option>
-                                                <option value="tablet">Tablet</option>
-                                                <option value="bottle">Bottle</option>
+                                                <option value="tablet">Tablet / Bolus</option>
+                                                <option value="bottle">Bottle (Bulk)</option>
+                                                <option value="vial">Vial (Bulk)</option>
                                             </>
                                         ) : activeTab === 'SUPPLIES' ? (
                                             <>
@@ -1167,6 +1451,25 @@ export const Operations: React.FC<Props> = ({
                                         )}
                                     </select>
                                 </div>
+                            </div>
+
+                            {activeTab === 'MEDICINE' && ['bottle', 'vial', 'box'].includes(feedForm.unit?.toLowerCase() || '') && (
+                                <div className="animate-fade-in-up">
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Total Volume/Doses per {feedForm.unit} (e.g. 100 for 100ml)</label>
+                                    <input type="number" min={0} step={0.1} value={feedForm.weightPerUnit || ''} onChange={e => setFeedForm({ ...feedForm, weightPerUnit: Number(e.target.value) || 0 })} className="w-full border border-blue-200 bg-blue-50 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none" placeholder="e.g. 100" />
+                                    <p className="text-xs text-blue-600 mt-1">Used to accurately deduct stock when administering specific dosages in ml/mg.</p>
+                                </div>
+                            )}
+
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Supplier / Vendor</label>
+                                <select value={feedForm.vendorId || ''} onChange={e => setFeedForm({ ...feedForm, vendorId: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none bg-white">
+                                    <option value="">Select Vendor...</option>
+                                    {state.entities?.filter(e => e.type === 'VENDOR').map(v => (
+                                        <option key={v.id} value={v.id}>{v.name}</option>
+                                    ))}
+                                </select>
+                                <p className="text-xs text-gray-400 mt-1">Add vendors in Financials &gt; Entity Registry (type VENDOR).</p>
                             </div>
 
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -1221,15 +1524,18 @@ export const Operations: React.FC<Props> = ({
             {
                 activeTab === 'DIET' && (
                     <>
-                        {(viewMode === 'LIST' || viewMode === 'LEDGER') ? (
+                        {(viewMode === 'LIST' || viewMode === 'LEDGER' || viewMode === 'BACKDATE') ? (
                             <div className="space-y-4 animate-fade-in">
                                 <div className="flex justify-between items-center mb-6">
-                                    <div className="flex bg-gray-100 p-1 rounded-lg">
+                                    <div className="flex bg-gray-100 p-1 rounded-lg gap-0.5 flex-wrap">
                                         <button onClick={() => setViewMode('LIST')} className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${viewMode === 'LIST' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500 hover:text-gray-700'}`}>
-                                            Active Diet Plans
+                                            Active Plans
                                         </button>
                                         <button onClick={() => setViewMode('LEDGER')} className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${viewMode === 'LEDGER' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500 hover:text-gray-700'}`}>
-                                            Processing Ledger
+                                            Ledger
+                                        </button>
+                                        <button onClick={() => { setViewMode('BACKDATE'); setBdStep('CONFIG'); setBdResults([]); setBdSelectedPlanIds(state.dietPlans.filter(p => p.status === 'ACTIVE').map(p => p.id)); }} className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5 ${viewMode === 'BACKDATE' ? 'bg-white shadow-sm text-indigo-700' : 'text-gray-500 hover:text-gray-700'}`}>
+                                            <RotateCcw size={13} /> Backdate Process
                                         </button>
                                     </div>
                                     <button onClick={openAddDiet} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 shadow-sm transition-colors text-sm font-medium">
@@ -1287,8 +1593,8 @@ export const Operations: React.FC<Props> = ({
                                                         </div>
 
                                                         <div className="flex items-center justify-between text-sm text-gray-500 pt-2 border-t border-gray-50">
-                                                            <span className="font-bold text-gray-700">Cost: PKR {plan.totalCostPerDay?.toLocaleString() || 0}/day</span>
-                                                            <span className="text-xs">{(plan.totalAnimals || 0)} Animals Assigned</span>
+                                                            <span className="font-bold text-gray-700">Cost: PKR {(plan.totalCostPerDay ?? getDietPlanDailyCost(plan)).toLocaleString()}/day</span>
+                                                            <span className="text-xs">{getDietPlanAssignedCount(plan)} Animals Assigned</span>
                                                         </div>
                                                     </div>
                                                 </div>
@@ -1301,6 +1607,316 @@ export const Operations: React.FC<Props> = ({
                                             )}
                                         </div>
                                     </>
+                                )}
+
+                                {viewMode === 'BACKDATE' && (
+                                    <div className="space-y-6 animate-fade-in">
+                                        {/* Header Banner */}
+                                        <div className="bg-gradient-to-r from-indigo-600 to-purple-700 rounded-2xl p-6 text-white shadow-lg">
+                                            <div className="flex items-center gap-3 mb-2">
+                                                <div className="bg-white/20 p-2 rounded-xl"><RotateCcw size={22} /></div>
+                                                <div>
+                                                    <h3 className="text-xl font-bold">Backdate Diet Processing</h3>
+                                                    <p className="text-indigo-200 text-sm">Re-process historical feed consumption for selected plans and dates</p>
+                                                </div>
+                                            </div>
+                                            {bdStep !== 'CONFIG' && (
+                                                <button onClick={() => { setBdStep('CONFIG'); setBdResults([]); }} className="mt-3 flex items-center gap-2 bg-white/20 hover:bg-white/30 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors">
+                                                    <ArrowLeft size={14} /> Start Over
+                                                </button>
+                                            )}
+                                        </div>
+
+                                        {/* Step Indicator */}
+                                        <div className="flex items-center gap-2 text-sm font-medium">
+                                            {['CONFIG', 'PREVIEW', 'DONE'].map((s, i) => (
+                                                <React.Fragment key={s}>
+                                                    <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold transition-colors ${
+                                                        bdStep === s ? 'bg-indigo-600 text-white' : 
+                                                        (['CONFIG', 'PREVIEW', 'DONE'].indexOf(bdStep) > i) ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-400'
+                                                    }`}>
+                                                        <span>{i + 1}.</span> {s === 'CONFIG' ? 'Configure' : s === 'PREVIEW' ? 'Review' : 'Results'}
+                                                    </div>
+                                                    {i < 2 && <ChevronRight size={14} className="text-gray-300" />}
+                                                </React.Fragment>
+                                            ))}
+                                        </div>
+
+                                        {/* STEP 1: CONFIG */}
+                                        {bdStep === 'CONFIG' && (
+                                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                                {/* LEFT: Date Range */}
+                                                <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 space-y-5">
+                                                    <div className="flex items-center gap-3 pb-3 border-b border-gray-100">
+                                                        <div className="bg-blue-50 text-blue-600 p-2 rounded-xl"><Calendar size={18} /></div>
+                                                        <div>
+                                                            <h4 className="font-bold text-gray-800">Date Range</h4>
+                                                            <p className="text-xs text-gray-500">Select the backdate period (max 90 days)</p>
+                                                        </div>
+                                                    </div>
+                                                    <div className="grid grid-cols-2 gap-4">
+                                                        <div>
+                                                            <label className="block text-xs font-semibold text-gray-600 mb-1.5 uppercase tracking-wide">From Date</label>
+                                                            <input type="date" value={bdStartDate} max={bdEndDate} onChange={e => setBdStartDate(e.target.value)} className="w-full border border-gray-300 rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-indigo-500 outline-none text-sm" />
+                                                        </div>
+                                                        <div>
+                                                            <label className="block text-xs font-semibold text-gray-600 mb-1.5 uppercase tracking-wide">To Date</label>
+                                                            <input type="date" value={bdEndDate} min={bdStartDate} max={new Date().toISOString().split('T')[0]} onChange={e => setBdEndDate(e.target.value)} className="w-full border border-gray-300 rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-indigo-500 outline-none text-sm" />
+                                                        </div>
+                                                    </div>
+                                                    {/* Quick Presets */}
+                                                    <div>
+                                                        <p className="text-xs text-gray-500 mb-2 font-medium">Quick Presets</p>
+                                                        <div className="flex flex-wrap gap-2">
+                                                            {[
+                                                                { label: 'Yesterday', days: 1 },
+                                                                { label: 'Last 3 Days', days: 3 },
+                                                                { label: 'Last 7 Days', days: 7 },
+                                                                { label: 'Last 14 Days', days: 14 },
+                                                                { label: 'Last 30 Days', days: 30 },
+                                                            ].map(p => (
+                                                                <button key={p.label} type="button" onClick={() => {
+                                                                    const end = new Date(); end.setDate(end.getDate() - (p.days === 1 ? 1 : 0));
+                                                                    const start = new Date(end); start.setDate(start.getDate() - (p.days - 1));
+                                                                    setBdStartDate(start.toISOString().split('T')[0]);
+                                                                    setBdEndDate(end.toISOString().split('T')[0]);
+                                                                }} className="text-xs bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-3 py-1.5 rounded-full border border-indigo-200 font-medium transition-colors">
+                                                                    {p.label}
+                                                                </button>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                    {bdTotalDays > 0 && (
+                                                        <div className="bg-indigo-50 rounded-xl p-3 border border-indigo-100 flex items-center gap-3">
+                                                            <Calendar size={18} className="text-indigo-500 flex-shrink-0" />
+                                                            <div>
+                                                                <p className="text-sm font-bold text-indigo-800">{bdTotalDays} day{bdTotalDays > 1 ? 's' : ''} selected</p>
+                                                                <p className="text-xs text-indigo-500">{bdStartDate} → {bdEndDate}</p>
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
+
+                                                {/* RIGHT: Plan + Animal Selection */}
+                                                <div className="space-y-4">
+                                                    {/* Diet Plan Selector */}
+                                                    <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-5">
+                                                        <div className="flex items-center gap-3 pb-3 border-b border-gray-100 mb-4">
+                                                            <div className="bg-emerald-50 text-emerald-600 p-2 rounded-xl"><ListChecks size={18} /></div>
+                                                            <div>
+                                                                <h4 className="font-bold text-gray-800">Diet Plans</h4>
+                                                                <p className="text-xs text-gray-500">Select plans to process</p>
+                                                            </div>
+                                                            <button type="button" onClick={() => setBdSelectedPlanIds(bdSelectedPlanIds.length === state.dietPlans.length ? [] : state.dietPlans.map(p => p.id))} className="ml-auto text-xs text-indigo-600 hover:underline font-medium">
+                                                                {bdSelectedPlanIds.length === state.dietPlans.length ? 'Deselect All' : 'Select All'}
+                                                            </button>
+                                                        </div>
+                                                        <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                                                            {state.dietPlans.length === 0 && <p className="text-sm text-gray-400 italic text-center py-4">No diet plans found. Create one first.</p>}
+                                                            {state.dietPlans.map(plan => (
+                                                                <label key={plan.id} className={`flex items-center gap-3 p-3 rounded-xl cursor-pointer border-2 transition-all ${
+                                                                    bdSelectedPlanIds.includes(plan.id) ? 'border-indigo-400 bg-indigo-50' : 'border-transparent bg-gray-50 hover:bg-gray-100'
+                                                                }`}>
+                                                                    <input type="checkbox" checked={bdSelectedPlanIds.includes(plan.id)} onChange={e => {
+                                                                        setBdSelectedPlanIds(prev => e.target.checked ? [...prev, plan.id] : prev.filter(id => id !== plan.id));
+                                                                    }} className="w-4 h-4 text-indigo-600 rounded" />
+                                                                    <div className="flex-1 min-w-0">
+                                                                        <p className="text-sm font-semibold text-gray-800 truncate">{plan.name}</p>
+                                                                        <p className="text-xs text-gray-500">{plan.targetType} · {getDietPlanAssignedCount(plan)} animals · <span className={plan.status === 'ACTIVE' ? 'text-green-600' : 'text-gray-400'}>{plan.status}</span></p>
+                                                                    </div>
+                                                                    <span className="text-xs font-medium text-gray-500 whitespace-nowrap">PKR {getDietPlanDailyCost(plan).toLocaleString()}/day</span>
+                                                                </label>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+
+                                                    {/* Animal Override */}
+                                                    <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-5">
+                                                        <div className="flex items-center gap-3 pb-3 border-b border-gray-100 mb-4">
+                                                            <div className="bg-amber-50 text-amber-600 p-2 rounded-xl"><Users size={18} /></div>
+                                                            <div>
+                                                                <h4 className="font-bold text-gray-800">Animal Selection</h4>
+                                                                <p className="text-xs text-gray-500">Use plan defaults or specify animals</p>
+                                                            </div>
+                                                        </div>
+                                                        <div className="flex gap-3 mb-3">
+                                                            {(['PLAN_DEFAULT', 'CUSTOM'] as const).map(mode => (
+                                                                <button key={mode} type="button" onClick={() => setBdAnimalOverride(mode)} className={`flex-1 py-2 rounded-xl text-sm font-semibold border-2 transition-all ${
+                                                                    bdAnimalOverride === mode ? 'border-amber-400 bg-amber-50 text-amber-800' : 'border-gray-200 text-gray-500 hover:border-gray-300'
+                                                                }`}>
+                                                                    {mode === 'PLAN_DEFAULT' ? '📋 Plan Default' : '🎯 Custom Animals'}
+                                                                </button>
+                                                            ))}
+                                                        </div>
+                                                        {bdAnimalOverride === 'CUSTOM' && (
+                                                            <div className="border border-gray-200 rounded-xl max-h-36 overflow-y-auto p-2 space-y-1">
+                                                                {state.livestock.filter(l => l.status === 'ACTIVE' && (!state.currentFarmId || l.farmId === state.currentFarmId)).map(l => (
+                                                                    <label key={l.id} className="flex items-center gap-2 p-1.5 hover:bg-gray-50 rounded-lg cursor-pointer text-sm">
+                                                                        <input type="checkbox" checked={bdSelectedAnimalIds.includes(l.id)} onChange={e => {
+                                                                            setBdSelectedAnimalIds(prev => e.target.checked ? [...prev, l.id] : prev.filter(id => id !== l.id));
+                                                                        }} className="w-3.5 h-3.5 text-amber-500 rounded" />
+                                                                        <span className="font-mono text-xs bg-gray-100 px-1.5 py-0.5 rounded">{l.tagId}</span>
+                                                                        <span className="text-gray-600 truncate">{l.name || l.breed}</span>
+                                                                    </label>
+                                                                ))}
+                                                                {state.livestock.filter(l => l.status === 'ACTIVE' && (!state.currentFarmId || l.farmId === state.currentFarmId)).length === 0 && (
+                                                                    <p className="text-xs text-gray-400 italic text-center py-2">No active animals on selected farm.</p>
+                                                                )}
+                                                            </div>
+                                                        )}
+                                                        {bdAnimalOverride === 'CUSTOM' && bdSelectedAnimalIds.length > 0 && (
+                                                            <p className="text-xs text-amber-600 font-medium mt-2">{bdSelectedAnimalIds.length} animal(s) manually selected</p>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {/* STEP 1 -> PREVIEW button */}
+                                        {bdStep === 'CONFIG' && (
+                                            <div className="flex justify-end gap-3">
+                                                <button onClick={() => setViewMode('LIST')} className="px-6 py-2.5 text-gray-500 hover:text-gray-700 font-medium">Cancel</button>
+                                                <button
+                                                    disabled={bdSelectedPlanIds.length === 0 || bdTotalDays === 0}
+                                                    onClick={() => setBdStep('PREVIEW')}
+                                                    className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl font-semibold shadow-sm flex items-center gap-2 transition-all"
+                                                >
+                                                    Review &amp; Confirm <ChevronRight size={16} />
+                                                </button>
+                                            </div>
+                                        )}
+
+                                        {/* STEP 2: PREVIEW */}
+                                        {bdStep === 'PREVIEW' && (
+                                            <div className="space-y-4">
+                                                <div className="bg-white rounded-2xl shadow-sm border border-indigo-200 p-6">
+                                                    <h4 className="font-bold text-gray-800 mb-4 flex items-center gap-2"><FlaskConical size={18} className="text-indigo-500" /> Processing Summary (Dry Run)</h4>
+                                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                                                        {[{ label: 'Days to Process', value: bdTotalDays, color: 'text-indigo-700', bg: 'bg-indigo-50' },
+                                                          { label: 'Plans Selected', value: bdSelectedPlanIds.length, color: 'text-emerald-700', bg: 'bg-emerald-50' },
+                                                          { label: 'Total Runs', value: bdTotalDays * bdSelectedPlanIds.length, color: 'text-purple-700', bg: 'bg-purple-50' },
+                                                          { label: 'Animals (per plan)', value: bdAnimalOverride === 'CUSTOM' ? bdSelectedAnimalIds.length : 'Plan Default', color: 'text-amber-700', bg: 'bg-amber-50' },
+                                                        ].map(stat => (
+                                                            <div key={stat.label} className={`${stat.bg} rounded-xl p-4 text-center`}>
+                                                                <p className={`text-2xl font-black ${stat.color}`}>{stat.value}</p>
+                                                                <p className="text-xs text-gray-500 mt-1 font-medium">{stat.label}</p>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                    <div className="space-y-2">
+                                                        <p className="text-sm font-semibold text-gray-700 mb-2">Plans to run:</p>
+                                                        {bdSelectedPlans.map(p => (
+                                                            <div key={p.id} className="flex items-center justify-between bg-gray-50 rounded-lg px-4 py-2.5 text-sm">
+                                                                <div className="flex items-center gap-2">
+                                                                    <Utensils size={14} className="text-emerald-500" />
+                                                                    <span className="font-semibold text-gray-800">{p.name}</span>
+                                                                    <span className={`text-xs px-2 py-0.5 rounded-full font-bold ${p.status === 'ACTIVE' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>{p.status}</span>
+                                                                </div>
+                                                                <span className="text-gray-500 text-xs">~PKR {getDietPlanDailyCost(p).toLocaleString()}/day × {bdTotalDays} days = PKR {(getDietPlanDailyCost(p) * bdTotalDays).toLocaleString()}</span>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                    <div className="mt-5 pt-4 border-t border-gray-200 flex items-center justify-between">
+                                                        <div>
+                                                            <p className="text-xs text-gray-500">Estimated Total Feed Cost Impact</p>
+                                                            <p className="text-2xl font-black text-emerald-700">
+                                                                PKR {bdSelectedPlans.reduce((s, p) => s + getDietPlanDailyCost(p), 0) * bdTotalDays > 0
+                                                                    ? (bdSelectedPlans.reduce((s, p) => s + getDietPlanDailyCost(p), 0) * bdTotalDays).toLocaleString()
+                                                                    : '—'}
+                                                            </p>
+                                                        </div>
+                                                        <div className="bg-amber-50 text-amber-800 border border-amber-200 rounded-xl px-4 py-2 text-xs font-medium max-w-xs">
+                                                            ⚠️ This will deduct inventory and create expense records. This cannot be easily undone (use Reverse in Ledger if needed).
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div className="flex justify-end gap-3">
+                                                    <button onClick={() => setBdStep('CONFIG')} className="px-6 py-2.5 text-gray-500 hover:text-gray-700 font-medium flex items-center gap-2"><ArrowLeft size={16} /> Back</button>
+                                                    <button
+                                                        onClick={handleBackdateProcess}
+                                                        disabled={bdProcessing}
+                                                        className="px-8 py-2.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 disabled:from-gray-400 disabled:to-gray-400 text-white rounded-xl font-bold shadow-md flex items-center gap-2 transition-all"
+                                                    >
+                                                        {bdProcessing ? <><span className="animate-spin">⏳</span> Processing...</> : <><PlayCircle size={18} /> Process Backdated Diets</>}
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {/* STEP 3: DONE / RESULTS */}
+                                        {bdStep === 'DONE' && (
+                                            <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+                                                <div className="px-6 py-4 border-b border-gray-100 bg-gray-50 flex items-center justify-between">
+                                                    <div>
+                                                        <h4 className="font-bold text-gray-800">Processing Results</h4>
+                                                        <p className="text-xs text-gray-500">{bdResults.filter(r => r.status === 'SUCCESS').length} succeeded · {bdResults.filter(r => r.status === 'ERROR').length} failed · {bdResults.filter(r => r.status === 'SKIP').length} skipped</p>
+                                                    </div>
+                                                    {!bdProcessing && (
+                                                        <div className="flex gap-2">
+                                                            <span className={`px-3 py-1 rounded-full text-xs font-bold ${
+                                                                bdResults.every(r => r.status === 'SUCCESS') ? 'bg-green-100 text-green-700' :
+                                                                bdResults.some(r => r.status === 'ERROR') ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
+                                                            }`}>
+                                                                {bdResults.every(r => r.status === 'SUCCESS') ? '✅ All Successful' :
+                                                                 bdResults.some(r => r.status === 'ERROR') ? '❌ Some Errors' : '⚠️ Partial'}
+                                                            </span>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                                {bdProcessing && (
+                                                    <div className="p-8 text-center">
+                                                        <div className="inline-block animate-spin text-4xl mb-3">⚙️</div>
+                                                        <p className="text-gray-600 font-medium">Processing... Please wait</p>
+                                                        <p className="text-xs text-gray-400 mt-1">{bdResults.length} of {bdTotalDays * bdSelectedPlanIds.length} runs completed</p>
+                                                    </div>
+                                                )}
+                                                {!bdProcessing && bdResults.length > 0 && (
+                                                    <div className="overflow-x-auto">
+                                                        <table className="w-full text-sm">
+                                                            <thead className="bg-gray-50 text-gray-600 text-xs">
+                                                                <tr>
+                                                                    <th className="px-5 py-3 text-left font-semibold">Date</th>
+                                                                    <th className="px-5 py-3 text-left font-semibold">Plan</th>
+                                                                    <th className="px-5 py-3 text-left font-semibold">Animals</th>
+                                                                    <th className="px-5 py-3 text-left font-semibold">Cost (PKR)</th>
+                                                                    <th className="px-5 py-3 text-left font-semibold">Status</th>
+                                                                    <th className="px-5 py-3 text-left font-semibold">Message</th>
+                                                                </tr>
+                                                            </thead>
+                                                            <tbody className="divide-y divide-gray-100">
+                                                                {bdResults.map((r, i) => (
+                                                                    <tr key={i} className={`hover:bg-gray-50 ${
+                                                                        r.status === 'ERROR' ? 'bg-red-50/40' :
+                                                                        r.status === 'SKIP' ? 'bg-amber-50/30' : ''
+                                                                    }`}>
+                                                                        <td className="px-5 py-3 font-mono text-xs text-gray-700 whitespace-nowrap">{r.date}</td>
+                                                                        <td className="px-5 py-3 font-semibold text-gray-800">{r.planName}</td>
+                                                                        <td className="px-5 py-3 text-gray-600">{r.animalsCount ?? '—'}</td>
+                                                                        <td className="px-5 py-3 font-bold text-emerald-600">{r.totalCost ? r.totalCost.toLocaleString() : '—'}</td>
+                                                                        <td className="px-5 py-3">
+                                                                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                                                                r.status === 'SUCCESS' ? 'bg-green-100 text-green-700' :
+                                                                                r.status === 'ERROR' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
+                                                                            }`}>{r.status}</span>
+                                                                        </td>
+                                                                        <td className="px-5 py-3 text-gray-500 text-xs max-w-xs truncate">{r.message}</td>
+                                                                    </tr>
+                                                                ))}
+                                                            </tbody>
+                                                        </table>
+                                                    </div>
+                                                )}
+                                                {!bdProcessing && (
+                                                    <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-between items-center">
+                                                        <p className="text-sm text-gray-600">Total Cost Processed: <span className="font-bold text-emerald-700">PKR {bdResults.reduce((s, r) => s + (r.totalCost || 0), 0).toLocaleString()}</span></p>
+                                                        <button onClick={() => { setBdStep('CONFIG'); setBdResults([]); }} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm rounded-xl font-semibold flex items-center gap-2">
+                                                            <RotateCcw size={14} /> Process Another Range
+                                                        </button>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
                                 )}
 
                                 {viewMode === 'LEDGER' && (
@@ -1475,27 +2091,31 @@ export const Operations: React.FC<Props> = ({
                                             ) : dietForm.targetType === 'CATEGORY' ? (
                                                 <select value={dietForm.targetId || ''} onChange={e => setDietForm({ ...dietForm, targetId: e.target.value, targetName: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none">
                                                     <option value="">Select Category...</option>
-                                                    {[{ id: 'MILKING', name: 'Milking Cows' }, { id: 'DRY', name: 'Dry Cows' }, { id: 'CALF', name: 'Calves' }, { id: 'BULL', name: 'Bulls' }].map(c => (
-                                                        <option key={c.id} value={c.name}>{c.name}</option>
+                                                    {Array.from(new Set(state.livestock.filter(l => l.status === 'ACTIVE' && (!state.currentFarmId || l.farmId === state.currentFarmId)).map(l => l.category).filter(Boolean))).map((catName) => (
+                                                        <option key={catName as string} value={catName as string}>{catName as string}</option>
                                                     ))}
                                                 </select>
                                             ) : dietForm.targetType === 'INDIVIDUAL' ? (
                                                 <div className="border border-gray-300 rounded-lg max-h-40 overflow-y-auto p-2">
                                                     {(state.livestock.filter(l => l.status === 'ACTIVE' && (!state.currentFarmId || l.farmId === state.currentFarmId))).map(l => (
-                                                        <label key={l.id} className="flex items-center gap-2 p-1 hover:bg-gray-50 cursor-pointer text-sm">
+                                                        <label key={l.id} htmlFor={`diet-target-${l.id}`} className="flex items-center gap-2 p-1 hover:bg-gray-50 cursor-pointer text-sm">
                                                             <input
+                                                                id={`diet-target-${l.id}`}
                                                                 type="checkbox"
                                                                 checked={(dietForm.targetIds || []).includes(l.id)}
                                                                 onChange={e => {
-                                                                    const set = new Set(dietForm.targetIds || []);
-                                                                    if (e.target.checked) set.add(l.id); else set.delete(l.id);
-                                                                    setDietForm({ ...dietForm, targetIds: Array.from(set) });
+                                                                    setDietForm(prev => {
+                                                                        const set = new Set(prev.targetIds || []);
+                                                                        if (e.target.checked) set.add(l.id);
+                                                                        else set.delete(l.id);
+                                                                        return { ...prev, targetIds: Array.from(set) };
+                                                                    });
                                                                 }}
                                                             />
                                                             {l.tagId} ({l.breed})
                                                         </label>
                                                     ))}
-                                                    {(state.livestock.filter(l => l.status === 'ACTIVE' && (!state.currentFarmId || l.farmId === state.currentFarmId))).length === 0 && <span className="text-gray-400 italic text-sm">No active animals.</span>}
+                                                    {(state.livestock.filter(l => l.status === 'ACTIVE' && (!state.currentFarmId || l.farmId === state.currentFarmId))).length === 0 && <span className="text-gray-400 italic text-sm">No active animals. Select a farm from the header to list animals.</span>}
                                                 </div>
                                             ) : (
                                                 <input type="text" disabled placeholder="Group selection logic here..." className="w-full border border-gray-300 bg-gray-100 rounded-lg px-4 py-2 outline-none" />
@@ -1583,10 +2203,15 @@ export const Operations: React.FC<Props> = ({
                                                                 if (['BAG', 'BUNDLE'].includes(uiInv)) {
                                                                     if (uiItem === 'KG') nativeQty = (item.quantity || 0) / wpu;
                                                                     else if (uiItem === 'G') nativeQty = ((item.quantity || 0) / 1000) / wpu;
-                                                                } else if (uiInv === 'KG' && uiItem === 'G') {
-                                                                    nativeQty = (item.quantity || 0) / 1000;
-                                                                } else if (uiInv === 'G' && uiItem === 'KG') {
-                                                                    nativeQty = (item.quantity || 0) * 1000;
+                                                                } else if (uiInv === 'TON') {
+                                                                    if (uiItem === 'KG') nativeQty = (item.quantity || 0) / 1000;
+                                                                    else if (uiItem === 'G') nativeQty = (item.quantity || 0) / 1000000;
+                                                                } else if (uiInv === 'KG') {
+                                                                    if (uiItem === 'G') nativeQty = (item.quantity || 0) / 1000;
+                                                                    else if (uiItem === 'TON') nativeQty = (item.quantity || 0) * 1000;
+                                                                } else if (uiInv === 'G') {
+                                                                    if (uiItem === 'KG') nativeQty = (item.quantity || 0) * 1000;
+                                                                    else if (uiItem === 'TON') nativeQty = (item.quantity || 0) * 1000000;
                                                                 }
 
                                                                 c = nativeQty * item.costPerUnit;
@@ -1613,64 +2238,77 @@ export const Operations: React.FC<Props> = ({
                                                 const aCount = previewAnimals.length;
                                                 const mode = dietForm.distributionMode || 'PER_ANIMAL';
 
+                                                let totalDailyPlanCost = 0;
+
+                                                const previewItemsJsx = dietForm.items?.map(it => {
+                                                    let deductTotal = 0;
+                                                    if (mode === 'TOTAL_DISTRIBUTED') deductTotal = it.quantity;
+                                                    else if (mode === 'PER_HUNDRED_KG_BW') deductTotal = it.quantity * (previewAnimals.reduce((s, a) => s + (a.weight || 0), 0) / 100);
+                                                    else deductTotal = it.quantity * aCount;
+
+                                                    let totalReq = deductTotal; // requested locally
+                                                    let inventoryDeductionCount = deductTotal; // in native units mapped for stock reduction
+
+                                                    const fInv = state.feed.find(f => f.id === it.inventoryId);
+                                                    const uiInv = (fInv?.unit || '').toUpperCase();
+                                                    const uiItem = (it.unit || '').toUpperCase();
+                                                    const isBag = fInv ? ['BAG', 'BUNDLE'].includes(uiInv) : false;
+                                                    const wpu = fInv?.weightPerUnit || 1;
+                                                    const isMissingWpu = isBag && (!fInv?.weightPerUnit || fInv.weightPerUnit <= 0);
+
+                                                    if (isBag) {
+                                                        if (uiItem === 'KG') inventoryDeductionCount = deductTotal / wpu;
+                                                        else if (uiItem === 'G') inventoryDeductionCount = (deductTotal / 1000) / wpu;
+                                                    } else if (uiInv === 'TON') {
+                                                        if (uiItem === 'KG') inventoryDeductionCount = deductTotal / 1000;
+                                                        else if (uiItem === 'G') inventoryDeductionCount = deductTotal / 1000000;
+                                                    } else if (uiInv === 'KG') {
+                                                        if (uiItem === 'G') inventoryDeductionCount = deductTotal / 1000;
+                                                        else if (uiItem === 'TON') inventoryDeductionCount = deductTotal * 1000;
+                                                    } else if (uiInv === 'G') {
+                                                        if (uiItem === 'KG') inventoryDeductionCount = deductTotal * 1000;
+                                                        else if (uiItem === 'TON') inventoryDeductionCount = deductTotal * 1000000;
+                                                    }
+
+                                                    const warn = inventoryDeductionCount > (fInv?.quantity || 0);
+
+                                                    totalDailyPlanCost += inventoryDeductionCount * (fInv?.unitCost || 0);
+
+                                                    return (
+                                                        <div key={it.id} className="flex flex-col text-xs text-emerald-900 border-b border-emerald-50/50 pb-1.5 mb-1.5 last:mb-0 last:pb-0 last:border-0">
+                                                            <div className="flex justify-between items-center">
+                                                                <span>{it.inventoryName || 'Unknown'} (In Stock: {fInv?.quantity?.toFixed(2)}{fInv?.unit}{wpu > 1 ? ` - ${(wpu) * (fInv?.quantity || 0)}kg` : ''}):</span>
+                                                                <span className={warn ? "text-red-500 font-bold" : "font-medium"}>Require {deductTotal.toFixed(2)} {it.unit}  =  (-{inventoryDeductionCount.toFixed(2)} {fInv?.unit || 'units'})</span>
+                                                            </div>
+                                                            {isMissingWpu && (it.unit === 'kg' || it.unit === 'g') && (
+                                                                <span className="text-red-500 block text-[10px] mt-1 font-bold italic bg-red-50 px-2 py-1 rounded inline-flex w-fit">*Warning: "Weight Per Unit" missing for {fInv?.name}. System assuming 1 {fInv?.unit} = 1 kg. Please configure in inventory to accurately convert fractions.*</span>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                });
+
                                                 return (
-                                                    <div className="border-t border-gray-200 mt-2 pt-2 bg-emerald-50 rounded-xl border border-emerald-100 p-4">
-                                                        <div className="flex justify-between items-center mb-2 border-b border-emerald-200 pb-2">
-                                                            <span className="text-sm font-bold text-emerald-800">Processing Preview (Targeting {aCount} Animals)</span>
-                                                            <span className="text-xs font-bold px-2 py-1 rounded bg-white text-emerald-700 border border-emerald-200">{mode.replace(/_/g, ' ')}</span>
+                                                    <>
+                                                        <div className="border-t border-gray-200 mt-2 pt-2 bg-emerald-50 rounded-xl border border-emerald-100 p-4">
+                                                            <div className="flex justify-between items-center mb-2 border-b border-emerald-200 pb-2">
+                                                                <span className="text-sm font-bold text-emerald-800">Processing Preview (Targeting {aCount} Animals)</span>
+                                                                <span className="text-xs font-bold px-2 py-1 rounded bg-white text-emerald-700 border border-emerald-200">{mode.replace(/_/g, ' ')}</span>
+                                                            </div>
+                                                            <div className="space-y-1">
+                                                                {previewItemsJsx}
+                                                            </div>
                                                         </div>
-                                                        <div className="space-y-1">
-                                                            {dietForm.items?.map(it => {
-                                                                let deductTotal = 0;
-                                                                if (mode === 'TOTAL_DISTRIBUTED') deductTotal = it.quantity;
-                                                                else if (mode === 'PER_HUNDRED_KG_BW') deductTotal = it.quantity * (previewAnimals.reduce((s, a) => s + (a.weight || 0), 0) / 100);
-                                                                else deductTotal = it.quantity * aCount;
 
-                                                                let totalReq = deductTotal; // requested locally
-                                                                let inventoryDeductionCount = deductTotal; // in native units mapped for stock reduction
-
-                                                                const fInv = state.feed.find(f => f.id === it.inventoryId);
-                                                                const uiInv = (fInv?.unit || '').toUpperCase();
-                                                                const uiItem = (it.unit || '').toUpperCase();
-                                                                const isBag = fInv ? ['BAG', 'BUNDLE'].includes(uiInv) : false;
-                                                                const wpu = fInv?.weightPerUnit || 1;
-                                                                const isMissingWpu = isBag && (!fInv?.weightPerUnit || fInv.weightPerUnit <= 0);
-
-                                                                if (isBag) {
-                                                                    if (uiItem === 'KG') inventoryDeductionCount = deductTotal / wpu;
-                                                                    else if (uiItem === 'G') inventoryDeductionCount = (deductTotal / 1000) / wpu;
-                                                                } else if (uiInv === 'KG' && uiItem === 'G') {
-                                                                    inventoryDeductionCount = deductTotal / 1000;
-                                                                } else if (uiInv === 'G' && uiItem === 'KG') {
-                                                                    inventoryDeductionCount = deductTotal * 1000;
-                                                                }
-
-                                                                const warn = inventoryDeductionCount > (fInv?.quantity || 0);
-
-                                                                return (
-                                                                    <div key={it.id} className="flex flex-col text-xs text-emerald-900 border-b border-emerald-50/50 pb-1.5 mb-1.5 last:mb-0 last:pb-0 last:border-0">
-                                                                        <div className="flex justify-between items-center">
-                                                                            <span>{it.inventoryName || 'Unknown'} (In Stock: {fInv?.quantity?.toFixed(2)}{fInv?.unit}{wpu > 1 ? ` - ${(wpu) * (fInv?.quantity || 0)}kg` : ''}):</span>
-                                                                            <span className={warn ? "text-red-500 font-bold" : "font-medium"}>Require {deductTotal.toFixed(2)} {it.unit}  =  (-{inventoryDeductionCount.toFixed(2)} {fInv?.unit || 'units'})</span>
-                                                                        </div>
-                                                                        {isMissingWpu && (it.unit === 'kg' || it.unit === 'g') && (
-                                                                            <span className="text-red-500 block text-[10px] mt-1 font-bold italic bg-red-50 px-2 py-1 rounded inline-flex w-fit">*Warning: "Weight Per Unit" missing for {fInv?.name}. System assuming 1 {fInv?.unit} = 1 kg. Please configure in inventory to accurately convert fractions.*</span>
-                                                                        )}
-                                                                    </div>
-                                                                );
-                                                            })}
+                                                        {/* TOTALS */}
+                                                        <div className="border-t border-gray-200 mt-2 pt-2 flex justify-between items-center bg-white p-2 rounded border-emerald-100">
+                                                            <span className="text-sm font-bold text-gray-700">Total Est. Daily Cost (for {aCount} head):</span>
+                                                            <span className="text-lg font-black text-emerald-600">
+                                                                PKR {totalDailyPlanCost.toLocaleString(undefined, { maximumFractionDigits: 1 })} <span className="text-xs text-gray-400 font-medium">total plan / day</span>
+                                                            </span>
                                                         </div>
-                                                    </div>
+                                                    </>
                                                 );
                                             })()}
-
-                                            {/* TOTALS */}
-                                            <div className="border-t border-gray-200 mt-2 pt-2 flex justify-between items-center bg-white p-2 rounded border-emerald-100">
-                                                <span className="text-sm font-bold text-gray-700">Cost Baseline:</span>
-                                                <span className="text-lg font-black text-emerald-600">
-                                                    PKR {(dietForm.items?.reduce((sum, item) => sum + (item.quantity * (item.costPerUnit || 0)), 0) || 0).toLocaleString()} <span className="text-xs text-gray-400 font-medium">base value</span>
-                                                </span>
-                                            </div>
                                         </div>
                                     </div>
 

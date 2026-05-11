@@ -18,6 +18,15 @@ import { Truck, Home, LogOut, FileText, BadgeDollarSign, Activity, Stethoscope, 
 
 import { backendService } from './services/backendService';
 import { setTenant as setTenantContext, getTenantFromUrl, getPersistedSales, setPersistedSales, getPersistedLivestockStatus, setPersistedLivestockStatus } from './services/tenantContext';
+
+function toLivestockArray(r: Livestock[] | { content?: Livestock[] }): Livestock[] {
+  return Array.isArray(r) ? r : (r?.content ?? []);
+}
+
+function normalizeDietPlanTargetIds(p: DietPlan): DietPlan {
+  const ids = Array.isArray(p.targetIds) ? p.targetIds : (Array.isArray((p as any).assignedAnimalIds) ? (p as any).assignedAnimalIds : []);
+  return { ...p, targetIds: ids };
+}
 import { setTenant as setTenantRedux } from './store/tenantSlice';
 import type { RootState } from './store';
 
@@ -129,6 +138,12 @@ const App: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Server-side pagination for livestock grid (CATTLE_MANAGER / GOAT_MANAGER); category/status for deep-link from Dashboard
+  const [livestockPageRequest, setLivestockPageRequest] = useState({ number: 0, size: 20, sortBy: 'tagId', sortDirection: 'asc' as 'asc' | 'desc', q: '', category: '' as string, status: '' as string });
+  const [livestockPageResult, setLivestockPageResult] = useState<{ content: Livestock[]; totalElements: number; totalPages: number } | null>(null);
+  const [livestockGridRefresh, setLivestockGridRefresh] = useState(0);
+  const [financialsRefresh, setFinancialsRefresh] = useState(0);
+
   // Tenant: on first load read URL and persist companyName & instanceId to localStorage + Redux
   useEffect(() => {
     const fromUrl = getTenantFromUrl();
@@ -144,6 +159,24 @@ const App: React.FC = () => {
       setTenantContext(reduxTenant);
     }
   }, [reduxTenant.companyName, reduxTenant.instanceId, reduxTenant.appType]);
+
+  // Fetch paginated livestock when on CATTLE_MANAGER or GOAT_MANAGER
+  useEffect(() => {
+    if (activeView !== 'CATTLE_MANAGER' && activeView !== 'GOAT_MANAGER') {
+      setLivestockPageResult(null);
+      return;
+    }
+    const species = activeView === 'CATTLE_MANAGER' ? 'CATTLE' : 'GOAT';
+    const farmId = state.currentFarmId ?? undefined;
+    const { number, size, sortBy, sortDirection, q, category, status } = livestockPageRequest;
+    const categoryParam = category || (FIXED_CATEGORIES[0] ?? undefined);
+    backendService.getLivestock({ page: number, limit: size, sortBy, sortDirection, q: q || undefined, farmId, species, category: categoryParam, status: status || undefined })
+      .then((data) => {
+        const page = Array.isArray(data) ? { content: data, totalElements: data.length, totalPages: 1 } : data;
+        setLivestockPageResult({ content: page.content, totalElements: page.totalElements, totalPages: page.totalPages });
+      })
+      .catch(() => setLivestockPageResult(null));
+  }, [activeView, state.currentFarmId, livestockPageRequest.number, livestockPageRequest.size, livestockPageRequest.sortBy, livestockPageRequest.sortDirection, livestockPageRequest.q, livestockPageRequest.category, livestockPageRequest.status, livestockGridRefresh]);
 
   // Check authentication on mount
   useEffect(() => {
@@ -166,7 +199,7 @@ const App: React.FC = () => {
         if (companyName?.trim()) {
           await backendService.ensureTenantSetup(companyName).catch(() => { });
         }
-        const [locations, farms, apiLivestock, expenses, apiSales, feed, infra, dietPlans, entities, ledger, consumptionLogs, treatmentProtocols, treatmentLogs] = await Promise.all([
+        const [locations, farms, apiLivestock, expenses, apiSales, feed, infra, dietPlans, entities, ledger, consumptionLogs, processedFeedLedgers, treatmentProtocols, treatmentLogs] = await Promise.all([
           backendService.getLocations().catch(() => []),
           backendService.getFarms().catch(() => []),
           backendService.getLivestock(),
@@ -178,13 +211,15 @@ const App: React.FC = () => {
           backendService.getEntities(),
           backendService.getLedger(),
           backendService.getConsumptionLogs(),
+          backendService.getFeedLedgers().catch(() => []),
           backendService.getTreatmentProtocols(),
           backendService.getTreatmentLogs()
         ]);
 
         const salesFromApi = Array.isArray(apiSales) ? apiSales : [];
+        const livestockList = toLivestockArray(apiLivestock);
         // Enrich sales missing farmId: backend may not return it, so infer from first sold animal's farmId
-        const livestockById = new Map(apiLivestock.map(l => [l.id, l]));
+        const livestockById = new Map(livestockList.map(l => [l.id, l]));
         const enrichedApiSales: Sale[] = salesFromApi.map((s: Sale) => {
           if (s.farmId) return s;
           const firstAnimalId = s.soldAnimalIds?.[0];
@@ -203,7 +238,7 @@ const App: React.FC = () => {
         }
 
         const statusOverrides = getPersistedLivestockStatus();
-        const livestock = apiLivestock.map(l => ({
+        const livestock = livestockList.map(l => ({
           ...l,
           status: (statusOverrides[l.id] as LivestockStatus) || l.status
         }));
@@ -218,10 +253,11 @@ const App: React.FC = () => {
             sales: mergedSales,
             feed,
             infrastructure: infra,
-            dietPlans,
+            dietPlans: (dietPlans || []).map(normalizeDietPlanTargetIds),
             entities,
             ledger,
             consumptionLogs,
+            processedFeedLedgers: processedFeedLedgers ?? [],
             treatmentProtocols,
             treatmentLogs
           };
@@ -263,6 +299,20 @@ const App: React.FC = () => {
     setIsAuthenticated(false);
   };
 
+  const handleSyncLocations = async () => {
+    try {
+      const [locs, fms] = await Promise.all([
+        backendService.getLocations().catch(() => []),
+        backendService.getFarms().catch(() => [])
+      ]);
+      setState(prev => ({ ...prev, locations: locs, farms: fms }));
+      alert("Locations and Farms synchronized successfully.");
+    } catch (e: any) {
+      console.error("Sync failed:", e);
+      alert("Sync failed: " + e.message);
+    }
+  };
+
   const handleCreateLocation = async (name: string, type: 'CITY' | 'REGION') => {
     try {
       const loc = await backendService.createLocation({
@@ -295,230 +345,44 @@ const App: React.FC = () => {
   };
 
   // --- DIET & NUTRITION ENGINE ---
+  const refreshDietData = async () => {
+    const [refetchedFeed, refetchedLogs, refetchedLedgers, refetchedLivestock, refetchedPlans, refetchedExpenses] = await Promise.all([
+      backendService.getFeed(),
+      backendService.getConsumptionLogs(),
+      backendService.getFeedLedgers(),
+      backendService.getLivestock(),
+      backendService.getDietPlans(),
+      backendService.getExpenses()
+    ]);
+
+    setState(prev => ({
+      ...prev,
+      feed: refetchedFeed,
+      consumptionLogs: refetchedLogs,
+      processedFeedLedgers: refetchedLedgers,
+      livestock: toLivestockArray(refetchedLivestock),
+      dietPlans: (refetchedPlans || []).map(normalizeDietPlanTargetIds),
+      expenses: refetchedExpenses
+    }));
+  };
+
+  const processDietPlans = async (
+    requestPayload: { dietPlanIds?: string[]; date?: string; animalIds?: string[] },
+    refreshAfter: boolean = true
+  ) => {
+    const result = await backendService.processDietPlans(requestPayload);
+    if (refreshAfter) await refreshDietData();
+    return result;
+  };
+
   const processDailyConsumption = async () => {
     try {
-      const today = new Date().toISOString().split('T')[0];
-      const activePlans = state.dietPlans.filter(p => p.status === 'ACTIVE');
-      if (activePlans.length === 0) return alert("No active diet plans found.");
-
-      // --- PRE-FLIGHT CHECK (SIMULATION) ---
-      let simulationFailed = false;
-      const requiredInventory = new Map<string, number>();
-
-      for (const plan of activePlans) {
-        if (!plan.items || plan.items.length === 0) continue;
-
-        let animals: Livestock[] = [];
-        if (plan.targetType === 'CATEGORY') {
-          const categoryMatch = (l: Livestock) =>
-            l.farmId === plan.farmId &&
-            l.status === 'ACTIVE' &&
-            (l.category === plan.targetId || l.category === plan.targetName || (plan.targetName && l.category?.toLowerCase() === plan.targetName.toLowerCase()));
-          animals = state.livestock.filter(categoryMatch);
-        } else if (plan.targetType === 'INDIVIDUAL') {
-          const ids = plan.targetIds || (plan.targetId ? [plan.targetId] : []);
-          animals = state.livestock.filter(l => ids.includes(l.id) && l.status === 'ACTIVE');
-        } else if (plan.targetType === 'ALL' || !plan.targetType) {
-          animals = state.livestock.filter(l => l.farmId === plan.farmId && l.status === 'ACTIVE');
-        }
-
-        if (animals.length === 0) continue;
-
-        for (const item of plan.items) {
-          const qty = Number(item.quantity) || 0;
-          let totalRequiredForPlan = 0;
-
-          if (plan.distributionMode === 'TOTAL_DISTRIBUTED') {
-            totalRequiredForPlan = qty;
-          } else if (plan.distributionMode === 'PER_HUNDRED_KG_BW') {
-            const totalKg = animals.reduce((sum, a) => sum + (a.weight || 0), 0);
-            totalRequiredForPlan = qty * (totalKg / 100);
-          } else {
-            // Default to PER_ANIMAL
-            totalRequiredForPlan = qty * animals.length;
-          }
-
-          const invItem = state.feed.find(f => f.id === item.inventoryId);
-          let deductionQty = totalRequiredForPlan;
-          if (invItem) {
-            const uiInv = (invItem.unit || '').toUpperCase();
-            const uiItem = (item.unit || '').toUpperCase();
-            const wpu = invItem.weightPerUnit || 1;
-
-            if (['BAG', 'BUNDLE'].includes(uiInv)) {
-              if (uiItem === 'KG') deductionQty = totalRequiredForPlan / wpu;
-              else if (uiItem === 'G') deductionQty = (totalRequiredForPlan / 1000) / wpu;
-            } else if (uiInv === 'KG' && uiItem === 'G') {
-              deductionQty = totalRequiredForPlan / 1000;
-            } else if (uiInv === 'G' && uiItem === 'KG') {
-              deductionQty = totalRequiredForPlan * 1000;
-            }
-          }
-          requiredInventory.set(item.inventoryId, (requiredInventory.get(item.inventoryId) || 0) + deductionQty);
-        }
+      const result = await processDietPlans({}, true);
+      if (result.plansProcessed === 0 && result.ledgersCreated === 0) {
+        alert(result.message || "No eligible plans to process (none active or already processed today).");
+        return;
       }
-
-      // --- HARD STOCK LOCK VALIDATION ---
-      for (const [invId, reqQty] of Array.from(requiredInventory.entries())) {
-        const invItem = state.feed.find(f => f.id === invId);
-        if (!invItem) {
-          alert(`CRITICAL ERROR: Feed item (ID: ${invId}) not found in inventory.`);
-          simulationFailed = true;
-          break;
-        }
-        if (invItem.quantity < reqQty) {
-          alert(`HARD STOCK LOCK TRIGGERED:\nInsufficient stock for ${invItem.name}.\nRequired: ${reqQty.toFixed(2)} ${invItem.unit}. Available: ${invItem.quantity.toFixed(2)} ${invItem.unit}.\nProcessing aborted.`);
-          simulationFailed = true;
-          break;
-        }
-      }
-
-      if (simulationFailed) return;
-
-      // --- EXECUTION PHASE ---
-      let totalGlobalCost = 0;
-      const newLogs: any[] = [];
-      const newLedgers: ProcessedFeedLedger[] = [];
-      const invUpdates = new Map<string, FeedInventory>();
-      const modifiedFeedIds = new Set<string>();
-      state.feed.forEach(f => invUpdates.set(f.id, { ...f }));
-      const livestockUpdates = new Map<string, Livestock>();
-
-      let anyProcessed = false;
-
-      for (const plan of activePlans) {
-        if (!plan.items || plan.items.length === 0) continue;
-
-        let animals: Livestock[] = [];
-        if (plan.targetType === 'CATEGORY') {
-          const categoryMatch = (l: Livestock) =>
-            l.farmId === plan.farmId &&
-            l.status === 'ACTIVE' &&
-            (l.category === plan.targetId || l.category === plan.targetName || (plan.targetName && l.category?.toLowerCase() === plan.targetName.toLowerCase()));
-          animals = state.livestock.filter(categoryMatch);
-        } else if (plan.targetType === 'INDIVIDUAL') {
-          const ids = plan.targetIds || (plan.targetId ? [plan.targetId] : []);
-          animals = state.livestock.filter(l => ids.includes(l.id) && l.status === 'ACTIVE');
-        } else if (plan.targetType === 'ALL' || !plan.targetType) {
-          animals = state.livestock.filter(l => l.farmId === plan.farmId && l.status === 'ACTIVE');
-        }
-
-        if (animals.length === 0) continue;
-
-        // Skip if already processed today
-        if (plan.lastProcessedDate === today) continue;
-
-        let planTotalCost = 0;
-        const ledgerId = `ledger-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
-
-        for (const item of plan.items) {
-          const qty = Number(item.quantity) || 0;
-          let totalQty = 0;
-
-          if (plan.distributionMode === 'TOTAL_DISTRIBUTED') {
-            totalQty = qty;
-          } else if (plan.distributionMode === 'PER_HUNDRED_KG_BW') {
-            const totalKg = animals.reduce((sum, a) => sum + (a.weight || 0), 0);
-            totalQty = qty * (totalKg / 100);
-          } else {
-            totalQty = qty * animals.length;
-          }
-
-          const invItem = invUpdates.get(item.inventoryId);
-          if (invItem && totalQty > 0) {
-            let deductionQty = totalQty;
-            const uiInv = (invItem.unit || '').toUpperCase();
-            const uiItem = (item.unit || '').toUpperCase();
-            const wpu = invItem.weightPerUnit || 1;
-
-            if (['BAG', 'BUNDLE'].includes(uiInv)) {
-              if (uiItem === 'KG') deductionQty = totalQty / wpu;
-              else if (uiItem === 'G') deductionQty = (totalQty / 1000) / wpu;
-            } else if (uiInv === 'KG' && uiItem === 'G') {
-              deductionQty = totalQty / 1000;
-            } else if (uiInv === 'G' && uiItem === 'KG') {
-              deductionQty = totalQty * 1000;
-            }
-
-            invItem.quantity -= deductionQty; // Safe because of hard lock
-            invUpdates.set(invItem.id, invItem);
-            modifiedFeedIds.add(invItem.id);
-
-            const cost = deductionQty * (invItem.unitCost || 0);
-            planTotalCost += cost;
-
-            newLogs.push({
-              id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-              farmId: plan.farmId,
-              dietPlanId: plan.id,
-              processedLedgerId: ledgerId,
-              date: today,
-              itemId: item.inventoryId,
-              quantityUsed: Number(deductionQty),
-              cost: Number(cost),
-              unit: invItem.unit || 'kg'
-            });
-          }
-        }
-
-        if (planTotalCost > 0) {
-          totalGlobalCost += planTotalCost;
-          newLedgers.push({
-            id: ledgerId,
-            farmId: plan.farmId,
-            date: today,
-            dietPlanId: plan.id,
-            totalAnimalsFed: animals.length,
-            totalCost: planTotalCost,
-            processedBy: 'SYSTEM',
-            status: 'PROCESSED'
-          });
-
-          // Accumulate exactly what they ate explicitly onto their profile per animal
-          const logCostPerAnimal = planTotalCost / animals.length;
-          for (const animal of animals) {
-            const currentAnimal = livestockUpdates.get(animal.id) || { ...animal };
-            currentAnimal.accumulatedFeedCost = (currentAnimal.accumulatedFeedCost || 0) + logCostPerAnimal;
-            livestockUpdates.set(animal.id, currentAnimal);
-          }
-
-          anyProcessed = true;
-          // We will update the diet plan lastProcessedDate later, currently local state updates doesn't save plan automatically unless we call backend
-        }
-      }
-
-      if (!anyProcessed) return alert("No valid consumption to process today (No animals matched or no eligible active plans found).");
-
-      // 3. Commit: consumption logs first, then only modified feed, then expense, then animals
-      await backendService.logConsumption(newLogs);
-      for (const id of modifiedFeedIds) {
-        const inv = invUpdates.get(id);
-        if (inv) await backendService.updateFeed(id, inv);
-      }
-      for (const [id, animal] of Array.from(livestockUpdates.entries())) {
-        await backendService.updateLivestock(id, animal);
-      }
-      const expense: Expense = {
-        id: `exp-feed-${Date.now()}`,
-        farmId: state.currentFarmId || activePlans[0].farmId,
-        category: ExpenseCategory.FEED,
-        amount: totalGlobalCost,
-        date: today,
-        description: `Daily Auto-Feed Consumption (${newLogs.length} items)`,
-        supplier: 'Internal Inventory'
-      };
-      await backendService.createExpense(expense);
-
-      setState(prev => ({
-        ...prev,
-        feed: Array.from(invUpdates.values()),
-        livestock: prev.livestock.map(l => livestockUpdates.get(l.id) || l),
-        expenses: [...prev.expenses, expense],
-        consumptionLogs: [...(prev.consumptionLogs || []), ...newLogs],
-        processedFeedLedgers: [...(prev.processedFeedLedgers || []), ...newLedgers]
-      }));
-
-      alert(`Processed daily feed for ${activePlans.length} plan(s). Total cost: ${totalGlobalCost.toLocaleString()}`);
+      alert(result.message + (result.totalCost > 0 ? ` Total cost: PKR ${result.totalCost.toLocaleString()}` : ''));
     } catch (e: any) {
       console.error('Process daily consumption error:', e);
       const msg = e?.message || e?.response?.data?.message || String(e);
@@ -531,69 +395,24 @@ const App: React.FC = () => {
       const ledger = state.processedFeedLedgers?.find(l => l.id === ledgerId);
       if (!ledger) return alert("Ledger not found.");
       if (ledger.status === 'REVERSED') return alert("Already reversed.");
-
-      const logs = state.consumptionLogs?.filter(l => l.processedLedgerId === ledgerId) || [];
-      if (logs.length === 0) return alert("No consumption logs found for this ledger.");
-
-      // 1. Recover Inventory
-      const invUpdates = new Map<string, FeedInventory>();
-      state.feed.forEach(f => invUpdates.set(f.id, { ...f }));
-      const modifiedFeedIds = new Set<string>();
-
-      for (const log of logs) {
-        const invItem = invUpdates.get(log.itemId);
-        if (invItem) {
-          invItem.quantity += Number(log.quantityUsed || 0);
-          invUpdates.set(invItem.id, invItem);
-          modifiedFeedIds.add(invItem.id);
-        }
-      }
-
-      // 2. Reduce Accumulated Cost from Animals
-      const logCostPerAnimal = ledger.totalCost / (ledger.totalAnimalsFed || 1);
-      const plan = state.dietPlans.find(p => p.id === ledger.dietPlanId);
-      const livestockUpdates = new Map<string, Livestock>();
-      const modifiedLivestockIds = new Set<string>();
-
-      if (plan) {
-        let animalsToReverse: Livestock[] = [];
-        if (plan.targetType === 'CATEGORY') {
-          animalsToReverse = state.livestock.filter(l => l.farmId === plan.farmId && l.status === 'ACTIVE' && l.category === plan.targetName);
-        } else if (plan.targetType === 'INDIVIDUAL') {
-          const ids = plan.targetIds || (plan.targetId ? [plan.targetId] : []);
-          animalsToReverse = state.livestock.filter(l => ids.includes(l.id) && l.status === 'ACTIVE');
-        } else if (plan.targetType === 'ALL' || !plan.targetType) {
-          animalsToReverse = state.livestock.filter(l => l.farmId === plan.farmId && l.status === 'ACTIVE');
-        }
-
-        for (const animal of animalsToReverse) {
-          const currentAnimal = livestockUpdates.get(animal.id) || { ...animal };
-          currentAnimal.accumulatedFeedCost = Math.max(0, (currentAnimal.accumulatedFeedCost || 0) - logCostPerAnimal);
-          livestockUpdates.set(animal.id, currentAnimal);
-          modifiedLivestockIds.add(animal.id);
-        }
-      }
-
-      // 3. Commit updates locally to backend (since backend lacks explicit batch reverse API yet)
-      for (const id of modifiedFeedIds) {
-        const inv = invUpdates.get(id);
-        if (inv) await backendService.updateFeed(id, inv);
-      }
-      for (const id of modifiedLivestockIds) {
-        const animal = livestockUpdates.get(id);
-        if (animal) await backendService.updateLivestock(id, animal);
-      }
-
+      await backendService.reverseFeedLedger(ledgerId);
+      const getLedgers = backendService.getFeedLedgers ? backendService.getFeedLedgers() : Promise.resolve([]);
+      const [expenses, feed, processedFeedLedgers, livestock] = await Promise.all([
+        backendService.getExpenses(),
+        backendService.getFeed(),
+        getLedgers,
+        backendService.getLivestock(),
+      ]);
       setState(prev => ({
         ...prev,
-        feed: prev.feed.map(f => modifiedFeedIds.has(f.id) ? invUpdates.get(f.id)! : f),
-        livestock: prev.livestock.map(l => modifiedLivestockIds.has(l.id) ? livestockUpdates.get(l.id)! : l),
-        processedFeedLedgers: (prev.processedFeedLedgers || []).map(l => l.id === ledgerId ? { ...l, status: 'REVERSED' } : l)
+        expenses: Array.isArray(expenses) ? expenses : prev.expenses,
+        feed: Array.isArray(feed) ? feed : prev.feed,
+        processedFeedLedgers: Array.isArray(processedFeedLedgers) ? processedFeedLedgers : (prev.processedFeedLedgers || []).map(l => l.id === ledgerId ? { ...l, status: 'REVERSED' } : l),
+        livestock: toLivestockArray(livestock),
       }));
-
-      alert(`Transaction ${ledgerId} highly reversed. Feed inventory and animal costs accurately restored. Note: Daily unified feed expense was NOT altered; adjust manually if required.`);
+      alert(`Transaction reversed. Feed inventory, animal costs, and linked expense have been restored/removed by the server.`);
     } catch (e: any) {
-      alert(`Reversal failed: ${e.message}`);
+      alert(`Reversal failed: ${e?.message ?? e}`);
     }
   };
 
@@ -622,7 +441,11 @@ const App: React.FC = () => {
       for (const log of logs) {
         const invItem = invUpdates.get(log.itemId);
         if (invItem) {
-          invItem.quantity = Math.max(0, invItem.quantity - log.quantityUsed);
+          const isBulkUnit = ['BOTTLE', 'VIAL', 'BOX', 'PACK'].includes(invItem.unit?.toUpperCase() || '');
+          const conversionFactor = (isBulkUnit && (invItem.weightPerUnit || 0) > 0) ? invItem.weightPerUnit! : 1;
+          const deductedAmount = log.quantityUsed / conversionFactor;
+
+          invItem.quantity = Math.max(0, invItem.quantity - deductedAmount);
           invUpdates.set(invItem.id, invItem);
           totalCost += (log.cost || 0);
         }
@@ -694,24 +517,80 @@ const App: React.FC = () => {
         livestock: [...prev.livestock, saved],
         expenses: [...prev.expenses, ...newExpenses]
       }));
+      setLivestockGridRefresh(r => r + 1);
     } catch (e) { alert("Failed to save livestock"); }
   };
 
   const updateLivestock = async (updatedAnimal: Livestock) => {
     try {
+      // 1. Perform Livestock Update on Server
       const saved = await backendService.updateLivestock(updatedAnimal.id, updatedAnimal);
+      
+      // 2. Update Livestock State immediately
       setState(prev => ({
         ...prev,
         livestock: prev.livestock.map(l => l.id === saved.id ? saved : l)
       }));
       setPersistedLivestockStatus({ [saved.id]: saved.status });
+      setLivestockGridRefresh(r => r + 1);
+
+      // 3. Handle Expense (Purchase) Logic
+      // Use the latest state for searching expenses to avoid race conditions
+      const currentExpenses = state.expenses;
+      const purchExp = currentExpenses.find(e => 
+        e.relatedAnimalId === saved.id && 
+        (e.category === ExpenseCategory.PURCHASE || e.category === 'PURCHASE' || e.id === `purch_exp_${saved.id}`)
+      );
+
+      let newExpense: Expense | null = null;
+      let updatedExpense: Expense | null = null;
+
+      if (purchExp) {
+        // Update existing expense if amount or date changed
+        const targetAmount = Math.max(0, saved.purchasePrice || 0);
+        const targetDate = saved.purchaseDate || purchExp.date;
+        
+        if (purchExp.amount !== targetAmount || purchExp.date !== targetDate) {
+          updatedExpense = { ...purchExp, amount: targetAmount, date: targetDate };
+          await backendService.updateExpense(updatedExpense.id, updatedExpense);
+        }
+      } else if (saved.purchasePrice && saved.purchasePrice > 0) {
+        // Create new expense if doesn't exist but has price
+        const expense: Expense = {
+          id: `purch_exp_${saved.id}`,
+          farmId: saved.farmId || state.currentFarmId || '',
+          category: ExpenseCategory.PURCHASE,
+          amount: saved.purchasePrice,
+          date: saved.purchaseDate || new Date().toISOString().split('T')[0],
+          description: `Purchase of Animal: ${saved.tagId} (${saved.breed})`,
+          relatedAnimalId: saved.id,
+          farmName: state.farms.find(f => f.id === (saved.farmId || state.currentFarmId))?.name
+        };
+        newExpense = await backendService.createExpense(expense);
+      }
+
+      // 4. Update Expense State
+      if (newExpense || updatedExpense) {
+        setState(prev => {
+          let nextExpenses = prev.expenses;
+          if (updatedExpense) {
+            nextExpenses = nextExpenses.map(e => e.id === updatedExpense!.id ? updatedExpense! : e);
+          } else if (newExpense) {
+            nextExpenses = [...nextExpenses, newExpense];
+          }
+          return { ...prev, expenses: nextExpenses };
+        });
+        setFinancialsRefresh(r => r + 1); // Trigger refresh in Financials component
+      }
+
     } catch (e) {
+      console.error("Critical failure during livestock/expense update:", e);
+      // Fallback state update to ensure UI is at least consistent with local attempt
       setState(prev => ({
         ...prev,
-        livestock: prev.livestock.map(l => l.id === updatedAnimal.id ? { ...l, status: updatedAnimal.status } : l)
+        livestock: prev.livestock.map(l => l.id === updatedAnimal.id ? { ...l, ...updatedAnimal } : l)
       }));
-      setPersistedLivestockStatus({ [updatedAnimal.id]: updatedAnimal.status });
-      console.warn("Livestock update saved locally; backend sync failed:", e);
+      setLivestockGridRefresh(r => r + 1);
     }
   };
 
@@ -732,24 +611,74 @@ const App: React.FC = () => {
           date: record.date,
           description: `${record.type}: ${record.medicineName} (${animal.tagId})`,
           relatedAnimalId: animalId,
+          supplier: record.vendorId,
           farmName: state.farms.find(f => f.id === targetFarmId)?.name
         };
         await backendService.createExpense(expense);
       }
 
-      const [updatedLivestock, expenses] = await Promise.all([
+      // Backend now deducts inventory atomically when record has inventoryId/quantityUsed; refresh feed so UI stays in sync
+      const [rawLivestock, expenses, feedAfter] = await Promise.all([
         backendService.getLivestock(),
-        record.cost > 0 ? backendService.getExpenses() : Promise.resolve(state.expenses)
+        record.cost > 0 ? backendService.getExpenses() : Promise.resolve(state.expenses),
+        record.inventoryId && record.quantityUsed ? backendService.getFeed() : Promise.resolve(state.feed)
       ]);
-      setState(prev => ({ ...prev, livestock: updatedLivestock, expenses }));
+      setState(prev => ({
+        ...prev,
+        livestock: toLivestockArray(rawLivestock),
+        expenses,
+        ...(feedAfter !== state.feed ? { feed: feedAfter } : {})
+      }));
     } catch (e) { alert("Failed to add medical record: " + (e instanceof Error ? e.message : String(e))); }
+  };
+
+  const bulkVaccinate = async (animalIds: string[], record: MedicalRecord) => {
+    try {
+      await backendService.bulkVaccinate(animalIds, record);
+      const updatedLivestock = toLivestockArray(await backendService.getLivestock());
+      const next: Partial<AppState> = { livestock: updatedLivestock };
+      if (record.inventoryId && record.quantityUsed) {
+        const feed = await backendService.getFeed();
+        next.feed = feed;
+      }
+      if (record.cost > 0) {
+        const targetFarmId = state.currentFarmId;
+        if (!targetFarmId) { alert("Warning: Bulk expense recorded but no Farm ID could be associated."); }
+        const expense: Expense = {
+          id: `bulk_med_${Date.now()}`,
+          farmId: targetFarmId || 'UNKNOWN_FARM',
+          category: record.type === 'VACCINATION' ? ExpenseCategory.VACCINE : ExpenseCategory.MEDICAL,
+          amount: record.cost,
+          date: record.date,
+          description: `${record.type} (Bulk): ${record.medicineName} (${animalIds.length} animals)`,
+          supplier: record.vendorId,
+          farmName: state.farms.find(f => f.id === targetFarmId)?.name
+        };
+        await backendService.createExpense(expense);
+        const expenses = await backendService.getExpenses();
+        next.expenses = expenses;
+      }
+
+      setState(prev => ({ ...prev, ...next }));
+      setLivestockGridRefresh(r => r + 1);
+      setFinancialsRefresh(fr => fr + 1);
+    } catch (e) { alert("Failed to bulk vaccinate: " + (e instanceof Error ? e.message : String(e))); }
+  };
+
+  const bulkMove = async (animalIds: string[], location: string) => {
+    try {
+      await backendService.bulkMove(animalIds, location);
+      const updatedLivestock = toLivestockArray(await backendService.getLivestock());
+      setState(prev => ({ ...prev, livestock: updatedLivestock }));
+      setLivestockGridRefresh(r => r + 1);
+    } catch (e) { alert("Failed to bulk move: " + (e instanceof Error ? e.message : String(e))); }
   };
 
   const addBreedingRecord = async (animalId: string, record: InseminationRecord) => {
     try {
       const animal = state.livestock.find(l => l.id === animalId);
       const savedRecord = await backendService.addBreedingRecord(animalId, record);
-      const updatedLivestock = await backendService.getLivestock();
+      const updatedLivestock = toLivestockArray(await backendService.getLivestock());
 
       if (record.cost > 0) {
         const targetFarmId = state.currentFarmId || animal?.farmId;
@@ -761,6 +690,7 @@ const App: React.FC = () => {
           date: record.date,
           description: `Insemination: ${record.sireId} (${animal?.tagId})`,
           relatedAnimalId: animalId,
+          supplier: record.breederId,
           farmName: state.farms.find(f => f.id === targetFarmId)?.name
         };
         const savedExpense = await backendService.createExpense(expense);
@@ -774,7 +704,7 @@ const App: React.FC = () => {
   const updateBreedingRecord = async (animalId: string, updatedRec: InseminationRecord) => {
     try {
       await backendService.updateBreedingRecord(animalId, updatedRec);
-      const updatedLivestock = await backendService.getLivestock();
+      const updatedLivestock = toLivestockArray(await backendService.getLivestock());
       setState(prev => ({ ...prev, livestock: updatedLivestock }));
     } catch (e) {
       console.error(e);
@@ -782,10 +712,21 @@ const App: React.FC = () => {
     }
   };
 
+  const deleteBreedingRecord = async (animalId: string, recordId: string) => {
+    try {
+      if (!window.confirm("Are you sure you want to delete this breeding record?")) return;
+      await backendService.deleteBreedingRecord(animalId, recordId);
+      const updatedLivestock = toLivestockArray(await backendService.getLivestock());
+      setState(prev => ({ ...prev, livestock: updatedLivestock }));
+    } catch (e: any) {
+      alert("Failed to delete breeding record: " + (e?.message || e));
+    }
+  };
+
   const addWeightRecord = async (animalId: string, record: WeightRecord) => {
     try {
       await backendService.addWeightRecord(animalId, record);
-      const updatedLivestock = await backendService.getLivestock();
+      const updatedLivestock = toLivestockArray(await backendService.getLivestock());
       setState(prev => ({ ...prev, livestock: updatedLivestock }));
     } catch (e) { alert("Failed to add weight record"); }
   };
@@ -793,16 +734,22 @@ const App: React.FC = () => {
   const addMilkRecord = async (animalId: string, record: MilkRecord) => {
     try {
       await backendService.addMilkRecord(animalId, record);
-      const updatedLivestock = await backendService.getLivestock();
+      const updatedLivestock = toLivestockArray(await backendService.getLivestock());
       setState(prev => ({ ...prev, livestock: updatedLivestock }));
     } catch (e) { alert("Failed to add milk record"); }
   };
 
-  const deleteLivestock = async (id: string) => {
+  const deleteLivestock = async (id: string, force = false) => {
     try {
-      await backendService.deleteLivestock(id);
-      setState(prev => ({ ...prev, livestock: prev.livestock.filter(l => l.id !== id) }));
-    } catch (e) { alert("Failed to delete animal."); }
+      // Call backend which may soft-delete (ARCHIVED) or hard-delete depending on financial history
+      await backendService.deleteLivestock(id, force);
+      // Re-fetch to reflect server truth (archived vs removed)
+      const updatedLivestock = toLivestockArray(await backendService.getLivestock());
+      setState(prev => ({ ...prev, livestock: updatedLivestock }));
+      setLivestockGridRefresh(r => r + 1);
+    } catch (e: any) {
+      alert(e?.message || "Failed to delete animal.");
+    }
   };
 
   const handleCreateExpense = async (exp: Expense) => {
@@ -819,6 +766,17 @@ const App: React.FC = () => {
       setState(prev => ({ ...prev, expenses, entities, ledger }));
     } catch (e) {
       alert("Failed to save expense");
+      throw e;
+    }
+  };
+
+  const handleUpdateExpense = async (exp: Expense) => {
+    try {
+      const updated = await backendService.updateExpense(exp.id, exp);
+      setState(p => ({ ...p, expenses: p.expenses.map(e => e.id === updated.id ? updated : e) }));
+    } catch (e) {
+      console.error(e);
+      alert('Failed to update expense.');
       throw e;
     }
   };
@@ -853,7 +811,10 @@ const App: React.FC = () => {
     setPersistedSales(newSalesAfterAdd);
 
     try {
-      const saved = await backendService.createSale(saleWithContext);
+      const isBulk = (saleWithContext.soldAnimalIds?.length ?? 0) > 1;
+      const saved = isBulk
+        ? await backendService.createSaleBulk(saleWithContext)
+        : await backendService.createSale(saleWithContext);
       const [salesFromApi, entities, ledger] = await Promise.all([
         backendService.getSales().catch(() => []),
         backendService.getEntities(),
@@ -1084,44 +1045,6 @@ const App: React.FC = () => {
             <span className="font-bold text-gray-800">CattleOps</span>
           </div>
 
-          {/* CONTEXT SELECTORS (CENTER) */}
-          <div className="hidden md:flex items-center gap-2">
-            {/* LOCATION SELECTOR */}
-            <div className="flex items-center gap-2 bg-slate-100 p-1.5 rounded-lg border border-slate-200">
-              <div className="bg-white p-1.5 rounded shadow-sm text-sky-600"><MapPin size={18} /></div>
-              <div className="relative group">
-                <select
-                  value={state.currentLocationId || ''}
-                  onChange={(e) => setState(prev => ({ ...prev, currentLocationId: e.target.value || null, currentFarmId: null }))}
-                  className="bg-transparent font-bold text-slate-700 text-sm focus:outline-none cursor-pointer pr-6 appearance-none min-w-[120px]"
-                >
-                  <option value="">All Cities</option>
-                  {state.locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-                </select>
-                <ChevronDown size={14} className="absolute right-0 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-              </div>
-              <button type="button" onClick={() => setShowAddCityModal(true)} className="p-1.5 rounded bg-sky-100 text-sky-600 hover:bg-sky-200" title="Add City"><PlusCircle size={18} /></button>
-            </div>
-
-            {/* FARM SELECTOR */}
-            <div className="flex items-center gap-2 bg-slate-100 p-1.5 rounded-lg border border-slate-200">
-              <div className="bg-white p-1.5 rounded shadow-sm text-emerald-600"><Building2 size={18} /></div>
-              <div className="relative group">
-                <select
-                  value={state.currentFarmId || ''}
-                  onChange={(e) => setState(prev => ({ ...prev, currentFarmId: e.target.value || null }))}
-                  className="bg-transparent font-bold text-slate-700 text-sm focus:outline-none cursor-pointer pr-6 appearance-none min-w-[150px]"
-                >
-                  <option value="">{state.currentLocationId ? 'All Farms in City' : 'All Farms (Global)'}</option>
-                  {state.farms.filter(f => !state.currentLocationId || f.locationId === state.currentLocationId).map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
-                </select>
-                <ChevronDown size={14} className="absolute right-0 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-              </div>
-              <button type="button" onClick={() => setShowAddFarmModal(true)} className="p-1.5 rounded bg-emerald-100 text-emerald-600 hover:bg-emerald-200" title="Add Farm"><PlusCircle size={18} /></button>
-              {state.currentFarmId && <div className="text-[10px] font-bold bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded uppercase tracking-wider">{state.farms.find(f => f.id === state.currentFarmId)?.type}</div>}
-            </div>
-          </div>
-
           {/* Add City Modal */}
           {showAddCityModal && (
             <AddCityModal onClose={() => setShowAddCityModal(false)} onSubmit={handleCreateLocation} />
@@ -1132,6 +1055,20 @@ const App: React.FC = () => {
           )}
 
           <div className="hidden lg:flex items-center gap-4 ml-auto">
+
+            {/* Context Tooltip */}
+            <div className="relative group cursor-pointer flex items-center gap-2 text-slate-500 hover:text-emerald-600 transition-colors bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200">
+              <MapPin size={16} />
+              <span className="text-sm font-bold truncate max-w-[150px]">
+                {state.currentFarmId ? state.farms.find(f => f.id === state.currentFarmId)?.name : (state.currentLocationId ? state.locations.find(l => l.id === state.currentLocationId)?.name : 'Global View')}
+              </span>
+              
+              <div className="absolute right-0 top-full mt-2 w-64 bg-slate-800 text-white text-xs rounded-lg p-3 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 shadow-xl">
+                <div className="mb-1"><span className="text-slate-400">City:</span> {state.currentLocationId ? state.locations.find(l => l.id === state.currentLocationId)?.name : 'All Cities'}</div>
+                <div><span className="text-slate-400">Farm:</span> {state.currentFarmId ? state.farms.find(f => f.id === state.currentFarmId)?.name : 'All Farms'}</div>
+                <div className="mt-2 pt-2 border-t border-slate-700 text-slate-300 italic">Change this in Settings</div>
+              </div>
+            </div>
 
             <div className="flex items-center gap-2 text-gray-600">
               <User size={18} />
@@ -1157,6 +1094,9 @@ const App: React.FC = () => {
                 onNavigate={(view, options) => {
                   setActiveView(view);
                   if (options?.operationsTab) setOperationsTab(options.operationsTab);
+                  if ((view === 'CATTLE_MANAGER' || view === 'GOAT_MANAGER') && options?.filterCategory) {
+                    setLivestockPageRequest(prev => ({ ...prev, category: options.filterCategory ?? '', number: 0 }));
+                  }
                   setIsSidebarOpen(false);
                 }}
                 state={{
@@ -1172,25 +1112,41 @@ const App: React.FC = () => {
             {activeView === 'CATTLE_MANAGER' && (
               <LivestockManager
                 key="cattle-manager"
-                livestock={state.currentFarmId ? state.livestock.filter(l => l.farmId === state.currentFarmId) : (state.currentLocationId ? state.livestock.filter(l => state.farms.find(f => f.id === l.farmId)?.locationId === state.currentLocationId) : [])}
+                livestock={livestockPageResult ? livestockPageResult.content : (state.currentFarmId ? state.livestock.filter(l => l.farmId === state.currentFarmId && l.species === 'CATTLE') : (state.currentLocationId ? state.livestock.filter(l => l.species === 'CATTLE' && state.farms.find(f => f.id === l.farmId)?.locationId === state.currentLocationId) : state.livestock.filter(l => l.species === 'CATTLE')))}
+                allLivestock={state.livestock}
                 breeders={state.breeders} species="CATTLE" categories={FIXED_CATEGORIES}
                 entities={state.entities}
                 onAddLivestock={addLivestock} onUpdateLivestock={updateLivestock} onDeleteLivestock={deleteLivestock}
                 onAddMedicalRecord={addMedicalRecord} onAddBreedingRecord={addBreedingRecord} onAddWeightRecord={addWeightRecord} onAddMilkRecord={addMilkRecord}
                 onUpdateBreedingRecord={updateBreedingRecord}
-                inventory={state.feed} onAddSale={handleCreateSale}
+                onDeleteBreedingRecord={deleteBreedingRecord}
+                onBulkVaccinate={bulkVaccinate} onBulkMove={bulkMove}
+                pagination={livestockPageResult ? { totalElements: livestockPageResult.totalElements, totalPages: livestockPageResult.totalPages, page: livestockPageRequest.number, size: livestockPageRequest.size, sortBy: livestockPageRequest.sortBy, sortDirection: livestockPageRequest.sortDirection, searchQ: livestockPageRequest.q, category: livestockPageRequest.category } : undefined}
+                onPageChange={(page) => setLivestockPageRequest(prev => ({ ...prev, number: page }))}
+                onSortChange={(sortBy, sortDirection) => setLivestockPageRequest(prev => ({ ...prev, sortBy, sortDirection, number: 0 }))}
+                onSearchChange={(q) => setLivestockPageRequest(prev => ({ ...prev, q, number: 0 }))}
+                onCategoryChange={(category) => setLivestockPageRequest(prev => ({ ...prev, category, number: 0 }))}
+                inventory={state.feed} onAddSale={handleCreateSale} state={state}
               />
             )}
             {activeView === 'GOAT_MANAGER' && (
               <LivestockManager
                 key="goat-manager"
-                livestock={state.currentFarmId ? state.livestock.filter(l => l.farmId === state.currentFarmId) : (state.currentLocationId ? state.livestock.filter(l => state.farms.find(f => f.id === l.farmId)?.locationId === state.currentLocationId) : [])}
+                livestock={livestockPageResult ? livestockPageResult.content : (state.currentFarmId ? state.livestock.filter(l => l.farmId === state.currentFarmId && l.species === 'GOAT') : (state.currentLocationId ? state.livestock.filter(l => l.species === 'GOAT' && state.farms.find(f => f.id === l.farmId)?.locationId === state.currentLocationId) : state.livestock.filter(l => l.species === 'GOAT')))}
+                allLivestock={state.livestock}
                 breeders={state.breeders} species="GOAT" categories={FIXED_CATEGORIES}
                 entities={state.entities}
                 onAddLivestock={addLivestock} onUpdateLivestock={updateLivestock} onDeleteLivestock={deleteLivestock}
                 onAddMedicalRecord={addMedicalRecord} onAddBreedingRecord={addBreedingRecord} onAddWeightRecord={addWeightRecord} onAddMilkRecord={addMilkRecord}
                 onUpdateBreedingRecord={updateBreedingRecord}
-                inventory={state.feed} onAddSale={handleCreateSale}
+                onDeleteBreedingRecord={deleteBreedingRecord}
+                onBulkVaccinate={bulkVaccinate} onBulkMove={bulkMove}
+                pagination={livestockPageResult ? { totalElements: livestockPageResult.totalElements, totalPages: livestockPageResult.totalPages, page: livestockPageRequest.number, size: livestockPageRequest.size, sortBy: livestockPageRequest.sortBy, sortDirection: livestockPageRequest.sortDirection, searchQ: livestockPageRequest.q, category: livestockPageRequest.category } : undefined}
+                onPageChange={(page) => setLivestockPageRequest(prev => ({ ...prev, number: page }))}
+                onSortChange={(sortBy, sortDirection) => setLivestockPageRequest(prev => ({ ...prev, sortBy, sortDirection, number: 0 }))}
+                onSearchChange={(q) => setLivestockPageRequest(prev => ({ ...prev, q, number: 0 }))}
+                onCategoryChange={(category) => setLivestockPageRequest(prev => ({ ...prev, category, number: 0 }))}
+                inventory={state.feed} onAddSale={handleCreateSale} state={state}
               />
             )}
             {activeView === 'PALAI' && (
@@ -1230,10 +1186,12 @@ const App: React.FC = () => {
                 currentFarmId={state.currentFarmId}
                 currentLocationId={state.currentLocationId}
                 onAddExpense={handleCreateExpense}
+                onUpdateExpense={handleUpdateExpense}
                 onAddSale={handleCreateSale}
                 onDeleteExpense={handleDeleteExpense}
                 onDeleteSale={handleDeleteSale}
                 onDeleteLivestock={async (id) => { await backendService.deleteLivestock(id); setState(p => ({ ...p, livestock: p.livestock.filter(l => l.id !== id) })); }}
+                refreshKey={financialsRefresh}
               />
             )}
             {activeView === 'OPERATIONS' && (
@@ -1271,11 +1229,18 @@ const App: React.FC = () => {
                   if (!state.currentFarmId) { alert("Select farm"); return; }
                   const planWithFarm = { ...d, farmId: state.currentFarmId }; // Ensure farmId is set
                   const saved = await backendService.createDietPlan(planWithFarm);
-                  setState(p => ({ ...p, dietPlans: [...p.dietPlans, saved] }));
+                  const normalized = { ...saved, targetIds: Array.isArray(saved.targetIds) ? saved.targetIds : (Array.isArray((saved as any).assignedAnimalIds) ? (saved as any).assignedAnimalIds : []) };
+                  setState(p => ({ ...p, dietPlans: [...p.dietPlans, normalized] }));
                 }}
-                onUpdateDietPlan={async (d) => { const updated = await backendService.updateDietPlan(d.id, d); setState(p => ({ ...p, dietPlans: p.dietPlans.map(i => i.id === d.id ? updated : i) })); }}
+                onUpdateDietPlan={async (d) => {
+                  const updated = await backendService.updateDietPlan(d.id, d);
+                  const normalized = { ...updated, targetIds: Array.isArray(updated.targetIds) ? updated.targetIds : (Array.isArray((updated as any).assignedAnimalIds) ? (updated as any).assignedAnimalIds : []) };
+                  setState(p => ({ ...p, dietPlans: p.dietPlans.map(i => i.id === d.id ? normalized : i) }));
+                }}
                 onDeleteDietPlan={async (id) => { try { await backendService.deleteDietPlan(id); setState(p => ({ ...p, dietPlans: p.dietPlans.filter(i => i.id !== id) })); } catch (e) { alert('Failed to delete diet plan.'); } }}
                 onRunDailyProcessing={processDailyConsumption}
+                onProcessDietPlans={processDietPlans}
+                onRefreshDietData={refreshDietData}
                 onAddTreatmentProtocol={async (p) => {
                   if (!state.currentFarmId) { alert("Select farm"); return; }
                   const protoWithFarm = { ...p, farmId: state.currentFarmId };
@@ -1285,6 +1250,23 @@ const App: React.FC = () => {
                 onUpdateTreatmentProtocol={async (p) => { const updated = await backendService.updateTreatmentProtocol(p.id, p); setState(s => ({ ...s, treatmentProtocols: s.treatmentProtocols.map(x => x.id === p.id ? updated : x) })); }}
                 onDeleteTreatmentProtocol={async (id) => { await backendService.deleteTreatmentProtocol(id); setState(s => ({ ...s, treatmentProtocols: s.treatmentProtocols.filter(x => x.id !== id) })); }}
                 onLogTreatment={handleLogTreatment}
+                onApplyProtocol={async (protocolId, targetAnimalIds, performedBy) => {
+                  const result = await backendService.applyProtocol({ protocolId, targetAnimalIds, performedBy });
+                  if (!result.success) throw new Error(result.message);
+                  const [feed, treatmentLogs, expenses, livestock] = await Promise.all([
+                    backendService.getFeed(),
+                    backendService.getTreatmentLogs(),
+                    backendService.getExpenses(),
+                    backendService.getLivestock()
+                  ]);
+                  setState(prev => ({
+                    ...prev,
+                    feed: Array.isArray(feed) ? feed : prev.feed,
+                    treatmentLogs: Array.isArray(treatmentLogs) ? treatmentLogs : prev.treatmentLogs,
+                    expenses: Array.isArray(expenses) ? expenses : prev.expenses,
+                    livestock: toLivestockArray(livestock)
+                  }));
+                }}
                 onClearFeedLedger={handleClearFeedLedger}
               />
             )}
@@ -1316,7 +1298,7 @@ const App: React.FC = () => {
                 onDeleteFeed={async (id) => { try { await backendService.deleteFeed(id); setState(p => ({ ...p, feed: p.feed.filter(f => f.id !== id) })); } catch (e) { alert('Failed to delete feed item'); } }}
               />
             )}
-            {activeView === 'REPORTS' && <Reports state={{
+            {activeView === 'REPORTS' && <Reports currentFarmId={state.currentFarmId} state={{
               ...state,
               livestock: state.currentFarmId ? state.livestock.filter(l => l.farmId === state.currentFarmId) : (state.currentLocationId ? state.livestock.filter(l => state.farms.find(f => f.id === l.farmId)?.locationId === state.currentLocationId) : []),
               expenses: state.currentFarmId ? state.expenses.filter(e => e.farmId === state.currentFarmId) : (state.currentLocationId ? state.expenses.filter(e => state.farms.find(f => f.id === e.farmId)?.locationId === state.currentLocationId) : []),
@@ -1335,7 +1317,19 @@ const App: React.FC = () => {
               />
             )}
             {activeView === 'AI' && <GeminiAdvisor state={state} />}
-            {activeView === 'SETTINGS' && <SettingsModule />}
+            {activeView === 'SETTINGS' && (
+              <SettingsModule
+                locations={state.locations}
+                farms={state.farms}
+                currentLocationId={state.currentLocationId}
+                currentFarmId={state.currentFarmId}
+                onSetLocation={(id) => setState(prev => ({ ...prev, currentLocationId: id, currentFarmId: null }))}
+                onSetFarm={(id) => setState(prev => ({ ...prev, currentFarmId: id }))}
+                onSyncLocations={handleSyncLocations}
+                onAddCity={() => setShowAddCityModal(true)}
+                onAddFarm={() => setShowAddFarmModal(true)}
+              />
+            )}
           </div>
         </main>
       </div>
