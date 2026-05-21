@@ -5,6 +5,9 @@ import { Provider } from 'react-redux';
 import { PersistGate } from 'redux-persist/integration/react';
 import { store, persistor } from './store';
 import App from './App';
+import { ToastProvider } from './components/Toast';
+import { ConfirmProvider } from './components/ConfirmDialog';
+import { GlobalLoader } from './components/GlobalLoader';
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
@@ -16,7 +19,12 @@ root.render(
   <React.StrictMode>
     <Provider store={store}>
       <PersistGate loading={null} persistor={persistor}>
-        <App />
+        <ToastProvider>
+          <ConfirmProvider>
+            <GlobalLoader />
+            <App />
+          </ConfirmProvider>
+        </ToastProvider>
       </PersistGate>
     </Provider>
   </React.StrictMode>

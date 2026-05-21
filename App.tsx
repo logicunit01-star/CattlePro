@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { Dashboard } from './components/Dashboard';
 import { LivestockManager } from './components/LivestockManager';
@@ -17,6 +17,9 @@ import { AppState, Livestock, LivestockStatus, MedicalRecord, Expense, ExpenseCa
 import { Truck, Home, LogOut, FileText, BadgeDollarSign, Activity, Stethoscope, Grab, BrainCircuit, Droplets, LineChart, Settings, Menu, X, ArrowLeft, ArrowRight, Bell, Search, PlusCircle, Filter, ChevronDown, User, DollarSign, LayoutDashboard, Beef, ClipboardList, Tractor, Users, MapPin, Building2 } from 'lucide-react';
 
 import { backendService } from './services/backendService';
+import { trackedFetch, subscribeApiErrors } from './services/apiTracker';
+import { useToast } from './components/Toast';
+import { useConfirm } from './components/ConfirmDialog';
 import { setTenant as setTenantContext, getTenantFromUrl, getPersistedSales, setPersistedSales, getPersistedLivestockStatus, setPersistedLivestockStatus } from './services/tenantContext';
 
 function toLivestockArray(r: Livestock[] | { content?: Livestock[] }): Livestock[] {
@@ -96,6 +99,8 @@ function AddFarmModal({
 const App: React.FC = () => {
   const dispatch = useDispatch();
   const reduxTenant = useSelector((s: RootState) => s.tenant);
+  const toast = useToast();
+  const { confirm: confirmDialog } = useConfirm();
 
   // Authentication state
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
@@ -129,10 +134,101 @@ const App: React.FC = () => {
   const [activeView, setActiveView] = useState<'DASHBOARD' | 'CATTLE_MANAGER' | 'GOAT_MANAGER' | 'PALAI' | 'SALES' | 'FINANCE' | 'OPERATIONS' | 'PROCUREMENT' | 'REPORTS' | 'AI' | 'ENTITIES'>('DASHBOARD');
   const [operationsTab, setOperationsTab] = useState<'FEED' | 'MEDICINE' | 'SUPPLIES' | 'INFRA' | 'DIET'>('FEED');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [isLivestockMenuOpen, setIsLivestockMenuOpen] = useState(true);
-  const [isOperationsMenuOpen, setIsOperationsMenuOpen] = useState(true);
+  const [isLivestockMenuOpen, setIsLivestockMenuOpen] = useState(false);
+  const [isOperationsMenuOpen, setIsOperationsMenuOpen] = useState(false);
   const [showAddCityModal, setShowAddCityModal] = useState(false);
   const [showAddFarmModal, setShowAddFarmModal] = useState(false);
+
+  /* Main scroll container ref + at-bottom detection.
+   * The .at-bottom CSS class hides the bottom fade gradient when the user has reached the end
+   * of the page, so there's no fake "more below" hint when there's actually nothing left.
+   * The fade also makes it obvious that content is scrollable on tall pages. */
+  const mainScrollRef = React.useRef<HTMLElement | null>(null);
+  React.useEffect(() => {
+    const el = mainScrollRef.current;
+    if (!el) return;
+    const update = () => {
+      const reachedBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= 4;
+      el.classList.toggle('at-bottom', reachedBottom || el.scrollHeight <= el.clientHeight);
+    };
+    update();
+    el.addEventListener('scroll', update, { passive: true });
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    // Also re-evaluate when the inner content swaps view (route change in this app).
+    const mo = new MutationObserver(update);
+    mo.observe(el, { childList: true, subtree: true });
+    return () => {
+      el.removeEventListener('scroll', update);
+      ro.disconnect();
+      mo.disconnect();
+    };
+  }, []);
+
+  const sidebarNavRef = React.useRef<HTMLElement | null>(null);
+  React.useEffect(() => {
+    const el = sidebarNavRef.current;
+    const shell = el?.parentElement;
+    if (!el || !shell) return;
+    const update = () => {
+      const overflow = el.scrollHeight > el.clientHeight + 2;
+      const atTop = el.scrollTop <= 4;
+      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= 4;
+      shell.classList.toggle('can-scroll-up', overflow && !atTop);
+      shell.classList.toggle('can-scroll-down', overflow && !atBottom);
+      el.classList.toggle('at-bottom', atBottom || !overflow);
+    };
+    update();
+    el.addEventListener('scroll', update, { passive: true });
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    const mo = new MutationObserver(update);
+    mo.observe(el, { childList: true, subtree: true });
+    return () => {
+      el.removeEventListener('scroll', update);
+      ro.disconnect();
+      mo.disconnect();
+    };
+  }, [isLivestockMenuOpen, isOperationsMenuOpen, isSidebarOpen, activeView]);
+
+  const closeSidebar = () => setIsSidebarOpen(false);
+
+  const isMobileSidebar = () =>
+    typeof window !== 'undefined' && window.matchMedia('(max-width: 1023px)').matches;
+
+  const toggleLivestockMenu = () => {
+    setIsLivestockMenuOpen((open) => {
+      const next = !open;
+      if (next) setIsOperationsMenuOpen(false);
+      return next;
+    });
+  };
+
+  const toggleOperationsMenu = () => {
+    setIsOperationsMenuOpen((open) => {
+      const next = !open;
+      if (next) setIsLivestockMenuOpen(false);
+      return next;
+    });
+  };
+
+  // Expand only the section that matches the current route (avoids both menus open on small screens).
+  React.useEffect(() => {
+    setIsLivestockMenuOpen(activeView === 'CATTLE_MANAGER' || activeView === 'GOAT_MANAGER');
+    setIsOperationsMenuOpen(activeView === 'OPERATIONS');
+  }, [activeView]);
+
+  // Mobile drawer: lock page scroll and sync accordion when opened.
+  React.useEffect(() => {
+    if (!isSidebarOpen || !isMobileSidebar()) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    setIsLivestockMenuOpen(activeView === 'CATTLE_MANAGER' || activeView === 'GOAT_MANAGER');
+    setIsOperationsMenuOpen(activeView === 'OPERATIONS');
+    return () => {
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [isSidebarOpen, activeView]);
 
   /* -- Backend Integration -- */
   const [isLoading, setIsLoading] = useState(true);
@@ -143,6 +239,9 @@ const App: React.FC = () => {
   const [livestockPageResult, setLivestockPageResult] = useState<{ content: Livestock[]; totalElements: number; totalPages: number } | null>(null);
   const [livestockGridRefresh, setLivestockGridRefresh] = useState(0);
   const [financialsRefresh, setFinancialsRefresh] = useState(0);
+  // Call this after any expense or sale mutation to force the Financials module to re-fetch its
+  // server-side aggregations (vendor payables summary, KPIs, expense analytics, ledger).
+  const bumpFinancials = useCallback(() => setFinancialsRefresh(k => k + 1), []);
 
   // Tenant: on first load read URL and persist companyName & instanceId to localStorage + Redux
   useEffect(() => {
@@ -175,8 +274,35 @@ const App: React.FC = () => {
         const page = Array.isArray(data) ? { content: data, totalElements: data.length, totalPages: 1 } : data;
         setLivestockPageResult({ content: page.content, totalElements: page.totalElements, totalPages: page.totalPages });
       })
-      .catch(() => setLivestockPageResult(null));
+      .catch((err) => {
+        setLivestockPageResult(null);
+        // Network/server toast is already raised by trackedFetch. Only surface a contextual
+        // toast for non-network errors so the user knows the list didn't refresh.
+        const msg = err?.message || '';
+        if (msg && !/network|fetch/i.test(msg)) {
+          toast.error(`Couldn't load livestock: ${msg}`);
+        }
+      });
   }, [activeView, state.currentFarmId, livestockPageRequest.number, livestockPageRequest.size, livestockPageRequest.sortBy, livestockPageRequest.sortDirection, livestockPageRequest.q, livestockPageRequest.category, livestockPageRequest.status, livestockGridRefresh]);
+
+  // Subscribe to the centralized API error bus so network outages and 5xx responses surface
+  // a single, throttled toast — even when individual call sites swallow their own .catch().
+  useEffect(() => {
+    let lastShownAt = 0;
+    let lastKey = '';
+    const unsub = subscribeApiErrors((err) => {
+      // De-dupe a burst of identical errors (common during offline reconnect attempts) so the
+      // user sees one toast, not a wall of them.
+      const key = `${err.kind}:${err.status || ''}:${err.message}`;
+      const now = Date.now();
+      if (key === lastKey && now - lastShownAt < 3000) return;
+      lastKey = key;
+      lastShownAt = now;
+      if (err.kind === 'network') toast.error(err.message);
+      else toast.warning(err.message);
+    });
+    return unsub;
+  }, [toast]);
 
   // Check authentication on mount
   useEffect(() => {
@@ -306,10 +432,10 @@ const App: React.FC = () => {
         backendService.getFarms().catch(() => [])
       ]);
       setState(prev => ({ ...prev, locations: locs, farms: fms }));
-      alert("Locations and Farms synchronized successfully.");
+      toast.success('Locations and farms synchronized.');
     } catch (e: any) {
-      console.error("Sync failed:", e);
-      alert("Sync failed: " + e.message);
+      console.error('Sync failed:', e);
+      toast.error(`Sync failed: ${e.message}`);
     }
   };
 
@@ -323,7 +449,7 @@ const App: React.FC = () => {
       setState(prev => ({ ...prev, locations: [...prev.locations, loc] }));
       setShowAddCityModal(false);
     } catch (e: any) {
-      alert(e?.message || 'Failed to create city.');
+      toast.error(e?.message || 'Failed to create city.');
     }
   };
 
@@ -340,7 +466,7 @@ const App: React.FC = () => {
       setState(prev => ({ ...prev, farms: [...prev.farms, farm], currentFarmId: prev.currentFarmId || farm.id }));
       setShowAddFarmModal(false);
     } catch (e: any) {
-      alert(e?.message || 'Failed to create farm.');
+      toast.error(e?.message || 'Failed to create farm.');
     }
   };
 
@@ -379,22 +505,22 @@ const App: React.FC = () => {
     try {
       const result = await processDietPlans({}, true);
       if (result.plansProcessed === 0 && result.ledgersCreated === 0) {
-        alert(result.message || "No eligible plans to process (none active or already processed today).");
+        toast.info(result.message || 'No eligible plans to process (none active or already processed today).');
         return;
       }
-      alert(result.message + (result.totalCost > 0 ? ` Total cost: PKR ${result.totalCost.toLocaleString()}` : ''));
+      toast.success(result.message + (result.totalCost > 0 ? ` Total cost: PKR ${result.totalCost.toLocaleString()}` : ''));
     } catch (e: any) {
       console.error('Process daily consumption error:', e);
       const msg = e?.message || e?.response?.data?.message || String(e);
-      alert(`Failed to process daily consumption: ${msg}`);
+      toast.error(`Failed to process daily consumption: ${msg}`);
     }
   };
 
   const handleReverseLedger = async (ledgerId: string) => {
     try {
       const ledger = state.processedFeedLedgers?.find(l => l.id === ledgerId);
-      if (!ledger) return alert("Ledger not found.");
-      if (ledger.status === 'REVERSED') return alert("Already reversed.");
+      if (!ledger) { toast.error('Ledger not found.'); return; }
+      if (ledger.status === 'REVERSED') { toast.info('Already reversed.'); return; }
       await backendService.reverseFeedLedger(ledgerId);
       const getLedgers = backendService.getFeedLedgers ? backendService.getFeedLedgers() : Promise.resolve([]);
       const [expenses, feed, processedFeedLedgers, livestock] = await Promise.all([
@@ -410,23 +536,23 @@ const App: React.FC = () => {
         processedFeedLedgers: Array.isArray(processedFeedLedgers) ? processedFeedLedgers : (prev.processedFeedLedgers || []).map(l => l.id === ledgerId ? { ...l, status: 'REVERSED' } : l),
         livestock: toLivestockArray(livestock),
       }));
-      alert(`Transaction reversed. Feed inventory, animal costs, and linked expense have been restored/removed by the server.`);
+      toast.success('Transaction reversed. Feed inventory, animal costs, and linked expense have been restored/removed.');
     } catch (e: any) {
-      alert(`Reversal failed: ${e?.message ?? e}`);
+      toast.error(`Reversal failed: ${e?.message ?? e}`);
     }
   };
 
   const handleClearFeedLedger = async () => {
     try {
       const apiUrl = (import.meta as any).env?.VITE_API_URL || 'https://api.hulmsolutions.com/livestock';
-      await fetch(`${apiUrl}/operations/consumption-logs/clear`, { method: 'DELETE' }).catch(() => { });
+      await trackedFetch(`${apiUrl}/operations/consumption-logs/clear`, { method: 'DELETE' }).catch(() => { });
 
       setState(prev => ({ ...prev, consumptionLogs: [], processedFeedLedgers: [] }));
       localStorage.removeItem('cattleops_consumption_logs');
       localStorage.removeItem('cattleops_processed_feed_ledgers');
-      alert("Ledger history completely purged.");
+      toast.success('Ledger history completely purged.');
     } catch (e: any) {
-      alert(`Clear failed: ${e.message}`);
+      toast.error(`Clear failed: ${e.message}`);
     }
   };
 
@@ -484,13 +610,13 @@ const App: React.FC = () => {
       }));
     } catch (e) {
       console.error(e);
-      alert("Failed to log treatments.");
+      toast.error('Failed to log treatments.');
     }
   };
 
   const addLivestock = async (newAnimal: Livestock) => {
     try {
-      if (!state.currentFarmId) { alert("Please select a farm first."); return; }
+      if (!state.currentFarmId) { toast.warning('Select a farm first.'); return; }
       const animalWithFarm = { ...newAnimal, farmId: state.currentFarmId };
       const saved = await backendService.createLivestock(animalWithFarm);
 
@@ -518,7 +644,7 @@ const App: React.FC = () => {
         expenses: [...prev.expenses, ...newExpenses]
       }));
       setLivestockGridRefresh(r => r + 1);
-    } catch (e) { alert("Failed to save livestock"); }
+    } catch (e) { toast.error('Failed to save livestock.'); }
   };
 
   const updateLivestock = async (updatedAnimal: Livestock) => {
@@ -602,7 +728,7 @@ const App: React.FC = () => {
 
       if (record.cost > 0) {
         const targetFarmId = state.currentFarmId || animal.farmId;
-        if (!targetFarmId) { alert("Warning: Expense recorded but no Farm ID could be associated."); }
+        if (!targetFarmId) { toast.warning('Expense recorded but no farm ID could be associated.'); }
         const expense: Expense = {
           id: `med_${Date.now()}`,
           farmId: targetFarmId || 'UNKNOWN_FARM',
@@ -629,7 +755,7 @@ const App: React.FC = () => {
         expenses,
         ...(feedAfter !== state.feed ? { feed: feedAfter } : {})
       }));
-    } catch (e) { alert("Failed to add medical record: " + (e instanceof Error ? e.message : String(e))); }
+    } catch (e) { toast.error('Failed to add medical record: ' + (e instanceof Error ? e.message : String(e))); }
   };
 
   const bulkVaccinate = async (animalIds: string[], record: MedicalRecord) => {
@@ -643,7 +769,7 @@ const App: React.FC = () => {
       }
       if (record.cost > 0) {
         const targetFarmId = state.currentFarmId;
-        if (!targetFarmId) { alert("Warning: Bulk expense recorded but no Farm ID could be associated."); }
+        if (!targetFarmId) { toast.warning('Bulk expense recorded but no farm ID could be associated.'); }
         const expense: Expense = {
           id: `bulk_med_${Date.now()}`,
           farmId: targetFarmId || 'UNKNOWN_FARM',
@@ -662,7 +788,7 @@ const App: React.FC = () => {
       setState(prev => ({ ...prev, ...next }));
       setLivestockGridRefresh(r => r + 1);
       setFinancialsRefresh(fr => fr + 1);
-    } catch (e) { alert("Failed to bulk vaccinate: " + (e instanceof Error ? e.message : String(e))); }
+    } catch (e) { toast.error('Failed to bulk vaccinate: ' + (e instanceof Error ? e.message : String(e))); }
   };
 
   const bulkMove = async (animalIds: string[], location: string) => {
@@ -671,7 +797,7 @@ const App: React.FC = () => {
       const updatedLivestock = toLivestockArray(await backendService.getLivestock());
       setState(prev => ({ ...prev, livestock: updatedLivestock }));
       setLivestockGridRefresh(r => r + 1);
-    } catch (e) { alert("Failed to bulk move: " + (e instanceof Error ? e.message : String(e))); }
+    } catch (e) { toast.error('Failed to bulk move: ' + (e instanceof Error ? e.message : String(e))); }
   };
 
   const addBreedingRecord = async (animalId: string, record: InseminationRecord) => {
@@ -698,7 +824,7 @@ const App: React.FC = () => {
       } else {
         setState(prev => ({ ...prev, livestock: updatedLivestock }));
       }
-    } catch (e) { alert("Failed to add breeding record"); }
+    } catch (e) { toast.error('Failed to add breeding record.'); }
   };
 
   const updateBreedingRecord = async (animalId: string, updatedRec: InseminationRecord) => {
@@ -708,18 +834,25 @@ const App: React.FC = () => {
       setState(prev => ({ ...prev, livestock: updatedLivestock }));
     } catch (e) {
       console.error(e);
-      alert('Failed to update breeding record. Please try again.');
+      toast.error('Failed to update breeding record. Please try again.');
     }
   };
 
   const deleteBreedingRecord = async (animalId: string, recordId: string) => {
     try {
-      if (!window.confirm("Are you sure you want to delete this breeding record?")) return;
+      const ok = await confirmDialog({
+        title: 'Delete breeding record',
+        message: 'Delete this breeding record? This cannot be undone.',
+        confirmLabel: 'Delete',
+        danger: true,
+      });
+      if (!ok) return;
       await backendService.deleteBreedingRecord(animalId, recordId);
       const updatedLivestock = toLivestockArray(await backendService.getLivestock());
       setState(prev => ({ ...prev, livestock: updatedLivestock }));
+      toast.success('Breeding record deleted.');
     } catch (e: any) {
-      alert("Failed to delete breeding record: " + (e?.message || e));
+      toast.error('Failed to delete breeding record: ' + (e?.message || e));
     }
   };
 
@@ -728,7 +861,7 @@ const App: React.FC = () => {
       await backendService.addWeightRecord(animalId, record);
       const updatedLivestock = toLivestockArray(await backendService.getLivestock());
       setState(prev => ({ ...prev, livestock: updatedLivestock }));
-    } catch (e) { alert("Failed to add weight record"); }
+    } catch (e) { toast.error('Failed to add weight record.'); }
   };
 
   const addMilkRecord = async (animalId: string, record: MilkRecord) => {
@@ -736,7 +869,7 @@ const App: React.FC = () => {
       await backendService.addMilkRecord(animalId, record);
       const updatedLivestock = toLivestockArray(await backendService.getLivestock());
       setState(prev => ({ ...prev, livestock: updatedLivestock }));
-    } catch (e) { alert("Failed to add milk record"); }
+    } catch (e) { toast.error('Failed to add milk record.'); }
   };
 
   const deleteLivestock = async (id: string, force = false) => {
@@ -748,25 +881,38 @@ const App: React.FC = () => {
       setState(prev => ({ ...prev, livestock: updatedLivestock }));
       setLivestockGridRefresh(r => r + 1);
     } catch (e: any) {
-      alert(e?.message || "Failed to delete animal.");
+      toast.error(e?.message || 'Failed to delete animal.');
     }
   };
 
   const handleCreateExpense = async (exp: Expense) => {
-    if (!state.currentFarmId) { alert("Please select a farm to record expenses."); throw new Error("No farm selected"); }
+    if (!state.currentFarmId) { toast.warning('Select a farm to record expenses.'); throw new Error('No farm selected'); }
     const expenseWithContext = { ...exp, farmId: state.currentFarmId, farmName: state.farms.find(f => f.id === state.currentFarmId)?.name };
+    // Step 1: persist the expense. Any failure here is a real save failure — surface and rethrow.
+    let saved: Expense;
     try {
-      await backendService.createExpense(expenseWithContext);
-      // Re-fetch affected modules to ensure UI is in sync with Backend Ledger Logic
+      saved = await backendService.createExpense(expenseWithContext);
+    } catch (e: any) {
+      toast.error(`Failed to save expense: ${e?.message || 'unknown error'}`);
+      throw e;
+    }
+    // Step 2: optimistic local insert so callers (Operations "log as expense", etc.) see the new
+    // row even if the followup refetch fails (network blip, timeout). Without this, a refetch
+    // failure used to falsely report "Failed to save expense" while the record was actually in
+    // the DB — which made auto-logged asset/feed expenses appear to be missing.
+    setState(prev => ({ ...prev, expenses: [...prev.expenses, saved] }));
+    bumpFinancials();
+    // Step 3: best-effort sync of entities/ledger (PaymentTransaction / LedgerRecord may have
+    // been created server-side). Failure here is logged but never reported as a save failure.
+    try {
       const [expenses, entities, ledger] = await Promise.all([
         backendService.getExpenses(),
         backendService.getEntities(),
-        backendService.getLedger()
+        backendService.getLedger(),
       ]);
       setState(prev => ({ ...prev, expenses, entities, ledger }));
-    } catch (e) {
-      alert("Failed to save expense");
-      throw e;
+    } catch (refetchErr) {
+      console.warn('Expense saved; downstream refetch failed:', refetchErr);
     }
   };
 
@@ -774,9 +920,13 @@ const App: React.FC = () => {
     try {
       const updated = await backendService.updateExpense(exp.id, exp);
       setState(p => ({ ...p, expenses: p.expenses.map(e => e.id === updated.id ? updated : e) }));
+      // Bump the financials refresh key so server-side aggregations (vendor payables, KPIs, ledger,
+      // expense analytics) re-fetch and reflect the new payment status / amount. Without this, the
+      // local expense object changes but the Vendor Payables row totals stay stale.
+      bumpFinancials();
     } catch (e) {
       console.error(e);
-      alert('Failed to update expense.');
+      toast.error('Failed to update expense.');
       throw e;
     }
   };
@@ -794,7 +944,7 @@ const App: React.FC = () => {
       if (animal) targetFarmId = animal.farmId;
     }
 
-    if (!targetFarmId) { alert("Please select a farm to record sales."); return; }
+    if (!targetFarmId) { toast.warning('Select a farm to record sales.'); return; }
 
     const saleWithContext: Sale = {
       ...sale,
@@ -830,6 +980,7 @@ const App: React.FC = () => {
         ledger
       }));
       setPersistedSales(salesToSet);
+      bumpFinancials();
     } catch (e) {
       // Sale already in state and persisted; keep it visible after refresh.
       console.warn("Sale saved locally; backend sync failed:", e);
@@ -840,17 +991,34 @@ const App: React.FC = () => {
     const saleToDelete = state.sales.find(s => s.id === id);
     if (!saleToDelete) return;
     try {
-      if (!window.confirm("Are you sure you want to delete this sale? This will revert the animals to ACTIVE status.")) return;
+      const ok = await confirmDialog({
+        title: 'Delete sale',
+        message: 'Delete this sale? Animals will be reverted to ACTIVE status.',
+        confirmLabel: 'Delete',
+        danger: true,
+      });
+      if (!ok) return;
       await backendService.deleteSale(id);
 
-      // Cascading rollback for animals
+      // Cascading rollback for animals — only revert those still in SOLD state.
+      // Animals that have since been marked DECEASED (or any other status) must NOT be reset to ACTIVE,
+      // which would silently wipe their deathDate and contradict the actual lifecycle.
+      let revertedCount = 0;
+      let skippedCount = 0;
       if (saleToDelete.soldAnimalIds) {
         for (const animalId of saleToDelete.soldAnimalIds) {
           const animalToRevert = state.livestock.find(l => l.id === animalId);
-          if (animalToRevert) {
-            await updateLivestock({ ...animalToRevert, status: 'ACTIVE' as any });
+          if (!animalToRevert) continue;
+          if (animalToRevert.status !== 'SOLD') {
+            skippedCount += 1;
+            continue;
           }
+          await updateLivestock({ ...animalToRevert, status: 'ACTIVE' as any });
+          revertedCount += 1;
         }
+      }
+      if (skippedCount > 0) {
+        toast.info(`${revertedCount} animal(s) reverted to ACTIVE; ${skippedCount} skipped (status changed since the sale).`);
       }
 
       setState(p => {
@@ -858,9 +1026,11 @@ const App: React.FC = () => {
         setPersistedSales(nextSales);
         return { ...p, sales: nextSales };
       });
+      bumpFinancials();
+      toast.success('Sale deleted.');
     } catch (e) {
       console.error(e);
-      alert("Failed to delete sale completely. Check backend logs.");
+      toast.error('Failed to delete sale completely. Check backend logs.');
     }
   };
 
@@ -868,7 +1038,13 @@ const App: React.FC = () => {
     const expenseToDelete = state.expenses.find(e => e.id === id);
     if (!expenseToDelete) return;
     try {
-      if (!window.confirm("Are you sure you want to delete this expense? This will revert inventory quantities if applicable.")) return;
+      const ok = await confirmDialog({
+        title: 'Delete expense',
+        message: 'Delete this expense? Inventory quantities will be reverted if applicable.',
+        confirmLabel: 'Delete',
+        danger: true,
+      });
+      if (!ok) return;
       await backendService.deleteExpense(id);
 
       let updatedFeed = state.feed;
@@ -885,9 +1061,11 @@ const App: React.FC = () => {
       }
 
       setState(p => ({ ...p, expenses: p.expenses.filter(e => e.id !== id), feed: updatedFeed }));
+      bumpFinancials();
+      toast.success('Expense deleted.');
     } catch (e) {
       console.error(e);
-      alert("Failed to delete expense");
+      toast.error('Failed to delete expense.');
     }
   };
 
@@ -900,7 +1078,7 @@ const App: React.FC = () => {
         backendService.getLedger()
       ]);
       setState(prev => ({ ...prev, entities, ledger }));
-    } catch (e) { alert("Failed to record payment"); }
+    } catch (e) { toast.error('Failed to record payment.'); }
   };
 
   const addEntity = async (entity: Entity) => {
@@ -909,7 +1087,7 @@ const App: React.FC = () => {
       const saved = await backendService.createEntity(entityWithFarm);
       setState(prev => ({ ...prev, entities: [...prev.entities, saved] }));
     } catch (e: any) {
-      alert(e?.message || 'Failed to add entity.');
+      toast.error(e?.message || 'Failed to add entity.');
     }
   };
 
@@ -918,7 +1096,7 @@ const App: React.FC = () => {
       const updated = await backendService.updateEntity(entity.id, entity);
       setState(prev => ({ ...prev, entities: prev.entities.map(e => e.id === entity.id ? updated : e) }));
     } catch (e: any) {
-      alert(e?.message || 'Failed to update entity.');
+      toast.error(e?.message || 'Failed to update entity.');
     }
   };
 
@@ -927,19 +1105,19 @@ const App: React.FC = () => {
       await backendService.deleteEntity(id);
       setState(prev => ({ ...prev, entities: prev.entities.filter(e => e.id !== id) }));
     } catch (e: any) {
-      alert(e?.message || 'Failed to delete entity.');
+      toast.error(e?.message || 'Failed to delete entity.');
     }
   };
 
 
   const NavLabel = ({ children }: { children: React.ReactNode }) => (
-    <div className="px-4 py-2 mt-2 mb-1 text-[10px] font-extrabold text-slate-400/80 uppercase tracking-widest font-heading">{children}</div>
+    <div className="px-4 pt-1 pb-0.5 text-[10px] font-extrabold text-slate-400/80 uppercase tracking-widest font-heading">{children}</div>
   );
 
   const NavItem = ({ view, icon: Icon, label, onClick }: { view?: typeof activeView, icon: any, label: string, onClick?: () => void }) => (
-    <button onClick={() => { if (onClick) onClick(); else if (view) { setActiveView(view); setIsSidebarOpen(false); } }} className={`w-full flex items-center gap-3 px-4 py-3 mx-1 rounded-xl transition-all duration-200 group ${view && activeView === view ? 'bg-emerald-50 text-emerald-700 shadow-sm' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'}`}>
-      <Icon size={20} className={`${view && activeView === view ? 'fill-emerald-200 text-emerald-600' : 'text-slate-400 group-hover:text-emerald-500'} transition-colors duration-200`} />
-      <span className={`flex-1 text-left text-sm font-semibold ${view && activeView === view ? 'translate-x-1' : 'group-hover:translate-x-1'} transition-transform duration-200`}>{label}</span>
+    <button onClick={() => { if (onClick) onClick(); else if (view) { setActiveView(view); closeSidebar(); } }} className={`w-full max-w-full flex items-center gap-3 px-4 py-2 rounded-xl transition-all duration-200 group ${view && activeView === view ? 'bg-emerald-50 text-emerald-700 shadow-sm' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'}`}>
+      <Icon size={18} className={`${view && activeView === view ? 'fill-emerald-200 text-emerald-600' : 'text-slate-400 group-hover:text-emerald-500'} transition-colors duration-200`} />
+      <span className="flex-1 min-w-0 text-left text-sm font-semibold truncate">{label}</span>
       {view && activeView === view && <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />}
     </button>
   );
@@ -950,91 +1128,111 @@ const App: React.FC = () => {
 
   return (
     <div className="flex min-h-screen bg-slate-50/50">
-      {isSidebarOpen && <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-40 lg:hidden" onClick={() => setIsSidebarOpen(false)} />}
-      <aside className={`fixed lg:static inset-y-0 left-0 z-50 w-64 bg-white/80 backdrop-blur-md border-r border-gray-200 transform transition-transform duration-300 ease-[cubic-bezier(0.25,0.8,0.25,1)] ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'} shadow-2xl lg:shadow-none`}>
-        <div className="h-full flex flex-col">
-          <div className="p-6 flex items-center gap-3 border-b border-gray-100/50">
-            <div className="bg-gradient-to-br from-emerald-500 to-teal-600 text-white p-2.5 rounded-xl shadow-lg shadow-emerald-200"><Tractor size={24} /></div>
-            <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight font-display">CattlePro</h1>
+      {isSidebarOpen && <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-40 lg:hidden" onClick={closeSidebar} />}
+      <aside className={`fixed lg:sticky lg:top-0 inset-y-0 left-0 z-50 w-64 max-w-[min(16rem,88vw)] h-[100dvh] lg:h-screen shrink-0 overflow-x-hidden bg-white border-r border-slate-200 transform transition-transform duration-300 ease-[cubic-bezier(0.25,0.8,0.25,1)] ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'} shadow-2xl lg:shadow-none`}>
+        <div className="h-full min-h-0 flex flex-col overflow-x-hidden">
+          <div className="px-5 py-3 flex items-center gap-3 border-b border-gray-100/50 shrink-0">
+            <div className="bg-gradient-to-br from-emerald-500 to-teal-600 text-white p-2 rounded-lg shadow-md shadow-emerald-200"><Tractor size={20} /></div>
+            <h1 className="text-xl font-extrabold text-slate-800 tracking-tight font-display flex-1 min-w-0">CattlePro</h1>
+            <button type="button" onClick={closeSidebar} className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100 lg:hidden shrink-0" aria-label="Close menu">
+              <X size={20} />
+            </button>
           </div>
-          <nav className="flex-1 p-4 space-y-1 overflow-y-auto no-scrollbar">
+          <div className="sidebar-nav-shell relative flex-1 min-h-0 overflow-x-hidden">
+            <nav
+              ref={sidebarNavRef}
+              className="sidebar-scroll h-full min-h-0 px-3 py-2 space-y-0.5 overflow-x-hidden overflow-y-auto overscroll-contain"
+              aria-label="Sidebar menu"
+            >
             <NavLabel>Overview</NavLabel>
             <NavItem view="DASHBOARD" icon={LayoutDashboard} label="Dashboard" />
 
-            <div className="pt-4">
-              <NavLabel>Livestock Management</NavLabel>
-              <button onClick={() => setIsLivestockMenuOpen(!isLivestockMenuOpen)} className="w-full flex items-center justify-between px-4 py-3 text-slate-600 hover:text-emerald-700 hover:bg-emerald-50/50 rounded-xl transition-all duration-200 group">
+            <div className="pt-2">
+              <NavLabel>Livestock</NavLabel>
+              <button type="button" onClick={toggleLivestockMenu} aria-expanded={isLivestockMenuOpen} className="w-full flex items-center justify-between px-4 py-2 text-slate-600 hover:text-emerald-700 hover:bg-emerald-50/50 rounded-xl transition-all duration-200 group">
                 <div className="flex items-center gap-3">
-                  <Beef size={20} className="group-hover:scale-110 transition-transform duration-200" />
+                  <Beef size={18} className="group-hover:scale-110 transition-transform duration-200" />
                   <span className="font-semibold text-sm">Livestock</span>
                 </div>
                 <ChevronDown size={14} className={`transition-transform duration-300 ${isLivestockMenuOpen ? 'rotate-180' : ''}`} />
               </button>
               {isLivestockMenuOpen && (
-                <div className="mt-1 ml-4 pl-4 border-l-2 border-emerald-100 space-y-1 animate-slide-up">
-                  <button onClick={() => { setActiveView('CATTLE_MANAGER'); setIsSidebarOpen(false); }} className={`w-full text-left px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${activeView === 'CATTLE_MANAGER' ? 'text-emerald-700 bg-emerald-50 translate-x-1' : 'text-slate-500 hover:text-emerald-600 hover:bg-emerald-50/30'}`}>Cattle Herd</button>
-                  <button onClick={() => { setActiveView('GOAT_MANAGER'); setIsSidebarOpen(false); }} className={`w-full text-left px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${activeView === 'GOAT_MANAGER' ? 'text-emerald-700 bg-emerald-50 translate-x-1' : 'text-slate-500 hover:text-emerald-600 hover:bg-emerald-50/30'}`}>Goat Flock</button>
+                <div className="mt-0.5 ml-5 pl-3 border-l-2 border-emerald-100 space-y-0.5 animate-slide-up">
+                  <button onClick={() => { setActiveView('CATTLE_MANAGER'); closeSidebar(); }} className={`w-full text-left px-3 py-1.5 rounded-lg text-[13px] font-medium transition-all duration-200 ${activeView === 'CATTLE_MANAGER' ? 'text-emerald-700 bg-emerald-50 ' : 'text-slate-500 hover:text-emerald-600 hover:bg-emerald-50/30'}`}>Cattle Herd</button>
+                  <button onClick={() => { setActiveView('GOAT_MANAGER'); closeSidebar(); }} className={`w-full text-left px-3 py-1.5 rounded-lg text-[13px] font-medium transition-all duration-200 ${activeView === 'GOAT_MANAGER' ? 'text-emerald-700 bg-emerald-50 ' : 'text-slate-500 hover:text-emerald-600 hover:bg-emerald-50/30'}`}>Goat Flock</button>
                 </div>
               )}
             </div>
 
-            <div className="pt-4">
+            <div className="pt-2">
               <NavLabel>Operations</NavLabel>
-              <button onClick={() => { setActiveView('OPERATIONS'); setIsOperationsMenuOpen(!isOperationsMenuOpen); }} className={`w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all duration-200 group ${activeView === 'OPERATIONS' ? 'text-emerald-700 bg-emerald-50/50' : 'text-slate-600 hover:text-emerald-700 hover:bg-emerald-50/50'}`}>
-                <div className="flex items-center gap-3">
-                  <ClipboardList size={20} className="group-hover:scale-110 transition-transform duration-200" />
-                  <span className="font-semibold text-sm">Operations & Feed</span>
-                </div>
-                <ChevronDown size={14} className={`transition-transform duration-300 ${isOperationsMenuOpen ? 'rotate-180' : ''}`} />
-              </button>
+              <div className={`flex items-center rounded-xl transition-all duration-200 ${activeView === 'OPERATIONS' ? 'bg-emerald-50/50' : ''}`}>
+                <button
+                  type="button"
+                  onClick={() => setActiveView('OPERATIONS')}
+                  className={`flex-1 flex items-center gap-3 px-4 py-2 min-w-0 text-left rounded-xl transition-all duration-200 group ${activeView === 'OPERATIONS' ? 'text-emerald-700' : 'text-slate-600 hover:text-emerald-700 hover:bg-emerald-50/50'}`}
+                >
+                  <ClipboardList size={18} className="group-hover:scale-110 transition-transform duration-200 shrink-0" />
+                  <span className="font-semibold text-sm truncate">Operations & Feed</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={toggleOperationsMenu}
+                  aria-expanded={isOperationsMenuOpen}
+                  aria-label={isOperationsMenuOpen ? 'Collapse operations menu' : 'Expand operations menu'}
+                  className="px-3 py-2 shrink-0 text-slate-500 hover:text-emerald-700"
+                >
+                  <ChevronDown size={14} className={`transition-transform duration-300 ${isOperationsMenuOpen ? 'rotate-180' : ''}`} />
+                </button>
+              </div>
               {isOperationsMenuOpen && (
-                <div className="mt-1 ml-4 pl-4 border-l-2 border-emerald-100 space-y-1 animate-slide-up">
-                  <button onClick={() => { setActiveView('OPERATIONS'); setOperationsTab('FEED'); setIsSidebarOpen(false); }} className={`w-full text-left px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${activeView === 'OPERATIONS' && operationsTab === 'FEED' ? 'text-emerald-700 bg-emerald-50 translate-x-1' : 'text-slate-500 hover:text-emerald-600 hover:bg-emerald-50/30'}`}>Feed Stock</button>
-                  <button onClick={() => { setActiveView('OPERATIONS'); setOperationsTab('MEDICINE'); setIsSidebarOpen(false); }} className={`w-full text-left px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${activeView === 'OPERATIONS' && operationsTab === 'MEDICINE' ? 'text-emerald-700 bg-emerald-50 translate-x-1' : 'text-slate-500 hover:text-emerald-600 hover:bg-emerald-50/30'}`}>Medicine Cabinet</button>
-                  <button onClick={() => { setActiveView('OPERATIONS'); setOperationsTab('SUPPLIES'); setIsSidebarOpen(false); }} className={`w-full text-left px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${activeView === 'OPERATIONS' && operationsTab === 'SUPPLIES' ? 'text-emerald-700 bg-emerald-50 translate-x-1' : 'text-slate-500 hover:text-emerald-600 hover:bg-emerald-50/30'}`}>Farm Supplies</button>
-                  <button onClick={() => { setActiveView('OPERATIONS'); setOperationsTab('INFRA'); setIsSidebarOpen(false); }} className={`w-full text-left px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${activeView === 'OPERATIONS' && operationsTab === 'INFRA' ? 'text-emerald-700 bg-emerald-50 translate-x-1' : 'text-slate-500 hover:text-emerald-600 hover:bg-emerald-50/30'}`}>Fixed Assets</button>
-                  <button onClick={() => { setActiveView('OPERATIONS'); setOperationsTab('DIET'); setIsSidebarOpen(false); }} className={`w-full text-left px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${activeView === 'OPERATIONS' && operationsTab === 'DIET' ? 'text-emerald-700 bg-emerald-50 translate-x-1' : 'text-slate-500 hover:text-emerald-600 hover:bg-emerald-50/30'}`}>Diets</button>
+                <div className="mt-0.5 ml-5 pl-3 border-l-2 border-emerald-100 space-y-0.5 animate-slide-up">
+                  <button onClick={() => { setActiveView('OPERATIONS'); setOperationsTab('FEED'); closeSidebar(); }} className={`w-full text-left px-3 py-1.5 rounded-lg text-[13px] font-medium transition-all duration-200 ${activeView === 'OPERATIONS' && operationsTab === 'FEED' ? 'text-emerald-700 bg-emerald-50 ' : 'text-slate-500 hover:text-emerald-600 hover:bg-emerald-50/30'}`}>Feed Stock</button>
+                  <button onClick={() => { setActiveView('OPERATIONS'); setOperationsTab('MEDICINE'); closeSidebar(); }} className={`w-full text-left px-3 py-1.5 rounded-lg text-[13px] font-medium transition-all duration-200 ${activeView === 'OPERATIONS' && operationsTab === 'MEDICINE' ? 'text-emerald-700 bg-emerald-50 ' : 'text-slate-500 hover:text-emerald-600 hover:bg-emerald-50/30'}`}>Medicine Cabinet</button>
+                  <button onClick={() => { setActiveView('OPERATIONS'); setOperationsTab('SUPPLIES'); closeSidebar(); }} className={`w-full text-left px-3 py-1.5 rounded-lg text-[13px] font-medium transition-all duration-200 ${activeView === 'OPERATIONS' && operationsTab === 'SUPPLIES' ? 'text-emerald-700 bg-emerald-50 ' : 'text-slate-500 hover:text-emerald-600 hover:bg-emerald-50/30'}`}>Farm Supplies</button>
+                  <button onClick={() => { setActiveView('OPERATIONS'); setOperationsTab('INFRA'); closeSidebar(); }} className={`w-full text-left px-3 py-1.5 rounded-lg text-[13px] font-medium transition-all duration-200 ${activeView === 'OPERATIONS' && operationsTab === 'INFRA' ? 'text-emerald-700 bg-emerald-50 ' : 'text-slate-500 hover:text-emerald-600 hover:bg-emerald-50/30'}`}>Fixed Assets</button>
+                  <button onClick={() => { setActiveView('OPERATIONS'); setOperationsTab('DIET'); closeSidebar(); }} className={`w-full text-left px-3 py-1.5 rounded-lg text-[13px] font-medium transition-all duration-200 ${activeView === 'OPERATIONS' && operationsTab === 'DIET' ? 'text-emerald-700 bg-emerald-50 ' : 'text-slate-500 hover:text-emerald-600 hover:bg-emerald-50/30'}`}>Diets</button>
                 </div>
               )}
               <NavItem view="PROCUREMENT" icon={Truck} label="Procurement & Stores" />
             </div>
 
-            <div className="pt-4">
+            <div className="pt-2">
               <NavLabel>Financials</NavLabel>
               <NavItem view="FINANCE" icon={BadgeDollarSign} label="Finance & Accounts" />
               <NavItem view="SALES" icon={DollarSign} label="Sales & Revenue" />
               <NavItem view="ENTITIES" icon={Users} label="Entity Registry" />
             </div>
 
-            <div className="pt-4">
+            <div className="pt-2">
               <NavLabel>Analytics</NavLabel>
               <NavItem view="REPORTS" icon={FileText} label="Reports" />
               <NavItem view="PALAI" icon={User} label="Palai Partnering" />
               <NavItem view="AI" icon={BrainCircuit} label="Gemini Advisor" />
               <NavItem view="SETTINGS" icon={Settings} label="System Settings" />
             </div>
-
-            <div className="pt-8 mt-4 border-t border-gray-100 pb-6">
-              <div className="px-4 py-3 mb-2 bg-slate-50 rounded-xl border border-slate-100 mx-2">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-700 font-bold border border-emerald-200">
-                    {user?.name?.[0] || 'U'}
-                  </div>
-                  <div className="overflow-hidden">
-                    <p className="text-sm font-bold text-slate-700 truncate">{user?.name || 'Farm Manager'}</p>
-                    <p className="text-xs text-slate-400 truncate">{user?.email}</p>
-                  </div>
-                </div>
-              </div>
-              <button
-                onClick={handleLogout}
-                className="w-full flex items-center gap-3 px-6 py-3 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all duration-200 group mx-2"
-              >
-                <LogOut size={20} className="group-hover:-translate-x-1 transition-transform" />
-                <span className="font-medium">Sign Out</span>
-              </button>
-            </div>
+            <div className="sidebar-scroll-fade pointer-events-none" aria-hidden />
           </nav>
+          </div>
+          {/* Footer pinned outside the scroll area so user card + sign-out are always reachable. */}
+          <div className="shrink-0 border-t border-gray-100 px-3 py-2 space-y-1 bg-white">
+            <div className="px-3 py-2 bg-slate-50 rounded-xl border border-slate-100 flex items-center gap-3">
+              <div className="w-7 h-7 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-700 font-bold border border-emerald-200 text-xs shrink-0">
+                {user?.name?.[0] || 'U'}
+              </div>
+              <div className="overflow-hidden min-w-0">
+                <p className="text-[13px] font-bold text-slate-700 truncate leading-tight">{user?.name || 'Farm Manager'}</p>
+                <p className="text-[11px] text-slate-400 truncate leading-tight">{user?.email}</p>
+              </div>
+            </div>
+            <button
+              onClick={handleLogout}
+              className="w-full flex items-center gap-3 px-4 py-2 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all duration-200 group"
+            >
+              <LogOut size={18} className="group-hover:-translate-x-1 transition-transform" />
+              <span className="font-medium text-sm">Sign Out</span>
+            </button>
+          </div>
         </div>
       </aside>
 
@@ -1086,7 +1284,7 @@ const App: React.FC = () => {
           <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="text-gray-600 lg:hidden">{isSidebarOpen ? <X size={24} /> : <Menu size={24} />}</button>
         </header>
 
-        <main className="flex-1 overflow-y-auto p-4 md:p-8">
+        <main ref={mainScrollRef} className="page-scroll flex-1 overflow-y-auto px-4 md:px-8 pt-4 md:pt-6 pb-12 md:pb-16">
           <div className="max-w-7xl mx-auto">
             {activeView === 'DASHBOARD' && (
               <Dashboard
@@ -1097,7 +1295,7 @@ const App: React.FC = () => {
                   if ((view === 'CATTLE_MANAGER' || view === 'GOAT_MANAGER') && options?.filterCategory) {
                     setLivestockPageRequest(prev => ({ ...prev, category: options.filterCategory ?? '', number: 0 }));
                   }
-                  setIsSidebarOpen(false);
+                  closeSidebar();
                 }}
                 state={{
                   ...state,
@@ -1210,23 +1408,23 @@ const App: React.FC = () => {
                 }}
                 onReverseFeedLedger={handleReverseLedger}
                 onAddFeed={async (f) => {
-                  if (!state.currentFarmId) { alert("Select farm"); return; }
+                  if (!state.currentFarmId) { toast.warning('Select a farm first.'); return; }
                   const itemWithFarm = { ...f, farmId: state.currentFarmId }; // Ensure farmId is set
                   const saved = await backendService.createFeed(itemWithFarm);
                   setState(p => ({ ...p, feed: [...p.feed, saved] }));
                 }}
                 onUpdateFeed={async (f) => { const updated = await backendService.updateFeed(f.id, f); setState(p => ({ ...p, feed: p.feed.map(i => i.id === f.id ? updated : i) })); }}
-                onDeleteFeed={async (id) => { try { await backendService.deleteFeed(id); setState(p => ({ ...p, feed: p.feed.filter(i => i.id !== id) })); } catch (e) { alert('Failed to delete feed item.'); } }}
+                onDeleteFeed={async (id) => { try { await backendService.deleteFeed(id); setState(p => ({ ...p, feed: p.feed.filter(i => i.id !== id) })); } catch (e) { toast.error('Failed to delete feed item.'); } }}
                 onAddInfrastructure={async (i) => {
-                  if (!state.currentFarmId) { alert("Select farm"); return; }
+                  if (!state.currentFarmId) { toast.warning('Select a farm first.'); return; }
                   const itemWithFarm = { ...i, farmId: state.currentFarmId }; // Ensure farmId is set
                   const saved = await backendService.createInfrastructure(itemWithFarm);
                   setState(p => ({ ...p, infrastructure: [...p.infrastructure, saved] }));
                 }}
                 onUpdateInfrastructure={async (i) => { const updated = await backendService.updateInfrastructure(i.id, i); setState(p => ({ ...p, infrastructure: p.infrastructure.map(x => x.id === i.id ? updated : x) })); }}
-                onDeleteInfrastructure={async (id) => { try { await backendService.deleteInfrastructure(id); setState(p => ({ ...p, infrastructure: p.infrastructure.filter(x => x.id !== id) })); } catch (e) { alert('Failed to delete asset.'); } }}
+                onDeleteInfrastructure={async (id) => { try { await backendService.deleteInfrastructure(id); setState(p => ({ ...p, infrastructure: p.infrastructure.filter(x => x.id !== id) })); } catch (e) { toast.error('Failed to delete asset.'); } }}
                 onAddDietPlan={async (d) => {
-                  if (!state.currentFarmId) { alert("Select farm"); return; }
+                  if (!state.currentFarmId) { toast.warning('Select a farm first.'); return; }
                   const planWithFarm = { ...d, farmId: state.currentFarmId }; // Ensure farmId is set
                   const saved = await backendService.createDietPlan(planWithFarm);
                   const normalized = { ...saved, targetIds: Array.isArray(saved.targetIds) ? saved.targetIds : (Array.isArray((saved as any).assignedAnimalIds) ? (saved as any).assignedAnimalIds : []) };
@@ -1237,12 +1435,12 @@ const App: React.FC = () => {
                   const normalized = { ...updated, targetIds: Array.isArray(updated.targetIds) ? updated.targetIds : (Array.isArray((updated as any).assignedAnimalIds) ? (updated as any).assignedAnimalIds : []) };
                   setState(p => ({ ...p, dietPlans: p.dietPlans.map(i => i.id === d.id ? normalized : i) }));
                 }}
-                onDeleteDietPlan={async (id) => { try { await backendService.deleteDietPlan(id); setState(p => ({ ...p, dietPlans: p.dietPlans.filter(i => i.id !== id) })); } catch (e) { alert('Failed to delete diet plan.'); } }}
+                onDeleteDietPlan={async (id) => { try { await backendService.deleteDietPlan(id); setState(p => ({ ...p, dietPlans: p.dietPlans.filter(i => i.id !== id) })); } catch (e) { toast.error('Failed to delete diet plan.'); } }}
                 onRunDailyProcessing={processDailyConsumption}
                 onProcessDietPlans={processDietPlans}
                 onRefreshDietData={refreshDietData}
                 onAddTreatmentProtocol={async (p) => {
-                  if (!state.currentFarmId) { alert("Select farm"); return; }
+                  if (!state.currentFarmId) { toast.warning('Select a farm first.'); return; }
                   const protoWithFarm = { ...p, farmId: state.currentFarmId };
                   const saved = await backendService.createTreatmentProtocol(protoWithFarm);
                   setState(s => ({ ...s, treatmentProtocols: [...s.treatmentProtocols, saved] }));
@@ -1283,19 +1481,20 @@ const App: React.FC = () => {
                   try {
                     const updated = await backendService.updateExpense(exp.id, exp);
                     setState(p => ({ ...p, expenses: p.expenses.map(e => e.id === updated.id ? updated : e) }));
+                    bumpFinancials();
                   } catch (e) {
                     console.error(e);
-                    alert('Failed to update expense.');
+                    toast.error('Failed to update expense.');
                     throw e;
                   }
                 }}
                 onAddFeed={async (item) => {
-                  if (!state.currentFarmId) { alert("Select farm"); return; }
+                  if (!state.currentFarmId) { toast.warning('Select a farm first.'); return; }
                   const saved = await backendService.createFeed({ ...item, farmId: state.currentFarmId });
                   setState(p => ({ ...p, feed: [...p.feed, saved] }));
                 }}
                 onUpdateInventory={async (item) => { const updated = await backendService.updateFeed(item.id, item); setState(p => ({ ...p, feed: p.feed.map(f => f.id === item.id ? updated : f) })); }}
-                onDeleteFeed={async (id) => { try { await backendService.deleteFeed(id); setState(p => ({ ...p, feed: p.feed.filter(f => f.id !== id) })); } catch (e) { alert('Failed to delete feed item'); } }}
+                onDeleteFeed={async (id) => { try { await backendService.deleteFeed(id); setState(p => ({ ...p, feed: p.feed.filter(f => f.id !== id) })); } catch (e) { toast.error('Failed to delete feed item.'); } }}
               />
             )}
             {activeView === 'REPORTS' && <Reports currentFarmId={state.currentFarmId} state={{
@@ -1331,6 +1530,8 @@ const App: React.FC = () => {
               />
             )}
           </div>
+          {/* Bottom fade hint — only visible while there's still scrollable content below. */}
+          <div className="page-scroll-fade" aria-hidden="true" />
         </main>
       </div>
     </div>

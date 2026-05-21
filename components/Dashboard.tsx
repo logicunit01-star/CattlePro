@@ -162,7 +162,7 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
 
   if (state.farms.length === 0) {
     return (
-      <div className="space-y-8 animate-fade-in pb-10 max-w-5xl mx-auto mt-10">
+      <div className="space-y-5 animate-fade-in max-w-5xl mx-auto">
         <div className="text-center mb-12">
           <h2 className="text-4xl font-extrabold text-slate-800 tracking-tight mb-4 font-display">Welcome to CattlePro!</h2>
           <p className="text-lg text-slate-500 font-medium max-w-2xl mx-auto">Let's get your instance set up so you can start managing your livestock operations with enterprise-grade tools.</p>
@@ -192,7 +192,7 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
   }
 
   return (
-    <div className="space-y-8 animate-fade-in pb-10">
+    <div className="space-y-5 animate-fade-in">
 
       {/* HEADER WELCOME */}
       <div className="flex flex-col md:flex-row justify-between items-end gap-4 mb-2">

@@ -3,6 +3,8 @@ import { Expense, ExpenseCategory, Sale, Livestock, Entity, Farm, Infrastructure
 import { Plus, DollarSign, Truck, Wrench, Syringe, Briefcase, Home, Stethoscope, Dna, ArrowLeft, Trash2, Store, User, Share2, AlertTriangle, Building2, BookOpen, Activity, Search, Filter, ArrowUpDown, PieChart as PieChartIcon, LineChart as LineChartIcon, CheckCircle2, FileText } from 'lucide-react';
 import { PieChart, Pie, Cell, Tooltip as RechartsTooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
 import { backendService } from '../services/backendService';
+import { useToast } from './Toast';
+import { useConfirm } from './ConfirmDialog';
 
 interface Props {
     expenses: Expense[];
@@ -25,6 +27,8 @@ interface Props {
 type FinancialView = 'LIST' | 'ADD_EXPENSE' | 'ADD_SALE';
 
 export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [], entities, infrastructure = [], farms = [], locations = [], currentFarmId, currentLocationId, onAddExpense, onUpdateExpense, onAddSale, onDeleteExpense, onDeleteSale, refreshKey }) => {
+    const toast = useToast();
+    const { confirm: confirmDialog } = useConfirm();
     const [activeTab, setActiveTab] = useState<'EXPENSES' | 'SALES' | 'LEDGER'>('EXPENSES');
     const [expenseTab, setExpenseTab] = useState<'LIST' | 'DASHBOARD' | 'VENDOR_BILLS'>('LIST');
     const [viewMode, setViewMode] = useState<FinancialView>('LIST');
@@ -123,13 +127,13 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
         const params: { farmId?: string; startDate?: string; endDate?: string; dateFilter?: string } = { farmId: currentFarmId || undefined, ...dateRangeFromFilter };
         if (dateFilter !== 'ALL') params.dateFilter = dateFilter;
         backendService.getVendorSummary(params).then(setVendorSummary).catch(() => setVendorSummary(null));
-    }, [currentFarmId, dateRangeFromFilter.startDate, dateRangeFromFilter.endDate, dateFilter]);
+    }, [currentFarmId, dateRangeFromFilter.startDate, dateRangeFromFilter.endDate, dateFilter, refreshKey]);
 
     useEffect(() => {
         const params: { farmId?: string; startDate?: string; endDate?: string; dateFilter?: string } = { farmId: currentFarmId || undefined, ...dateRangeFromFilter };
         if (dateFilter !== 'ALL') params.dateFilter = dateFilter;
         backendService.getExpenseAnalytics(params).then(setExpenseAnalytics).catch(() => setExpenseAnalytics(null));
-    }, [currentFarmId, dateRangeFromFilter.startDate, dateRangeFromFilter.endDate, dateFilter]);
+    }, [currentFarmId, dateRangeFromFilter.startDate, dateRangeFromFilter.endDate, dateFilter, refreshKey]);
 
     const isDateInRange = (dateStr: string | undefined | null) => {
         if (!dateStr || dateFilter === 'ALL') return true;
@@ -259,7 +263,20 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
     };
 
     const handleSaveExpense = async () => {
-        if (!newExpense.amount || !newExpense.description) return alert("Amount and Description required");
+        if (!newExpense.amount || !newExpense.description) {
+            toast.warning('Amount and description are required.');
+            return;
+        }
+        if (newExpense.date) {
+            const d = new Date(newExpense.date);
+            const today = new Date(); today.setHours(23, 59, 59, 999);
+            if (Number.isNaN(d.getTime())) { toast.warning('Expense date is not a valid date.'); return; }
+            if (d > today) { toast.warning('Expense date cannot be in the future.'); return; }
+        }
+        if (!(Number(newExpense.amount) > 0)) {
+            toast.warning('Expense amount must be greater than zero.');
+            return;
+        }
         const categoryValue = newExpense.category && Object.values(ExpenseCategory).includes(newExpense.category as ExpenseCategory) ? newExpense.category : ExpenseCategory.OTHER;
         const expense: Expense = {
             id: Math.random().toString(36).substr(2, 9),
@@ -284,13 +301,32 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
     };
 
     const handleSaveSale = () => {
-        if (!newSale.amount || !newSale.buyer) return alert("Amount and Buyer required");
+        if (!newSale.amount || !newSale.buyer) {
+            toast.warning('Amount and buyer are required.');
+            return;
+        }
+        if (!(Number(newSale.amount) > 0)) {
+            toast.warning('Sale amount must be greater than zero.');
+            return;
+        }
+        if (newSale.date) {
+            const d = new Date(newSale.date);
+            const today = new Date(); today.setHours(23, 59, 59, 999);
+            if (Number.isNaN(d.getTime())) { toast.warning('Sale date is not a valid date.'); return; }
+            if (d > today) { toast.warning('Sale date cannot be in the future.'); return; }
+        }
         const itemType = newSale.itemType || 'ANIMAL';
 
         if (itemType === 'ANIMAL') {
-            if (!currentFarmId && !currentLocationId) return alert("Please select a farm above to record livestock sales (only animals from the selected farm can be sold).");
+            if (!currentFarmId && !currentLocationId) {
+                toast.warning('Select a farm above to record livestock sales (only animals from the selected farm can be sold).');
+                return;
+            }
             if (livestockSaleMode === 'SINGLE') {
-                if (!newSale.animalId) return alert("Please select the sold animal.");
+                if (!newSale.animalId) {
+                    toast.warning('Select the sold animal.');
+                    return;
+                }
                 onAddSale({
                     id: Math.random().toString(36).substr(2, 9),
                     amount: Number(newSale.amount),
@@ -304,7 +340,10 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                     description: newSale.description || ''
                 });
             } else {
-                if (!selectedAnimalIds.length) return alert("Please select at least one animal for bulk sale.");
+                if (!selectedAnimalIds.length) {
+                    toast.warning('Select at least one animal for bulk sale.');
+                    return;
+                }
                 onAddSale({
                     id: Math.random().toString(36).substr(2, 9),
                     amount: Number(newSale.amount),
@@ -394,7 +433,7 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                 <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-6">
                     <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">Amount (PKR)</label>
-                        <input type="number" className="w-full border border-gray-300 rounded-lg px-4 py-2 outline-none focus:ring-2 focus:ring-emerald-500" value={newExpense.amount} onChange={e => setNewExpense({ ...newExpense, amount: parseFloat(e.target.value) })} />
+                        <input type="number" className="w-full border border-gray-300 rounded-lg px-4 py-2 outline-none focus:ring-2 focus:ring-emerald-500" value={newExpense.amount} onChange={e => setNewExpense({ ...newExpense, amount: parseFloat(e.target.value) || 0 })} />
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div>
@@ -528,7 +567,7 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div>
                             <label className="block text-sm font-medium text-gray-700 mb-1">Sale Amount (PKR)</label>
-                            <input type="number" className="w-full border border-gray-300 rounded-lg px-4 py-2 outline-none focus:ring-2 focus:ring-emerald-500" value={newSale.amount} onChange={e => setNewSale({ ...newSale, amount: parseFloat(e.target.value) })} />
+                            <input type="number" className="w-full border border-gray-300 rounded-lg px-4 py-2 outline-none focus:ring-2 focus:ring-emerald-500" value={newSale.amount} onChange={e => setNewSale({ ...newSale, amount: parseFloat(e.target.value) || 0 })} />
                         </div>
                         <div>
                             {(newSale.itemType || 'ANIMAL') === 'ANIMAL' && (
@@ -874,11 +913,16 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                                                     <td className="px-6 py-3 whitespace-nowrap text-right text-sm border-b border-gray-50">
                                                                         {!isPaid && onUpdateExpense && (
                                                                             <button
-                                                                                onClick={(e) => {
+                                                                                onClick={async (e) => {
                                                                                     e.stopPropagation();
-                                                                                    if (confirm(`Mark bill from ${vendorName} as fully PAID in cash/bank?`)) {
-                                                                                        onUpdateExpense({ ...exp, paymentStatus: 'PAID', amountPaid: exp.amount, paymentDate: new Date().toISOString().split('T')[0] });
-                                                                                    }
+                                                                                    const ok = await confirmDialog({
+                                                                                        title: 'Mark as paid',
+                                                                                        message: `Mark bill from ${vendorName} as fully PAID in cash/bank?`,
+                                                                                        confirmLabel: 'Mark paid',
+                                                                                    });
+                                                                                    if (!ok) return;
+                                                                                    onUpdateExpense({ ...exp, paymentStatus: 'PAID', amountPaid: exp.amount, paymentDate: new Date().toISOString().split('T')[0] });
+                                                                                    toast.success('Bill marked as paid.');
                                                                                 }}
                                                                                 className="px-4 py-1.5 bg-indigo-50 border border-indigo-200 hover:bg-indigo-600 hover:border-indigo-600 hover:text-white text-indigo-700 font-extrabold text-[11px] uppercase tracking-wider rounded-lg transition-all shadow-sm"
                                                                             >
@@ -887,11 +931,17 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                                                         )}
                                                                         {isPaid && onUpdateExpense && (
                                                                             <button
-                                                                                onClick={(e) => {
+                                                                                onClick={async (e) => {
                                                                                     e.stopPropagation();
-                                                                                    if (confirm(`Revert bill payment status to UNPAID?`)) {
-                                                                                        onUpdateExpense({ ...exp, paymentStatus: 'PENDING', amountPaid: 0, paymentDate: undefined });
-                                                                                    }
+                                                                                    const ok = await confirmDialog({
+                                                                                        title: 'Revert payment',
+                                                                                        message: 'Revert bill payment status to UNPAID?',
+                                                                                        confirmLabel: 'Revert',
+                                                                                        danger: true,
+                                                                                    });
+                                                                                    if (!ok) return;
+                                                                                    onUpdateExpense({ ...exp, paymentStatus: 'PENDING', amountPaid: 0, paymentDate: undefined });
+                                                                                    toast.success('Bill reverted to unpaid.');
                                                                                 }}
                                                                                 className="px-2 py-1 text-slate-400 hover:text-slate-600 font-bold text-[10px] uppercase underline transition-colors"
                                                                             >
@@ -943,7 +993,17 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                                 </td>
                                                 <td className="px-6 py-4 whitespace-nowrap text-right">
                                                     <button
-                                                        onClick={() => { if (confirm('Delete this expense?')) onDeleteExpense(expense.id); }}
+                                                        onClick={async () => {
+                                                            const ok = await confirmDialog({
+                                                                title: 'Delete expense',
+                                                                message: 'Delete this expense? This cannot be undone.',
+                                                                confirmLabel: 'Delete',
+                                                                danger: true,
+                                                            });
+                                                            if (!ok) return;
+                                                            onDeleteExpense(expense.id);
+                                                            toast.success('Expense deleted.');
+                                                        }}
                                                         className="p-1.5 rounded-lg text-gray-400 hover:bg-red-50 hover:text-red-600 transition-colors"
                                                         title="Delete"
                                                     >
@@ -1032,7 +1092,17 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                                     <Share2 size={16} />
                                                 </button>
                                                 <button
-                                                    onClick={() => { if (confirm('Delete this sale?')) onDeleteSale(sale.id); }}
+                                                    onClick={async () => {
+                                                        const ok = await confirmDialog({
+                                                            title: 'Delete sale',
+                                                            message: 'Delete this sale? This cannot be undone.',
+                                                            confirmLabel: 'Delete',
+                                                            danger: true,
+                                                        });
+                                                        if (!ok) return;
+                                                        onDeleteSale(sale.id);
+                                                        toast.success('Sale deleted.');
+                                                    }}
                                                     className="p-1.5 rounded-lg text-gray-400 hover:bg-red-50 hover:text-red-600 transition-colors"
                                                     title="Delete"
                                                 >

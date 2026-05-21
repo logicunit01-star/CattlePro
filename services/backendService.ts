@@ -1,6 +1,9 @@
 
 import { Livestock, MedicalRecord, Expense, Sale, FeedInventory, Infrastructure, DietPlan, InseminationRecord, WeightRecord, MilkRecord, Entity, LedgerRecord, ConsumptionLog, TreatmentProtocol, TreatmentLog, Location, Farm, ProcessedFeedLedger } from '../types';
 import { getTenantHeaders, getTenant } from './tenantContext';
+// Route every backend call through the API tracker so the global loader animates automatically.
+// Local `fetch` identifier shadows the global one — no per-call wiring required.
+import { trackedFetch as fetch } from './apiTracker';
 
 // const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8381/api';
 // const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5003/livestock';
@@ -131,6 +134,25 @@ export const backendService = {
             method: 'PUT',
             headers: apiHeaders(true),
             body: JSON.stringify({ animalIds, location }),
+        });
+        return handleResponse(res);
+    },
+    /** Rewrite legacy tagIds (EX-<CAT>-<N>) to species-prefixed (EX-<SP>-<CAT>-<N>). */
+    migrateLegacyTags: async (dryRun: boolean): Promise<{
+        dryRun: boolean;
+        tenantId: string;
+        totalAnimals: number;
+        alreadyNewFormat: number;
+        migratedCount: number;
+        renumberedCount: number;
+        skippedCount: number;
+        migrated: Array<{ animalId: string; oldTag: string; newTag: string; species: string; category: string }>;
+        renumbered: Array<{ animalId: string; oldTag: string; newTag: string; reason: string }>;
+        skipped: Array<{ animalId: string; oldTag?: string; reason: string }>;
+    }> => {
+        const res = await fetch(`${API_BASE_URL}/livestock/migrate-legacy-tags?dryRun=${dryRun}`, {
+            method: 'POST',
+            headers: apiHeaders(true),
         });
         return handleResponse(res);
     },

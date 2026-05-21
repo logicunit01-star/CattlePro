@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { AppState } from '../types';
-import { Plus, MessageSquare, Heart, Share2, Syringe, Milk, DollarSign, Baby, Calendar, CheckCircle, Search, Edit2 } from 'lucide-react';
+import { Syringe, Milk, DollarSign, Baby, Search } from 'lucide-react';
 
 interface Props {
   state: AppState;
@@ -22,7 +22,7 @@ type FeedEvent = {
 };
 
 export const ActivityFeed: React.FC<Props> = ({ state, filterType }) => {
-  const [activeChip, setActiveChip] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
 
   const feedEvents = useMemo(() => {
     const events: FeedEvent[] = [];
@@ -103,121 +103,94 @@ export const ActivityFeed: React.FC<Props> = ({ state, filterType }) => {
       });
     });
 
-    // Sort descending by timestamp
-    const sortedEvents = events.sort((a, b) => b.timestamp - a.timestamp).slice(0, 50); // Limit to 50 for performance
-    
+    // Sort descending by timestamp. Cap at 30 (was 50) — anything older sits behind the "Show all"
+    // toggle so the feed doesn't dominate the dashboard.
+    const sortedEvents = events.sort((a, b) => b.timestamp - a.timestamp).slice(0, 30);
+
     if (filterType === 'HEALTH') return sortedEvents.filter(e => e.type === 'TREATMENT');
     if (filterType === 'MILK') return sortedEvents.filter(e => e.type === 'MILK');
     if (filterType === 'FINANCE') return sortedEvents.filter(e => e.type === 'EXPENSE');
     return sortedEvents;
   }, [state, filterType]);
 
-  const quickChips = [
-    { id: 'vaccinate', label: 'Vaccinated', icon: Syringe, color: 'text-blue-600', bg: 'bg-blue-50 hover:bg-blue-100' },
-    { id: 'fed', label: 'Fed', icon: Milk, color: 'text-orange-600', bg: 'bg-orange-50 hover:bg-orange-100' },
-    { id: 'purchased', label: 'Purchased', icon: DollarSign, color: 'text-emerald-600', bg: 'bg-emerald-50 hover:bg-emerald-100' },
-    { id: 'born', label: 'Birth', icon: Baby, color: 'text-pink-600', bg: 'bg-pink-50 hover:bg-pink-100' },
-  ];
+  // Type pill colors so the user can scan event type at a glance without spending a 48px icon block.
+  const typeStyles: Record<FeedEvent['type'], { dot: string; label: string }> = {
+    TREATMENT: { dot: 'bg-blue-500', label: 'Health' },
+    EXPENSE: { dot: 'bg-emerald-500', label: 'Expense' },
+    BIRTH: { dot: 'bg-pink-500', label: 'Birth' },
+    MILK: { dot: 'bg-sky-500', label: 'Milk' },
+    WEIGHT: { dot: 'bg-amber-500', label: 'Weight' },
+  };
+
+  const visibleEvents = expanded ? feedEvents : feedEvents.slice(0, 8);
 
   return (
-    <div className="max-w-2xl mx-auto space-y-6">
-      {/* Create Post Box */}
-      <div className="bg-white p-4 rounded-3xl shadow-sm border border-slate-200 premium-card relative z-10">
-        <div className="flex gap-4 items-start">
-          <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 font-bold shrink-0">
-            Me
-          </div>
-          <div className="flex-1 space-y-3">
-            <input 
-              type="text" 
-              placeholder="What happened today?" 
-              className="w-full bg-slate-50 border-none focus:ring-0 text-slate-800 font-medium placeholder-slate-400 py-2 outline-none text-lg"
-              onClick={() => setActiveChip('text')}
-            />
-            
-            <div className="flex flex-wrap gap-2 pt-2 border-t border-slate-100">
-              {quickChips.map(chip => (
-                <button
-                  key={chip.id}
-                  onClick={() => setActiveChip(chip.id)}
-                  title={`Quick action: log a ${chip.label.toLowerCase()} event`}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold transition-colors ${chip.bg} ${chip.color} ${activeChip === chip.id ? 'ring-2 ring-offset-1 ring-emerald-500' : ''}`}
-                >
-                  <chip.icon size={14} />
-                  {chip.label}
-                </button>
-              ))}
-            </div>
-
-            {/* Inline Form Expand (Mock) */}
-            {activeChip && activeChip !== 'text' && (
-              <div className="mt-4 p-4 bg-slate-50 rounded-2xl border border-slate-100 animate-fade-in space-y-3">
-                <div className="flex justify-between items-center mb-2">
-                  <h4 className="text-sm font-bold text-slate-700 uppercase tracking-widest">New {activeChip} Entry</h4>
-                  <button onClick={() => setActiveChip(null)} className="text-slate-400 hover:text-slate-600 text-xs font-bold">Cancel</button>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <input type="text" placeholder="Animal Tag ID" className="input-premium py-2 text-sm" />
-                  <input type="date" className="input-premium py-2 text-sm" defaultValue={new Date().toISOString().split('T')[0]} />
-                  <input type="text" placeholder="Details / Notes" className="input-premium py-2 text-sm col-span-2" />
-                </div>
-                <div className="flex justify-end pt-2">
-                  <button className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-sm font-bold shadow-sm transition-colors">
-                    Post Entry
-                  </button>
-                </div>
-              </div>
-            )}
+    <div className="space-y-2">
+      {/* Feed Stream — compact, scrollable, scannable.
+          Cards are intentionally dense (one row per event) so the dashboard stays usable. */}
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+        <div className="px-4 py-2.5 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+          <div className="flex items-center gap-2 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+            <span>Recent activity</span>
+            <span className="text-slate-300">•</span>
+            <span className="text-slate-400">{feedEvents.length} {feedEvents.length === 1 ? 'event' : 'events'}</span>
           </div>
         </div>
-      </div>
 
-      {/* Feed Stream */}
-      <div className="space-y-4">
-        {feedEvents.map(event => (
-          <div key={event.id} className="bg-white p-5 rounded-3xl shadow-sm border border-slate-100 premium-card group">
-            <div className="flex gap-4">
-              <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${event.bgClass} ${event.colorClass}`}>
-                <event.icon size={24} />
-              </div>
-              <div className="flex-1">
-                <div className="flex justify-between items-start mb-1">
-                  <div>
-                    <h3 className="font-bold text-slate-800 text-base">{event.title}</h3>
-                    <p className="text-xs font-medium text-slate-500">{event.user} • {event.date}</p>
+        <ul className="divide-y divide-slate-100 max-h-[480px] overflow-y-auto">
+          {visibleEvents.map(event => {
+            const style = typeStyles[event.type];
+            return (
+              <li key={event.id} className="group px-4 py-2.5 hover:bg-slate-50/60 transition-colors">
+                <div className="flex items-start gap-3">
+                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${event.bgClass} ${event.colorClass}`}>
+                    <event.icon size={14} />
                   </div>
-                  {event.cost && (
-                    <span className="text-xs font-black bg-slate-50 text-slate-600 px-2 py-1 rounded-lg">
-                      PKR {event.cost.toLocaleString()}
-                    </span>
-                  )}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-baseline justify-between gap-3">
+                      <p className="text-[13px] font-semibold text-slate-800 truncate">
+                        {event.title}
+                      </p>
+                      <span className="text-[10px] font-bold text-slate-400 shrink-0 tabular-nums">{event.date}</span>
+                    </div>
+                    <p className="text-[12px] text-slate-500 leading-snug line-clamp-1">
+                      {event.description}
+                    </p>
+                    <div className="flex items-center gap-2 mt-1">
+                      <span className={`inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider text-slate-500`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${style.dot}`} />
+                        {style.label}
+                      </span>
+                      <span className="text-slate-300 text-[10px]">•</span>
+                      <span className="text-[10px] font-medium text-slate-400 truncate">{event.user}</span>
+                      {event.cost ? (
+                        <>
+                          <span className="text-slate-300 text-[10px]">•</span>
+                          <span className="text-[10px] font-bold text-slate-600 tabular-nums">PKR {event.cost.toLocaleString()}</span>
+                        </>
+                      ) : null}
+                    </div>
+                  </div>
                 </div>
-                
-                <p className="text-sm text-slate-600 mt-2 leading-relaxed">
-                  {event.description}
-                </p>
+              </li>
+            );
+          })}
 
-                <div className="flex items-center gap-4 mt-4 pt-4 border-t border-slate-50 text-slate-400">
-                  <button title="Acknowledge this action" className="flex items-center gap-1.5 text-xs font-bold hover:text-emerald-500 transition-colors">
-                    <CheckCircle size={14} /> Approve
-                  </button>
-                  <button title="Comment on this entry" className="flex items-center gap-1.5 text-xs font-bold hover:text-blue-500 transition-colors">
-                    <MessageSquare size={14} /> Comment
-                  </button>
-                  <button title="Edit this entry" className="flex items-center gap-1.5 text-xs font-bold hover:text-amber-500 transition-colors ml-auto opacity-0 group-hover:opacity-100">
-                    <Edit2 size={14} /> Edit
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        ))}
+          {feedEvents.length === 0 && (
+            <li className="text-center py-10 px-4">
+              <Search className="mx-auto text-slate-300 mb-2" size={24} />
+              <p className="text-xs text-slate-400 font-medium">No activity recorded yet.</p>
+            </li>
+          )}
+        </ul>
 
-        {feedEvents.length === 0 && (
-          <div className="text-center py-12 bg-slate-50 rounded-3xl border border-slate-100 border-dashed">
-            <Search className="mx-auto text-slate-300 mb-3" size={32} />
-            <p className="text-slate-500 font-medium">No activity recorded yet.</p>
-          </div>
+        {feedEvents.length > 8 && (
+          <button
+            onClick={() => setExpanded(e => !e)}
+            className="w-full text-[11px] font-bold text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50/60 py-2 border-t border-slate-100 transition-colors uppercase tracking-wider"
+          >
+            {expanded ? 'Show less' : `Show ${feedEvents.length - 8} more`}
+          </button>
         )}
       </div>
     </div>

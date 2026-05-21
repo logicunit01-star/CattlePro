@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { AppState, Sale, Livestock, LivestockStatus } from '../types';
 import { DollarSign, User, Calendar, CheckCircle, Clock, AlertTriangle, Filter, Search, PlusCircle, Trash2 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+import { useToast } from './Toast';
 
 export type SalesTab = 'DASHBOARD' | 'NEW_SALE' | 'HISTORY';
 
@@ -18,6 +19,7 @@ interface Props {
 }
 
 export const SalesManager: React.FC<Props> = ({ state, currentFarmId, currentLocationId, currentTab, onTabChange, onAddSale, onUpdateLivestock, onDeleteSale }) => {
+    const toast = useToast();
     const [internalTab, setInternalTab] = useState<SalesTab>('DASHBOARD');
     const isControlled = currentTab !== undefined && onTabChange !== undefined;
     const activeTab = isControlled ? currentTab! : internalTab;
@@ -65,10 +67,10 @@ export const SalesManager: React.FC<Props> = ({ state, currentFarmId, currentLoc
     const paymentStatus = balance <= 0 ? 'PAID' : (amountReceived > 0 ? 'PARTIAL' : 'PENDING');
 
     const handleSaleSubmit = () => {
-        if (!currentFarmId && !currentLocationId) { alert("Please select a farm or city above to record a sale. Sales and animals are shown for the selected farm only."); return; }
-        if (selectedAnimalIds.length === 0) { alert("Select at least one animal"); return; }
-        if (finalTotal <= 0) { alert("Invalid Sale Amount"); return; }
-        if (!buyerName) { alert("Buyer Name Required"); return; }
+        if (!currentFarmId && !currentLocationId) { toast.warning('Select a farm or city above. Sales and animals are scoped to the selected farm.'); return; }
+        if (selectedAnimalIds.length === 0) { toast.warning('Select at least one animal.'); return; }
+        if (finalTotal <= 0) { toast.warning('Invalid sale amount.'); return; }
+        if (!buyerName) { toast.warning('Buyer name is required.'); return; }
 
         const farmId = currentFarmId || state.livestock.find(l => l.id === selectedAnimalIds[0])?.farmId || '';
 
@@ -108,7 +110,7 @@ export const SalesManager: React.FC<Props> = ({ state, currentFarmId, currentLoc
             }
         });
 
-        alert("Sale Recorded Successfully!");
+        toast.success('Sale recorded successfully.');
         setActiveTab('HISTORY');
         // Reset Form
         setSelectedAnimalIds([]);
@@ -131,7 +133,7 @@ export const SalesManager: React.FC<Props> = ({ state, currentFarmId, currentLoc
     const getFarmName = (farmId: string | undefined) => (farmId && state.farms.length) ? (state.farms.find(f => f.id === farmId)?.name ?? '—') : '—';
 
     return (
-        <div className="space-y-6 animate-fade-in pb-10">
+        <div className="space-y-5 animate-fade-in">
             {!currentFarmId && !currentLocationId && (
                 <div className="bg-amber-50 border border-amber-200 text-amber-800 px-4 py-3 rounded-xl flex items-center gap-2">
                     <AlertTriangle size={20} />
@@ -285,14 +287,14 @@ export const SalesManager: React.FC<Props> = ({ state, currentFarmId, currentLoc
                                 {(saleType === 'SINGLE' || pricingMethod === 'PER_ANIMAL') && (
                                     <div>
                                         <label className="text-xs font-bold text-gray-500 uppercase">Price Per Animal</label>
-                                        <input type="number" className="w-full mt-1 p-2 border border-gray-200 rounded-lg" value={pricePerAnimal} onChange={e => setPricePerAnimal(Number(e.target.value))} />
+                                        <input type="number" className="w-full mt-1 p-2 border border-gray-200 rounded-lg" value={pricePerAnimal} onChange={e => setPricePerAnimal((Number(e.target.value) || 0))} />
                                     </div>
                                 )}
 
                                 {pricingMethod === 'LUMP_SUM' && saleType === 'BULK' && (
                                     <div>
                                         <label className="text-xs font-bold text-gray-500 uppercase">Total Sale Amount</label>
-                                        <input type="number" className="w-full mt-1 p-2 border border-gray-200 rounded-lg" value={totalAmount} onChange={e => setTotalAmount(Number(e.target.value))} />
+                                        <input type="number" className="w-full mt-1 p-2 border border-gray-200 rounded-lg" value={totalAmount} onChange={e => setTotalAmount((Number(e.target.value) || 0))} />
                                     </div>
                                 )}
 
@@ -305,7 +307,7 @@ export const SalesManager: React.FC<Props> = ({ state, currentFarmId, currentLoc
                                         <div className="grid grid-cols-2 gap-4">
                                             <div>
                                                 <label className="text-xs font-bold text-gray-500">Amount Received</label>
-                                                <input type="number" className="w-full mt-1 p-2 border border-gray-200 rounded-lg bg-white" value={amountReceived} onChange={e => setAmountReceived(Number(e.target.value))} />
+                                                <input type="number" className="w-full mt-1 p-2 border border-gray-200 rounded-lg bg-white" value={amountReceived} onChange={e => setAmountReceived((Number(e.target.value) || 0))} />
                                             </div>
                                             <div>
                                                 <label className="text-xs font-bold text-gray-500">Balance</label>

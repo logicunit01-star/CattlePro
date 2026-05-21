@@ -2,6 +2,8 @@
 import React, { useState } from 'react';
 import { Entity, EntityType, LedgerRecord } from '../types';
 import { Plus, User, Truck, Store, Phone, MapPin, FileText, ArrowLeft, ArrowRight, Wallet, History, AlertTriangle } from 'lucide-react';
+import { useToast } from './Toast';
+import { useConfirm } from './ConfirmDialog';
 
 interface Props {
     entities: Entity[];
@@ -15,6 +17,8 @@ interface Props {
 }
 
 export const EntityManager: React.FC<Props> = ({ entities, ledger, currentFarmId, currentLocationId, onAddEntity, onUpdateEntity, onDeleteEntity, onAddPayment }) => {
+    const toast = useToast();
+    const { prompt: promptDialog } = useConfirm();
     const [activeTab, setActiveTab] = useState<EntityType>('VENDOR');
     const [viewMode, setViewMode] = useState<'LIST' | 'FORM' | 'LEDGER'>('LIST');
     const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
@@ -33,8 +37,14 @@ export const EntityManager: React.FC<Props> = ({ entities, ledger, currentFarmId
     const entityLedger = ledger.filter(l => l.entityId === selectedEntityId).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
     const handleSave = () => {
-        if (!form.name || !form.contact) return alert("Name and Contact are required");
-        if (!form.id && !currentFarmId) return alert("Please select a farm above to add a vendor, customer, or Palai client. Entity Registry is farm-scoped.");
+        if (!form.name || !form.contact) {
+            toast.warning('Name and Contact are required.');
+            return;
+        }
+        if (!form.id && !currentFarmId) {
+            toast.warning('Select a farm above to add a vendor, customer, or Palai client. Entity Registry is farm-scoped.');
+            return;
+        }
 
         const newEntity: Entity = {
             id: form.id || Math.random().toString(36).substr(2, 9),
@@ -86,17 +96,35 @@ export const EntityManager: React.FC<Props> = ({ entities, ledger, currentFarmId
                         </p>
                     </div>
                     <div className="ml-auto flex items-center gap-6">
-                        <button onClick={() => {
-                            const amount = prompt("Enter Payment Amount (PKR):");
-                            if (amount) {
-                                const notes = prompt("Notes / Reference:");
-                                onAddPayment({
-                                    entityId: selectedEntity.id,
-                                    amount: parseFloat(amount),
-                                    date: new Date().toISOString().split('T')[0],
-                                    notes: notes || undefined
-                                });
-                            }
+                        <button onClick={async () => {
+                            const amount = await promptDialog({
+                                title: 'New transaction',
+                                label: 'Payment amount (PKR)',
+                                inputType: 'number',
+                                placeholder: '0',
+                                confirmLabel: 'Next',
+                                validate: v => {
+                                    const n = parseFloat(v);
+                                    if (!Number.isFinite(n) || n <= 0) return 'Enter a positive amount.';
+                                    return null;
+                                },
+                            });
+                            if (!amount) return;
+                            const notes = await promptDialog({
+                                title: 'Notes / reference',
+                                label: 'Add a note (optional)',
+                                inputType: 'textarea',
+                                placeholder: 'e.g. Invoice #1234, cash, bank transfer ref',
+                                allowEmpty: true,
+                                confirmLabel: 'Record payment',
+                            });
+                            onAddPayment({
+                                entityId: selectedEntity.id,
+                                amount: parseFloat(amount),
+                                date: new Date().toISOString().split('T')[0],
+                                notes: notes || undefined
+                            });
+                            toast.success('Payment recorded.');
                         }} className="bg-emerald-600 text-white px-4 py-2 rounded-lg font-bold text-sm shadow-lg hover:bg-emerald-700 transition-all flex items-center gap-2">
                             <Plus size={16} /> New Transaction
                         </button>
@@ -175,7 +203,7 @@ export const EntityManager: React.FC<Props> = ({ entities, ledger, currentFarmId
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div>
                             <label className="block text-sm font-bold text-gray-500 uppercase mb-1">Opening Balance (PKR)</label>
-                            <input type="number" disabled={!!form.id} className="w-full border border-gray-300 rounded-lg px-4 py-2 outline-none focus:ring-2 focus:ring-emerald-500 bg-gray-50" value={form.openingBalance} onChange={e => setForm({ ...form, openingBalance: parseFloat(e.target.value) })} />
+                            <input type="number" disabled={!!form.id} className="w-full border border-gray-300 rounded-lg px-4 py-2 outline-none focus:ring-2 focus:ring-emerald-500 bg-gray-50" value={form.openingBalance} onChange={e => setForm({ ...form, openingBalance: parseFloat(e.target.value) || 0 })} />
                             <p className="text-xs text-gray-400 mt-1">Use negative for quantity you owe (Payable).</p>
                         </div>
                         <div>
@@ -211,7 +239,10 @@ export const EntityManager: React.FC<Props> = ({ entities, ledger, currentFarmId
                 </div>
                 <button
                     onClick={() => {
-                        if (!currentFarmId) return alert("Select a farm first to add entities.");
+                        if (!currentFarmId) {
+                            toast.warning('Select a farm first to add entities.');
+                            return;
+                        }
                         setForm({ type: activeTab, status: 'ACTIVE', openingBalance: 0, currentBalance: 0, name: '', contact: '', address: '' });
                         setViewMode('FORM');
                     }}
