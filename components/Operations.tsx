@@ -4,6 +4,8 @@ import { AppState, Livestock, FeedInventory, Infrastructure, DietPlan, Treatment
 import { backendService } from '../services/backendService';
 import { Warehouse, Construction, AlertCircle, Plus, Trash2, Edit2, Tag, X, Save, CheckCircle, ArrowLeft, Utensils, CalendarClock, Beef, Upload, Image as ImageIcon, Stethoscope, Pill, Calendar, ChevronRight, RotateCcw, PlayCircle, ListChecks, Users, FlaskConical } from 'lucide-react';
 import { ActivityFeed } from './ActivityFeed';
+import { useToast } from './Toast';
+import { useConfirm } from './ConfirmDialog';
 
 export type OperationsTab = 'ACTIVITY' | 'FEED' | 'MEDICINE' | 'SUPPLIES' | 'INFRA' | 'DIET';
 
@@ -55,6 +57,8 @@ export const Operations: React.FC<Props> = ({
     onReverseFeedLedger,
     onClearFeedLedger
 }) => {
+    const toast = useToast();
+    const { confirm: confirmDialog } = useConfirm();
     const [activeTab, setActiveTab] = useState<OperationsTab>(initialTab);
 
     // Sync tab when parent (sidebar) sets initialTab
@@ -142,12 +146,17 @@ export const Operations: React.FC<Props> = ({
     const bdSelectedPlans = state.dietPlans.filter(p => bdSelectedPlanIds.includes(p.id));
 
     const handleBackdateProcess = async () => {
-        if (!state.currentFarmId) return alert('Please select a farm first.');
-        if (bdSelectedPlanIds.length === 0) return alert('Select at least one diet plan.');
+        if (!state.currentFarmId) { toast.warning('Select a farm first.'); return; }
+        if (bdSelectedPlanIds.length === 0) { toast.warning('Select at least one diet plan.'); return; }
         const dates = bdDateRange();
-        if (dates.length === 0) return alert('Invalid date range.');
-        if (dates.length > 90) return alert('Date range cannot exceed 90 days at once.');
-        if (!confirm(`This will process ${bdSelectedPlanIds.length} plan(s) across ${dates.length} day(s) (${dates.length * bdSelectedPlanIds.length} total runs). Continue?`)) return;
+        if (dates.length === 0) { toast.warning('Invalid date range.'); return; }
+        if (dates.length > 90) { toast.warning('Date range cannot exceed 90 days at once.'); return; }
+        const ok = await confirmDialog({
+            title: 'Run backdated processing',
+            message: `Process ${bdSelectedPlanIds.length} plan(s) across ${dates.length} day(s) — ${dates.length * bdSelectedPlanIds.length} total runs.`,
+            confirmLabel: 'Run',
+        });
+        if (!ok) return;
 
         setBdProcessing(true);
         setBdStep('DONE');
@@ -187,7 +196,7 @@ export const Operations: React.FC<Props> = ({
     };
 
     const handleApplyProtocol = async (protocol: TreatmentProtocol) => {
-        if (!state.currentFarmId) return alert("Select a farm first");
+        if (!state.currentFarmId) { toast.warning('Select a farm first.'); return; }
 
         let animalsToTreat: Livestock[] = [];
         if (protocol.targetType === 'INDIVIDUAL') {
@@ -202,22 +211,26 @@ export const Operations: React.FC<Props> = ({
         }
 
         if (animalsToTreat.length === 0) {
-            alert("No active animals found for this target.");
+            toast.warning('No active animals found for this target.');
             return;
         }
 
-        const confirmMsg = `Apply protocol "${protocol.name}" to ${animalsToTreat.length} animal(s)? This will deduct medicine stock and log treatments.`;
-        if (!confirm(confirmMsg)) return;
+        const ok = await confirmDialog({
+            title: 'Apply protocol',
+            message: `Apply protocol "${protocol.name}" to ${animalsToTreat.length} animal(s)? This will deduct medicine stock and log treatments.`,
+            confirmLabel: 'Apply',
+        });
+        if (!ok) return;
 
         try {
             if (onApplyProtocol) {
                 await onApplyProtocol(protocol.id, animalsToTreat.map(a => a.id), 'Manager');
-                alert(`Protocol applied to ${animalsToTreat.length} animal(s).`);
+                toast.success(`Protocol applied to ${animalsToTreat.length} animal(s).`);
                 return;
             }
         } catch (e) {
             console.error(e);
-            alert("Failed to apply protocol.");
+            toast.error('Failed to apply protocol.');
             return;
         }
 
@@ -246,10 +259,10 @@ export const Operations: React.FC<Props> = ({
         });
         try {
             await onLogTreatment(logs);
-            alert(`Successfully logged treatments for ${animalsToTreat.length} animals.`);
+            toast.success(`Logged treatments for ${animalsToTreat.length} animals.`);
         } catch (e) {
             console.error(e);
-            alert("Failed to log treatments.");
+            toast.error('Failed to log treatments.');
         }
     };
 
@@ -316,8 +329,8 @@ export const Operations: React.FC<Props> = ({
     };
 
     const handleFeedSubmit = async () => {
-        if (!feedForm.name || feedForm.quantity === undefined) return alert("Name and Quantity required");
-        if (!state.currentFarmId) return alert("Please select a farm first.");
+        if (!feedForm.name || feedForm.quantity === undefined) { toast.warning('Name and quantity are required.'); return; }
+        if (!state.currentFarmId) { toast.warning('Select a farm first.'); return; }
 
         const item: FeedInventory = {
             id: editingFeed ? editingFeed.id : Math.random().toString(36).substr(2, 9),
@@ -334,32 +347,48 @@ export const Operations: React.FC<Props> = ({
             description: feedForm.description
         };
         try {
-            if (editingFeed) await onUpdateFeed(item);
-            else {
+            if (editingFeed) {
+                await onUpdateFeed(item);
+                toast.success('Inventory item updated.');
+            } else {
                 await onAddFeed(item);
-                if (createExpense && item.unitCost && item.quantity) {
-                    const expenseCategory = item.category === 'MEDICINE' ? ExpenseCategory.MEDICAL : (item.category === 'FEED' ? ExpenseCategory.FEED : ExpenseCategory.PURCHASE);
-                    await onAddExpense({
-                        id: Math.random().toString(36).substr(2, 9),
-                        farmId: state.currentFarmId!,
-                        date: new Date().toISOString().split('T')[0],
-                        amount: item.unitCost * item.quantity,
-                        description: `Purchase of ${item.category}: ${item.name}`,
-                        category: expenseCategory,
-                        supplier: item.vendorId
-                    });
+                if (createExpense) {
+                    const cost = (item.unitCost || 0) * (item.quantity || 0);
+                    if (cost <= 0) {
+                        toast.warning('Stock added. Expense not logged — set both unit cost and quantity > 0 to record an expense.');
+                    } else {
+                        const expenseCategory = item.category === 'MEDICINE' ? ExpenseCategory.MEDICAL : (item.category === 'FEED' ? ExpenseCategory.FEED : ExpenseCategory.PURCHASE);
+                        try {
+                            await onAddExpense({
+                                id: Math.random().toString(36).substr(2, 9),
+                                farmId: state.currentFarmId!,
+                                date: new Date().toISOString().split('T')[0],
+                                amount: cost,
+                                description: `Purchase of ${item.category}: ${item.name}`,
+                                category: expenseCategory,
+                                supplier: item.vendorId,
+                            });
+                            toast.success('Stock added and expense logged.');
+                        } catch (expErr: any) {
+                            console.error('Stock saved but expense logging failed:', expErr);
+                            toast.error(`Stock saved, but expense logging failed: ${expErr?.message || 'unknown error'}`);
+                        }
+                    }
+                } else {
+                    toast.success('Stock added.');
                 }
             }
             setViewMode('LIST');
-        } catch (e) {
+            setCreateExpense(false);
+        } catch (e: any) {
             console.error(e);
-            alert("Failed to save feed item. Is the backend running?");
+            toast.error(`Failed to save inventory item: ${e?.message || 'Is the backend running?'}`);
         }
     };
 
     const handleInfraSubmit = async () => {
-        if (!infraForm.name || !infraForm.assetTag) return alert("Name and Asset Tag required");
-        if (!state.currentFarmId) return alert("Please select a farm first.");
+        if (!infraForm.name || !infraForm.assetTag) { toast.warning('Name and asset tag are required.'); return; }
+        if (!state.currentFarmId) { toast.warning('Select a farm first.'); return; }
 
         const item: Infrastructure = {
             id: editingInfra ? editingInfra.id : Math.random().toString(36).substr(2, 9),
@@ -377,25 +406,44 @@ export const Operations: React.FC<Props> = ({
             notes: infraForm.notes
         };
         try {
-            if (editingInfra) await onUpdateInfrastructure(item);
-            else {
+            if (editingInfra) {
+                await onUpdateInfrastructure(item);
+                toast.success('Asset updated.');
+            } else {
                 await onAddInfrastructure(item);
-                if (createExpense && item.value) {
-                    await onAddExpense({
-                        id: Math.random().toString(36).substr(2, 9),
-                        farmId: state.currentFarmId!,
-                        date: item.purchaseDate!,
-                        amount: item.value,
-                        description: `Purchase of Asset: ${item.name} (${item.assetTag})`,
-                        category: ExpenseCategory.INFRASTRUCTURE
-                    });
+                // The expense gets its own try/catch so a failure here surfaces a clear, accurate
+                // toast — previously a backend reject on the expense was reported as "Failed to
+                // save asset", which is misleading (the asset is already persisted).
+                if (createExpense) {
+                    if (!item.value || item.value <= 0) {
+                        toast.warning('Asset saved. Expense not logged — set a purchase value greater than 0 to record it as an expense.');
+                    } else {
+                        try {
+                            await onAddExpense({
+                                id: Math.random().toString(36).substr(2, 9),
+                                farmId: state.currentFarmId!,
+                                date: item.purchaseDate!,
+                                amount: item.value,
+                                description: `Purchase of Asset: ${item.name} (${item.assetTag})`,
+                                category: ExpenseCategory.INFRASTRUCTURE,
+                            });
+                            toast.success('Asset created and expense logged.');
+                        } catch (expErr: any) {
+                            console.error('Asset created but expense logging failed:', expErr);
+                            toast.error(`Asset saved, but expense logging failed: ${expErr?.message || 'unknown error'}`);
+                        }
+                    }
+                } else {
+                    toast.success('Asset created.');
                 }
             }
             setViewMode('LIST');
             setInfraForm({ name: '', assetTag: '', category: 'EQUIPMENT', status: 'OPERATIONAL', location: '', value: 0, purchaseDate: '', imageUrl: '' });
-        } catch (e) {
+            // Reset the shared "log as expense" checkbox so it doesn't leak across forms / submits.
+            setCreateExpense(false);
+        } catch (e: any) {
             console.error(e);
-            alert("Failed to save asset. Is the backend running?");
+            toast.error(`Failed to save asset: ${e?.message || 'Is the backend running?'}`);
         }
     };
 
@@ -414,7 +462,7 @@ export const Operations: React.FC<Props> = ({
     };
 
     const handleServiceSubmit = async () => {
-        if (!servicingAsset || !serviceForm.date) return alert("Service date required");
+        if (!servicingAsset || !serviceForm.date) { toast.warning('Service date is required.'); return; }
 
         const record: MaintenanceRecord = {
             id: Math.random().toString(36).substr(2, 9),
@@ -438,32 +486,44 @@ export const Operations: React.FC<Props> = ({
         try {
             await onUpdateInfrastructure(updatedAsset);
 
-            if (createExpense && record.cost > 0) {
-                try {
-                    await onAddExpense({
-                        id: Math.random().toString(36).substr(2, 9),
-                        farmId: state.currentFarmId!,
-                        date: record.date!,
-                        amount: record.cost,
-                        description: `Service for ${updatedAsset.name}: ${record.description}`,
-                        category: ExpenseCategory.MAINTENANCE
-                    });
-                } catch (err) { console.error("Expense log failed", err); }
+            if (createExpense) {
+                if (!(record.cost > 0)) {
+                    toast.warning('Service logged. Expense not recorded — enter a cost greater than 0 to log it as an expense.');
+                } else {
+                    try {
+                        await onAddExpense({
+                            id: Math.random().toString(36).substr(2, 9),
+                            farmId: state.currentFarmId!,
+                            date: record.date!,
+                            amount: record.cost,
+                            description: `Service for ${updatedAsset.name}: ${record.description}`,
+                            category: ExpenseCategory.MAINTENANCE,
+                        });
+                        toast.success('Service logged and expense recorded.');
+                    } catch (expErr: any) {
+                        console.error('Service logged but expense recording failed:', expErr);
+                        toast.error(`Service logged, but expense recording failed: ${expErr?.message || 'unknown error'}`);
+                    }
+                }
+            } else {
+                toast.success('Service logged.');
             }
 
             setViewMode('LIST');
             setServicingAsset(null);
-        } catch (e) {
+            setCreateExpense(false);
+        } catch (e: any) {
             console.error(e);
-            alert("Failed to log service.");
+            toast.error(`Failed to log service: ${e?.message || 'unknown error'}`);
         }
     };
 
     const handleDietSubmit = async () => {
-        if (!dietForm.name || (!dietForm.items || dietForm.items.length === 0)) return alert("Name and at least one ingredient required");
-        if (!state.currentFarmId) return alert("Please select a farm first.");
+        if (!dietForm.name || (!dietForm.items || dietForm.items.length === 0)) { toast.warning('Name and at least one ingredient are required.'); return; }
+        if (!state.currentFarmId) { toast.warning('Select a farm first.'); return; }
         if ((dietForm.targetType || '') === 'INDIVIDUAL' && (!dietForm.targetIds || dietForm.targetIds.length === 0)) {
-            return alert("Please select at least one animal under Target Selection when using Individual Animal.");
+            toast.warning('Select at least one animal under Target Selection when using Individual Animal.');
+            return;
         }
 
         const rawItems = dietForm.items || [];
@@ -497,13 +557,13 @@ export const Operations: React.FC<Props> = ({
             setViewMode('LIST');
         } catch (e) {
             console.error(e);
-            alert("Failed to save diet plan. Is the backend running?");
+            toast.error('Failed to save diet plan. Is the backend running?');
         }
     };
 
     const handleProtocolSubmit = async () => {
-        if (!protocolForm.name || (!protocolForm.items || protocolForm.items.length === 0)) return alert("Name and at least one medicine item required");
-        if (!state.currentFarmId) return alert("Please select a farm first.");
+        if (!protocolForm.name || (!protocolForm.items || protocolForm.items.length === 0)) { toast.warning('Name and at least one medicine item are required.'); return; }
+        if (!state.currentFarmId) { toast.warning('Select a farm first.'); return; }
 
         const protocol: TreatmentProtocol = {
             id: editingProtocol ? editingProtocol.id : Math.random().toString(36).substr(2, 9),
@@ -524,7 +584,7 @@ export const Operations: React.FC<Props> = ({
             setViewMode('LIST');
         } catch (e) {
             console.error(e);
-            alert("Failed to save protocol.");
+            toast.error('Failed to save protocol.');
         }
     };
 
@@ -873,7 +933,17 @@ export const Operations: React.FC<Props> = ({
                                                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                                                         <div className="flex justify-end gap-2">
                                                             <button onClick={() => openEditFeed(item)} className="text-emerald-600 hover:text-emerald-900 bg-emerald-50 p-1.5 rounded"><Edit2 size={16} /></button>
-                                                            <button onClick={() => { if (confirm('Delete this item?')) onDeleteFeed(item.id); }} className="text-red-600 hover:text-red-900 bg-red-50 p-1.5 rounded"><Trash2 size={16} /></button>
+                                                            <button onClick={async () => {
+                                                                const ok = await confirmDialog({
+                                                                    title: 'Delete item',
+                                                                    message: 'Delete this item? This cannot be undone.',
+                                                                    confirmLabel: 'Delete',
+                                                                    danger: true,
+                                                                });
+                                                                if (!ok) return;
+                                                                onDeleteFeed(item.id);
+                                                                toast.success('Item deleted.');
+                                                            }} className="text-red-600 hover:text-red-900 bg-red-50 p-1.5 rounded"><Trash2 size={16} /></button>
                                                         </div>
                                                     </td>
                                                 </tr>
@@ -905,7 +975,7 @@ export const Operations: React.FC<Props> = ({
                                     </div>
                                     <div>
                                         <label className="block text-sm font-medium text-gray-700 mb-1">Initial Quantity ({feedForm.unit || 'KG'})</label>
-                                        <input type="number" value={feedForm.quantity} onChange={e => setFeedForm({ ...feedForm, quantity: Number(e.target.value) })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" disabled={!!editingFeed} title={editingFeed ? "Change stock via usage or procurement" : ""} />
+                                        <input type="number" value={feedForm.quantity} onChange={e => setFeedForm({ ...feedForm, quantity: (Number(e.target.value) || 0) })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" disabled={!!editingFeed} title={editingFeed ? "Change stock via usage or procurement" : ""} />
                                     </div>
                                     <div>
                                         <label className="block text-sm font-medium text-gray-700 mb-1">Unit Format</label>
@@ -916,16 +986,16 @@ export const Operations: React.FC<Props> = ({
                                     {['BAG', 'BUNDLE'].includes(feedForm.unit || '') && (
                                         <div className="animate-fade-in-up">
                                             <label className="block text-sm font-medium text-gray-700 mb-1">Weight Per {feedForm.unit} (KG)</label>
-                                            <input type="number" min={0} step={0.1} value={feedForm.weightPerUnit || ''} onChange={e => setFeedForm({ ...feedForm, weightPerUnit: Number(e.target.value) || 0 })} className="w-full border border-emerald-200 bg-emerald-50 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" placeholder="e.g. 40" />
+                                            <input type="number" min={0} step={0.1} value={feedForm.weightPerUnit || ''} onChange={e => setFeedForm({ ...feedForm, weightPerUnit: (Number(e.target.value) || 0) || 0 })} className="w-full border border-emerald-200 bg-emerald-50 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" placeholder="e.g. 40" />
                                         </div>
                                     )}
                                     <div className="lg:col-span-1 border-t border-gray-100 pt-3">
                                         <label className="block text-sm font-medium text-gray-700 mb-1">Base Cost (PKR / {feedForm.unit || 'KG'})</label>
-                                        <input type="number" value={feedForm.unitCost} onChange={e => setFeedForm({ ...feedForm, unitCost: Number(e.target.value) })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" />
+                                        <input type="number" value={feedForm.unitCost} onChange={e => setFeedForm({ ...feedForm, unitCost: (Number(e.target.value) || 0) })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" />
                                     </div>
                                     <div className="lg:col-span-2 border-t border-gray-100 pt-3">
                                         <label className="block text-sm font-medium text-gray-700 mb-1">Reorder Alert Level ({feedForm.unit || 'KG'})</label>
-                                        <input type="number" value={feedForm.reorderLevel} onChange={e => setFeedForm({ ...feedForm, reorderLevel: Number(e.target.value) })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" />
+                                        <input type="number" value={feedForm.reorderLevel} onChange={e => setFeedForm({ ...feedForm, reorderLevel: (Number(e.target.value) || 0) })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" />
                                         <p className="text-xs text-gray-400 mt-1">System flags "Low Stock" when quantity drops below this.</p>
                                     </div>
 
@@ -1120,7 +1190,17 @@ export const Operations: React.FC<Props> = ({
                                             <button onClick={() => openEditInfra(infra)} className="text-emerald-600 hover:text-emerald-800 text-sm flex items-center gap-1">
                                                 <Edit2 size={14} /> Edit
                                             </button>
-                                            <button onClick={async () => { if (confirm(`Remove asset ${infra.assetTag}?`)) await onDeleteInfrastructure(infra.id); }} className="text-red-500 hover:text-red-700 text-sm flex items-center gap-1">
+                                            <button onClick={async () => {
+                                                const ok = await confirmDialog({
+                                                    title: 'Remove asset',
+                                                    message: `Remove asset ${infra.assetTag}? This cannot be undone.`,
+                                                    confirmLabel: 'Remove',
+                                                    danger: true,
+                                                });
+                                                if (!ok) return;
+                                                await onDeleteInfrastructure(infra.id);
+                                                toast.success('Asset removed.');
+                                            }} className="text-red-500 hover:text-red-700 text-sm flex items-center gap-1">
                                                 <Trash2 size={14} /> Remove
                                             </button>
                                         </div>
@@ -1207,11 +1287,11 @@ export const Operations: React.FC<Props> = ({
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                     <div>
                                         <label className="block text-sm font-medium text-gray-700 mb-1">Lifespan (Years)</label>
-                                        <input type="number" value={infraForm.lifespanYears} onChange={e => setInfraForm({ ...infraForm, lifespanYears: Number(e.target.value) })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" />
+                                        <input type="number" value={infraForm.lifespanYears} onChange={e => setInfraForm({ ...infraForm, lifespanYears: (Number(e.target.value) || 0) })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" />
                                     </div>
                                     <div>
                                         <label className="block text-sm font-medium text-gray-700 mb-1">Depreciation Rate (%)</label>
-                                        <input type="number" value={infraForm.depreciationRate} onChange={e => setInfraForm({ ...infraForm, depreciationRate: Number(e.target.value) })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" />
+                                        <input type="number" value={infraForm.depreciationRate} onChange={e => setInfraForm({ ...infraForm, depreciationRate: (Number(e.target.value) || 0) })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" />
                                     </div>
                                 </div>
 
@@ -1223,7 +1303,7 @@ export const Operations: React.FC<Props> = ({
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                     <div>
                                         <label className="block text-sm font-medium text-gray-700 mb-1">Value (PKR)</label>
-                                        <input type="number" value={infraForm.value} onChange={e => setInfraForm({ ...infraForm, value: parseFloat(e.target.value) })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" />
+                                        <input type="number" value={infraForm.value} onChange={e => setInfraForm({ ...infraForm, value: (parseFloat(e.target.value) || 0) })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" />
                                     </div>
                                     <div>
                                         <label className="block text-sm font-medium text-gray-700 mb-1">Purchase Date</label>
@@ -1342,7 +1422,7 @@ export const Operations: React.FC<Props> = ({
                                                 <label className="block text-xs text-gray-500 mb-1">Dosage</label>
                                                 <input type="number" value={item.dosage} onChange={e => {
                                                     const newItems = [...(protocolForm.items || [])];
-                                                    newItems[idx] = { ...item, dosage: parseFloat(e.target.value) };
+                                                    newItems[idx] = { ...item, dosage: (parseFloat(e.target.value) || 0) };
                                                     setProtocolForm({ ...protocolForm, items: newItems });
                                                 }} className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-teal-500 outline-none" />
                                             </div>
@@ -1418,7 +1498,7 @@ export const Operations: React.FC<Props> = ({
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1">Quantity *</label>
-                                    <input type="number" value={feedForm.quantity} onChange={e => setFeedForm({ ...feedForm, quantity: parseFloat(e.target.value) })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" />
+                                    <input type="number" value={feedForm.quantity} onChange={e => setFeedForm({ ...feedForm, quantity: (parseFloat(e.target.value) || 0) })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" />
                                 </div>
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1">Unit *</label>
@@ -1456,7 +1536,7 @@ export const Operations: React.FC<Props> = ({
                             {activeTab === 'MEDICINE' && ['bottle', 'vial', 'box'].includes(feedForm.unit?.toLowerCase() || '') && (
                                 <div className="animate-fade-in-up">
                                     <label className="block text-sm font-medium text-gray-700 mb-1">Total Volume/Doses per {feedForm.unit} (e.g. 100 for 100ml)</label>
-                                    <input type="number" min={0} step={0.1} value={feedForm.weightPerUnit || ''} onChange={e => setFeedForm({ ...feedForm, weightPerUnit: Number(e.target.value) || 0 })} className="w-full border border-blue-200 bg-blue-50 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none" placeholder="e.g. 100" />
+                                    <input type="number" min={0} step={0.1} value={feedForm.weightPerUnit || ''} onChange={e => setFeedForm({ ...feedForm, weightPerUnit: (Number(e.target.value) || 0) || 0 })} className="w-full border border-blue-200 bg-blue-50 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none" placeholder="e.g. 100" />
                                     <p className="text-xs text-blue-600 mt-1">Used to accurately deduct stock when administering specific dosages in ml/mg.</p>
                                 </div>
                             )}
@@ -1475,11 +1555,11 @@ export const Operations: React.FC<Props> = ({
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1">Unit Cost (PKR)</label>
-                                    <input type="number" value={feedForm.unitCost} onChange={e => setFeedForm({ ...feedForm, unitCost: parseFloat(e.target.value) })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" />
+                                    <input type="number" value={feedForm.unitCost} onChange={e => setFeedForm({ ...feedForm, unitCost: (parseFloat(e.target.value) || 0) })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" />
                                 </div>
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1">Reorder Level</label>
-                                    <input type="number" value={feedForm.reorderLevel} onChange={e => setFeedForm({ ...feedForm, reorderLevel: parseFloat(e.target.value) })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" />
+                                    <input type="number" value={feedForm.reorderLevel} onChange={e => setFeedForm({ ...feedForm, reorderLevel: (parseFloat(e.target.value) || 0) })} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 outline-none" />
                                 </div>
                             </div>
 
@@ -1578,7 +1658,17 @@ export const Operations: React.FC<Props> = ({
                                                             </div>
                                                             <div className="flex gap-2">
                                                                 <button onClick={() => openEditDiet(plan)} className="text-gray-400 hover:text-emerald-600"><Edit2 size={16} /></button>
-                                                                <button onClick={() => { if (confirm('Delete this diet plan?')) onDeleteDietPlan(plan.id); }} className="text-gray-400 hover:text-red-600"><Trash2 size={16} /></button>
+                                                                <button onClick={async () => {
+                                                                    const ok = await confirmDialog({
+                                                                        title: 'Delete diet plan',
+                                                                        message: 'Delete this diet plan? This cannot be undone.',
+                                                                        confirmLabel: 'Delete',
+                                                                        danger: true,
+                                                                    });
+                                                                    if (!ok) return;
+                                                                    onDeleteDietPlan(plan.id);
+                                                                    toast.success('Diet plan deleted.');
+                                                                }} className="text-gray-400 hover:text-red-600"><Trash2 size={16} /></button>
                                                             </div>
                                                         </div>
 
@@ -1927,9 +2017,16 @@ export const Operations: React.FC<Props> = ({
                                                 <p className="text-xs text-gray-500 mt-1">History of all successfully processed daily diets and material deductions.</p>
                                             </div>
                                             {(state.processedFeedLedgers?.length > 0 || state.consumptionLogs?.length > 0) && (
-                                                <button onClick={() => {
-                                                    if (confirm('DANGER: Are you sure you want to completely PURGE all processing history? This will permanently delete the transaction logs. (Cost mapping on animals and inventory deductions will REMAIN INTACT, only the viewable history is deleted).')) {
+                                                <button onClick={async () => {
+                                                    const ok = await confirmDialog({
+                                                        title: 'Purge processing history',
+                                                        message: 'DANGER: Permanently delete all processing transaction logs? Cost mapping on animals and inventory deductions will remain intact — only the viewable history is deleted.',
+                                                        confirmLabel: 'Purge history',
+                                                        danger: true,
+                                                    });
+                                                    if (ok) {
                                                         onClearFeedLedger();
+                                                        toast.success('Processing history cleared.');
                                                     }
                                                 }} className="bg-red-50 text-red-600 font-bold px-4 py-2 text-xs rounded-xl hover:bg-red-100 transition-colors border border-red-200">
                                                     CLEAR HISTORY
@@ -2018,10 +2115,16 @@ export const Operations: React.FC<Props> = ({
                                                                             <span className="text-[10px] text-gray-400 font-medium">LEGACY NO-REVERSE</span>
                                                                         ) : (
                                                                             <button
-                                                                                onClick={() => {
-                                                                                    if (confirm('Are you absolutely sure you want to REVERSE this transaction? This will instantly place inventory back into your physical stock and lower the accumulated cost mapping on the animals.')) {
-                                                                                        onReverseFeedLedger(ledger.id);
-                                                                                    }
+                                                                                onClick={async () => {
+                                                                                    const ok = await confirmDialog({
+                                                                                        title: 'Reverse transaction',
+                                                                                        message: 'Reverse this transaction? Inventory will be placed back into stock and the accumulated cost mapping on the animals will be reduced.',
+                                                                                        confirmLabel: 'Reverse',
+                                                                                        danger: true,
+                                                                                    });
+                                                                                    if (!ok) return;
+                                                                                    onReverseFeedLedger(ledger.id);
+                                                                                    toast.success('Transaction reversed.');
                                                                                 }}
                                                                                 className="text-xs font-bold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-3 py-1.5 rounded transition-colors"
                                                                             >
@@ -2169,7 +2272,7 @@ export const Operations: React.FC<Props> = ({
                                                                 value={item.quantity}
                                                                 onChange={e => {
                                                                     const newItems = [...(dietForm.items || [])];
-                                                                    newItems[index] = { ...item, quantity: parseFloat(e.target.value) };
+                                                                    newItems[index] = { ...item, quantity: (parseFloat(e.target.value) || 0) };
                                                                     setDietForm({ ...dietForm, items: newItems });
                                                                 }}
                                                                 className="w-full px-2 py-1 text-sm outline-none bg-transparent"

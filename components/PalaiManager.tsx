@@ -3,6 +3,7 @@ import { AppState, Livestock, Entity } from '../types';
 import { User, ClipboardList, TrendingUp, ArrowRight, Activity, Loader2 } from 'lucide-react';
 import { backendService } from '../services/backendService';
 import { FeedSkeleton, WidgetSkeleton } from './Skeleton';
+import { useToast } from './Toast';
 
 interface Props {
     state: AppState;
@@ -11,6 +12,7 @@ interface Props {
 }
 
 export const PalaiManager: React.FC<Props> = ({ state, onUpdateLivestock, onAddExpense }) => {
+    const toast = useToast();
     const [activeTab, setActiveTab] = useState<'OVERVIEW' | 'CUSTOMERS' | 'ANIMALS' | 'PACKAGES'>('OVERVIEW');
     const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
     const [customerTab, setCustomerTab] = useState<'ANIMALS' | 'LEDGER' | 'INVOICE'>('ANIMALS');
@@ -61,13 +63,13 @@ export const PalaiManager: React.FC<Props> = ({ state, onUpdateLivestock, onAddE
                 billingPeriodEnd: invoiceDateRange.end
             };
             await backendService.createPalaiInvoice(payload);
-            alert("Invoice generated successfully! The engine has calculated the total based on animal plans.");
+            toast.success('Invoice generated. Total auto-calculated from animal plans.', { title: 'Invoice ready' });
             setCustomerTab('LEDGER');
             handleViewLedger(selectedCustomerId);
             fetchPalaiData();
         } catch (err) {
             console.error(err);
-            alert("Failed to generate invoice");
+            toast.error('Failed to generate invoice. Please try again.');
         } finally {
             setIsGeneratingInvoice(false);
         }
@@ -96,13 +98,13 @@ export const PalaiManager: React.FC<Props> = ({ state, onUpdateLivestock, onAddE
                 date: new Date().toISOString(),
                 notes: 'Palai Service Payment'
             });
-            alert("Payment recorded successfully!");
+            toast.success('Payment recorded successfully.');
             setPaymentAmount(0);
             handleViewLedger(selectedCustomerId);
             fetchPalaiData();
         } catch (err) {
             console.error(err);
-            alert("Failed to record payment");
+            toast.error('Failed to record payment. Please try again.');
         } finally {
             setIsProcessingPayment(false);
         }
@@ -129,7 +131,7 @@ export const PalaiManager: React.FC<Props> = ({ state, onUpdateLivestock, onAddE
 
     if (isLoading) {
         return (
-            <div className="space-y-6 animate-fade-in pb-10 mt-6">
+            <div className="space-y-5 animate-fade-in">
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                     <WidgetSkeleton />
                     <WidgetSkeleton />
@@ -141,7 +143,7 @@ export const PalaiManager: React.FC<Props> = ({ state, onUpdateLivestock, onAddE
     }
 
     return (
-        <div className="space-y-6 animate-fade-in pb-10">
+        <div className="space-y-5 animate-fade-in">
             <div className="flex justify-between items-center">
                 <div>
                     <h2 className="text-2xl font-bold text-gray-800">Palai Management (Third-Party)</h2>
@@ -385,7 +387,7 @@ export const PalaiManager: React.FC<Props> = ({ state, onUpdateLivestock, onAddE
                                                         <p className="text-sm text-gray-600">Log a manual payment received from {cust.name} to clear their outstanding balance.</p>
                                                         <div>
                                                             <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Amount Received (PKR)</label>
-                                                            <input type="number" value={paymentAmount} onChange={e => setPaymentAmount(parseFloat(e.target.value))} className="w-full border-b-2 border-gray-100 focus:border-blue-500 py-2 outline-none font-bold text-lg" placeholder="0" />
+                                                            <input type="number" value={paymentAmount} onChange={e => setPaymentAmount(parseFloat(e.target.value) || 0)} className="w-full border-b-2 border-gray-100 focus:border-blue-500 py-2 outline-none font-bold text-lg" placeholder="0" />
                                                         </div>
                                                         <div className="pt-2 flex justify-end">
                                                             <button onClick={handleRecordPayment} disabled={isProcessingPayment || paymentAmount <= 0} className="px-4 py-2 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 flex items-center">

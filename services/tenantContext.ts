@@ -46,6 +46,14 @@ export function setTenant(tenant: Partial<TenantState>): void {
     instanceId: tenant.instanceId ?? prev.instanceId,
     appType: tenant.appType ?? prev.appType
   };
+  // If the active company actually changes, drop the previous tenant's cached blobs so they don't
+  // leak into the new session (sales, livestock status overrides, etc.).
+  if (prev.companyName && next.companyName && prev.companyName !== next.companyName) {
+    try {
+      localStorage.removeItem(SALES_STORAGE_PREFIX + prev.companyName);
+      localStorage.removeItem(LIVESTOCK_STATUS_PREFIX + prev.companyName);
+    } catch (_) {}
+  }
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
   } catch (_) {}
@@ -98,13 +106,36 @@ export function setPersistedSales(sales: unknown[]): void {
   } catch (_) {}
 }
 
-const LIVESTOCK_STATUS_KEY = 'cattleops_livestock_status';
+/**
+ * Per-tenant key namespace for livestock status overrides. The previous global key
+ * (`cattleops_livestock_status`) was shared across all tenants in the browser, so opening a second
+ * tenant could see "SOLD" overrides from the first one. We now scope by company name and also
+ * migrate any legacy global blob into the currently active tenant on first read.
+ */
+const LIVESTOCK_STATUS_PREFIX = 'cattleops_livestock_status_';
+const LEGACY_LIVESTOCK_STATUS_KEY = 'cattleops_livestock_status';
+
+function livestockStatusKey(): string {
+  const t = getTenant();
+  return LIVESTOCK_STATUS_PREFIX + (t.companyName || 'default');
+}
 
 /** Get persisted livestock status overrides (id -> status) so SOLD etc. survive refresh */
 export function getPersistedLivestockStatus(): Record<string, string> {
   if (!isDemoMode()) return {};
   try {
-    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(LIVESTOCK_STATUS_KEY) : null;
+    const key = livestockStatusKey();
+    let raw = typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null;
+    // One-time migration: pull legacy global blob into the active tenant namespace so existing
+    // installations don't lose their offline overrides on first load after this fix.
+    if (!raw && typeof localStorage !== 'undefined') {
+      const legacy = localStorage.getItem(LEGACY_LIVESTOCK_STATUS_KEY);
+      if (legacy) {
+        localStorage.setItem(key, legacy);
+        localStorage.removeItem(LEGACY_LIVESTOCK_STATUS_KEY);
+        raw = legacy;
+      }
+    }
     if (!raw) return {};
     const o = JSON.parse(raw);
     return o && typeof o === 'object' ? o : {};
@@ -119,6 +150,21 @@ export function setPersistedLivestockStatus(updates: Record<string, string>): vo
   try {
     const prev = getPersistedLivestockStatus();
     const next = { ...prev, ...updates };
-    localStorage.setItem(LIVESTOCK_STATUS_KEY, JSON.stringify(next));
+    localStorage.setItem(livestockStatusKey(), JSON.stringify(next));
+  } catch (_) {}
+}
+
+/**
+ * Drop all per-tenant cached state for the current tenant. Intended for sign-out or "switch tenant"
+ * flows so a follow-up login doesn't see the previous tenant's stale livestock overrides / sales.
+ */
+export function clearTenantCachedData(): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    const t = getTenant();
+    const company = t.companyName || 'default';
+    localStorage.removeItem(SALES_STORAGE_PREFIX + company);
+    localStorage.removeItem(LIVESTOCK_STATUS_PREFIX + company);
+    localStorage.removeItem(LEGACY_LIVESTOCK_STATUS_KEY);
   } catch (_) {}
 }

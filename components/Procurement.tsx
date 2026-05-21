@@ -3,6 +3,8 @@ import { backendService } from '../services/backendService';
 import { AppState, Expense, FeedInventory } from '../types';
 import { Truck, ShoppingCart, User, AlertTriangle, CheckCircle, Clock, Search, Layers, Archive, Activity, RefreshCw, MinusCircle, Edit2, X, Save, Plus, Package, TrendingUp, BarChart, DollarSign, ArrowRight, Filter, Download } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart as RechartsBarChart, Bar, PieChart, Pie, Cell } from 'recharts';
+import { useToast } from './Toast';
+import { useConfirm } from './ConfirmDialog';
 
 interface Props {
     state: AppState;
@@ -17,7 +19,7 @@ interface Props {
 const FEED_TYPES = ['GRASS', 'TMR', 'WANDA', 'OTHER'];
 const UNIT_OPTIONS = ['KG', 'TON', 'BUNDLE', 'BAG'];
 
-export const Procurement: React.FC<Props> = ({ state, onUpdateExpense, onAddFeed, onUpdateInventory, onDeleteFeed, onRefreshProcurement }) => {
+export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpense, onAddFeed, onUpdateInventory, onDeleteFeed }) => {
     const [activeTab, setActiveTab] = useState<'DASHBOARD' | 'PROCUREMENT' | 'INVENTORY' | 'SUPPLIERS' | 'ANALYTICS'>('DASHBOARD');
 
     // VENDOR ENTITIES LOGIC - STRICT INTEGRATION
@@ -171,7 +173,7 @@ export const Procurement: React.FC<Props> = ({ state, onUpdateExpense, onAddFeed
             const month = e.date.substring(0, 7);
             m.set(month, (m.get(month) || 0) + e.amount);
         });
-        return Array.from(m.entries()).sort((a,b) => a[0].localeCompare(b[0])).map(([month, Total]) => ({ name: month, Total })).slice(-12);
+        return Array.from(m.entries()).sort((a, b) => a[0].localeCompare(b[0])).map(([month, Total]) => ({ name: month, Total })).slice(-12);
     }, [vendorExpenses]);
 
     const topPurchasedItems = useMemo(() => {
@@ -182,7 +184,7 @@ export const Procurement: React.FC<Props> = ({ state, onUpdateExpense, onAddFeed
             const ex = m.get(item.name) || { qty: 0, cost: 0, bg: item.feedType === 'GRASS' ? 'bg-emerald-500' : item.feedType === 'TMR' ? 'bg-blue-500' : 'bg-amber-500' };
             m.set(item.name, { ...ex, qty: ex.qty + (e.weight || e.quantity || 0), cost: ex.cost + e.amount });
         });
-        return Array.from(m.entries()).map(([name, data]) => ({ name, ...data })).sort((a,b) => b.cost - a.cost).slice(0, 5);
+        return Array.from(m.entries()).map(([name, data]) => ({ name, ...data })).sort((a, b) => b.cost - a.cost).slice(0, 5);
     }, [vendorExpenses, state.feed]);
 
     const vendorSpendDist = useMemo(() => {
@@ -191,7 +193,7 @@ export const Procurement: React.FC<Props> = ({ state, onUpdateExpense, onAddFeed
             const vendorName = e.supplier === CASH_LABEL ? 'Cash' : (vendorEntities.find(v => v.id === e.supplier)?.name || 'Unknown');
             m.set(vendorName, (m.get(vendorName) || 0) + e.amount);
         });
-        return Array.from(m.entries()).map(([name, value]) => ({ name, value })).sort((a,b) => b.value - a.value);
+        return Array.from(m.entries()).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
     }, [vendorExpenses, vendorEntities]);
 
     const payablesAging = useMemo(() => {
@@ -219,11 +221,11 @@ export const Procurement: React.FC<Props> = ({ state, onUpdateExpense, onAddFeed
     // --- ACTIONS ---
 
     const handleProcurementSubmit = async () => {
-        if (!state.currentFarmId) return alert("Please select a farm context.");
-        if (!procurementForm.vendorId || !procurementForm.rate || !procurementForm.feedTypeId) return alert("Please fill all required highlighted fields.");
+        if (!state.currentFarmId) { toast.warning('Select a farm context first.'); return; }
+        if (!procurementForm.vendorId || !procurementForm.rate || !procurementForm.feedTypeId) { toast.warning('Please fill all required highlighted fields.'); return; }
 
         const selectedItem = state.feed.find(f => f.id === procurementForm.feedTypeId);
-        if (!selectedItem) return alert("Invalid Feed Item Selected.");
+        if (!selectedItem) { toast.error('Invalid feed item selected.'); return; }
 
         // Define unit behavior: BAG/BUNDLE (or WANDA/TMR) = quantity in native unit (bags); else weight in kg.
         const isQtyBased = ['BAG', 'BUNDLE'].includes((selectedItem.unit || '').toUpperCase()) || ['WANDA', 'TMR'].includes(selectedItem.feedType || '');
@@ -235,8 +237,8 @@ export const Procurement: React.FC<Props> = ({ state, onUpdateExpense, onAddFeed
             procurementForm.weight = procurementForm.quantity * assumedWeightPerUnit;
         }
 
-        if (isQtyBased && (!procurementForm.quantity || !procurementForm.weight)) return alert("Quantity (Bags/Bundles) and Total Weight are required.");
-        if (!isQtyBased && !procurementForm.weight) return alert("Total Weight is required.");
+        if (isQtyBased && (!procurementForm.quantity || !procurementForm.weight)) { toast.warning('Quantity (Bags/Bundles) and Total Weight are required.'); return; }
+        if (!isQtyBased && !procurementForm.weight) { toast.warning('Total Weight is required.'); return; }
 
         // CORRECTED COST FORMULA:
         // If it's bag-based, the user enters Rate per Bag. If KG-based, Rate per KG.
@@ -268,19 +270,18 @@ export const Procurement: React.FC<Props> = ({ state, onUpdateExpense, onAddFeed
             await onRefreshProcurement?.();
             setProcurementRefreshKey(key => key + 1);
 
-            const vName = procurementForm.vendorId === CASH_LABEL ? "Cash" : vendorEntities.find(v => v.id === procurementForm.vendorId)?.name;
-            alert(`Procurement Recorded from ${vName}!`);
+            const vName = procurementForm.vendorId === CASH_LABEL ? 'Cash' : vendorEntities.find(v => v.id === procurementForm.vendorId)?.name;
+            toast.success(`Procurement recorded from ${vName}.`);
             setProcurementForm({ ...procurementForm, weight: 0, quantity: 0 });
         } catch (e) {
-            console.error(e);
-            return alert("Failed to save procurement purchase.");
+            return alert("Failed to save expense.");
         }
     };
 
     const handleUpdateExpenseSubmit = async () => {
         if (!editingExpense || !state.currentFarmId) return;
 
-        if (!procurementForm.vendorId || !procurementForm.rate || !procurementForm.feedTypeId) return alert("Missing required fields.");
+        if (!procurementForm.vendorId || !procurementForm.rate || !procurementForm.feedTypeId) { toast.warning('Missing required fields.'); return; }
 
         const selectedItem = state.feed.find(f => f.id === procurementForm.feedTypeId);
         if (!selectedItem) return;
@@ -293,8 +294,8 @@ export const Procurement: React.FC<Props> = ({ state, onUpdateExpense, onAddFeed
             procurementForm.weight = procurementForm.quantity * assumedWeightPerUnit;
         }
 
-        if (isQtyBased && (!procurementForm.quantity || !procurementForm.weight)) return alert("Quantity and Weight missing.");
-        if (!isQtyBased && !procurementForm.weight) return alert("Weight is required.");
+        if (isQtyBased && (!procurementForm.quantity || !procurementForm.weight)) { toast.warning('Quantity and Weight are missing.'); return; }
+        if (!isQtyBased && !procurementForm.weight) { toast.warning('Weight is required.'); return; }
 
         // CORRECTED COST FORMULA:
         const totalCost = isQtyBased && procurementForm.quantity > 0
@@ -357,7 +358,7 @@ export const Procurement: React.FC<Props> = ({ state, onUpdateExpense, onAddFeed
 
             setEditingExpense(null);
             setProcurementForm({ ...procurementForm, weight: 0, quantity: 0 });
-            alert("Record updated successfully!");
+            toast.success('Record updated successfully.');
         } catch (e) {
             console.error(e);
         }
@@ -385,7 +386,7 @@ export const Procurement: React.FC<Props> = ({ state, onUpdateExpense, onAddFeed
     };
 
     const handleSaveInventoryItem = () => {
-        if (!newItemForm.name) return alert("Item Name is required.");
+        if (!newItemForm.name) { toast.warning('Item name is required.'); return; }
         if (editingItem) {
             onUpdateInventory({ ...editingItem, ...newItemForm } as FeedInventory);
             setEditingItem(null);
@@ -423,27 +424,27 @@ export const Procurement: React.FC<Props> = ({ state, onUpdateExpense, onAddFeed
         const stockDisplay = isQtyBased
             ? `${item.quantity.toLocaleString()} ${item.unit}s (≈ ${(item.quantity * wpu).toLocaleString()} KG total)`
             : `${item.quantity.toLocaleString()} KG`;
-        const qtyStr = prompt(`Current stock: ${stockDisplay}\n\nEnter amount of ${item.name} consumed in KG:`);
+        const qtyStr = await promptDialog({
+            title: `Record usage – ${item.name}`,
+            message: `Current stock: ${stockDisplay}`,
+            label: 'Amount consumed (KG)',
+            inputType: 'number',
+            placeholder: '0',
+            confirmLabel: 'Deduct',
+            validate: v => {
+                const n = parseFloat(v);
+                if (!Number.isFinite(n) || n <= 0) return 'Enter a positive amount.';
+                const deduct = isQtyBased ? n / wpu : n;
+                if (deduct > (item.quantity ?? 0)) return 'Cannot consume more than available stock.';
+                return null;
+            },
+        });
         if (!qtyStr) return;
         const consumedKg = parseFloat(qtyStr);
-        if (isNaN(consumedKg) || consumedKg <= 0) return alert("Invalid amount");
         const toDeduct = isQtyBased ? consumedKg / wpu : consumedKg;
         if (toDeduct > (item.quantity ?? 0)) return alert("Cannot consume more than available stock!");
-        try {
-            const updated = await backendService.adjustFeed({
-                feedItemId: item.id,
-                direction: 'DECREASE',
-                quantity: toDeduct,
-                reason: `Manual outgoing recorded from Procurement (${consumedKg} KG)`
-            });
-            onUpdateInventory(updated?.id ? updated : { ...item, quantity: (item.quantity ?? 0) - toDeduct });
-            await onRefreshProcurement?.();
-            setProcurementRefreshKey(key => key + 1);
-            alert(`Successfully deducted ${consumedKg} KG${isQtyBased ? ` (${toDeduct.toFixed(3)} ${item.unit}s)` : ''} of ${item.name}.`);
-        } catch (e) {
-            console.error(e);
-            alert("Failed to record outgoing stock.");
-        }
+        onUpdateInventory({ ...item, quantity: (item.quantity ?? 0) - toDeduct });
+        alert(`Successfully deducted ${consumedKg} KG${isQtyBased ? ` (${toDeduct.toFixed(3)} ${item.unit}s)` : ''} of ${item.name}.`);
     };
 
     // Helper: Map Vendor ID to display Name
@@ -454,7 +455,7 @@ export const Procurement: React.FC<Props> = ({ state, onUpdateExpense, onAddFeed
     };
 
     return (
-        <div className="space-y-6 animate-fade-in pb-10">
+        <div className="space-y-5 animate-fade-in">
             {!state.currentFarmId && !state.currentLocationId && (
                 <div className="bg-amber-50 border border-amber-200 text-amber-800 px-4 py-3 rounded-xl flex items-center gap-2">
                     <AlertTriangle size={20} />
@@ -580,7 +581,7 @@ export const Procurement: React.FC<Props> = ({ state, onUpdateExpense, onAddFeed
                                         <LineChart data={monthlySpendTrend} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
                                             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
                                             <XAxis dataKey="name" tick={{ fontSize: 12, fill: '#64748b', fontWeight: 600 }} axisLine={false} tickLine={false} />
-                                            <YAxis tick={{ fontSize: 12, fill: '#64748b', fontWeight: 600 }} axisLine={false} tickLine={false} tickFormatter={(value) => `v${value >= 1000 ? (value/1000).toFixed(0)+'k' : value}`} />
+                                            <YAxis tick={{ fontSize: 12, fill: '#64748b', fontWeight: 600 }} axisLine={false} tickLine={false} tickFormatter={(value) => `v${value >= 1000 ? (value / 1000).toFixed(0) + 'k' : value}`} />
                                             <Tooltip formatter={(value: number) => `PKR ${value.toLocaleString()}`} contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)' }} />
                                             <Line type="monotone" dataKey="Total" stroke="#10b981" strokeWidth={4} dot={{ stroke: '#10b981', strokeWidth: 2, r: 6, fill: '#fff' }} activeDot={{ r: 8 }} />
                                         </LineChart>
@@ -619,7 +620,7 @@ export const Procurement: React.FC<Props> = ({ state, onUpdateExpense, onAddFeed
                                     <div key={item.name}>
                                         <div className="flex justify-between text-xs font-bold text-slate-600 mb-1">
                                             <span>{item.name}</span>
-                                            <span>PKR {(item.cost/1000).toFixed(1)}k</span>
+                                            <span>PKR {(item.cost / 1000).toFixed(1)}k</span>
                                         </div>
                                         <div className="w-full bg-slate-100 rounded-full h-1.5">
                                             <div className={`${item.bg} h-1.5 rounded-full`} style={{ width: `${Math.min(100, (item.cost / (topPurchasedItems[0]?.cost || 1)) * 100)}%` }}></div>
@@ -1081,7 +1082,17 @@ export const Procurement: React.FC<Props> = ({ state, onUpdateExpense, onAddFeed
                                 <div key={item.id} className="bg-white rounded-3xl border border-slate-200 shadow-sm relative group overflow-hidden hover:shadow-lg transition-all duration-300 transform hover:-translate-y-1">
                                     <div className="absolute top-4 right-4 flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
                                         <button onClick={() => startEditItem(item)} className="p-2 bg-slate-50 border border-slate-200 text-slate-500 rounded-lg hover:text-blue-600 hover:bg-blue-50 transition-colors"><Edit2 size={14} /></button>
-                                        <button onClick={() => { if (confirm("Permanently archive material?")) onDeleteFeed(item.id); }} className="p-2 bg-slate-50 border border-slate-200 text-slate-500 rounded-lg hover:text-red-600 hover:bg-red-50 transition-colors"><Archive size={14} /></button>
+                                        <button onClick={async () => {
+                                            const ok = await confirmDialog({
+                                                title: 'Archive material',
+                                                message: 'Permanently archive this material?',
+                                                confirmLabel: 'Archive',
+                                                danger: true,
+                                            });
+                                            if (!ok) return;
+                                            onDeleteFeed(item.id);
+                                            toast.success('Material archived.');
+                                        }} className="p-2 bg-slate-50 border border-slate-200 text-slate-500 rounded-lg hover:text-red-600 hover:bg-red-50 transition-colors"><Archive size={14} /></button>
                                     </div>
                                     <div className="p-6 pb-4 border-b border-slate-50">
                                         <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-md mb-2 inline-block ${item.feedType === 'GRASS' ? 'bg-emerald-100 text-emerald-800' : item.feedType === 'WANDA' ? 'bg-amber-100 text-amber-800' : 'bg-blue-100 text-blue-800'}`}>{item.feedType || 'MATERIAL'}</span>
@@ -1172,27 +1183,9 @@ export const Procurement: React.FC<Props> = ({ state, onUpdateExpense, onAddFeed
                                     </div>
 
                                     {pending > 0 ? (
-                                        <button onClick={async () => {
-                                            if (!confirm(`Create payment entries clearing PKR ${pending.toLocaleString()} dues for ${vendor.name}?`)) return;
-                                            const paymentDate = new Date().toISOString().split('T')[0];
-                                            try {
-                                                for (const bill of relatedBills.filter(b => b.paymentStatus !== 'PAID')) {
-                                                    const balance = Math.max(0, bill.amount - (bill.amountPaid || 0));
-                                                    if (balance <= 0) continue;
-                                                    await backendService.expensePayment(bill.id, {
-                                                        amount: balance,
-                                                        date: paymentDate,
-                                                        paymentMethod: 'CASH',
-                                                        notes: `Vendor settlement from Procurement for ${vendor.name}`
-                                                    });
-                                                    await onUpdateExpense({ ...bill, paymentStatus: 'PAID', amountPaid: bill.amount, paymentDate });
-                                                }
-                                                await onRefreshProcurement?.();
-                                                setProcurementRefreshKey(key => key + 1);
-                                            } catch (e) {
-                                                console.error(e);
-                                                alert("Failed to settle vendor dues.");
-                                            }
+                                        <button onClick={() => {
+                                            if (!confirm(`Log artificial payment clearing ${pending.toLocaleString()} dues? (Accounting Ledger unaffected)`)) return;
+                                            relatedBills.filter(b => b.paymentStatus !== 'PAID').forEach(b => onUpdateExpense({ ...b, paymentStatus: 'PAID', paymentDate: new Date().toISOString().split('T')[0] }));
                                         }} className="w-full bg-slate-800 hover:bg-slate-700 text-white py-3 rounded-xl text-xs font-black tracking-wider flex items-center justify-center gap-2 shadow-md transition-colors">
                                             <CheckCircle size={14} /> SETTLE DUES
                                         </button>
