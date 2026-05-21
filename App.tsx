@@ -30,6 +30,17 @@ function normalizeDietPlanTargetIds(p: DietPlan): DietPlan {
 import { setTenant as setTenantRedux } from './store/tenantSlice';
 import type { RootState } from './store';
 
+const IS_DEMO_MODE = (import.meta as any).env.VITE_DEMO_MODE === 'true';
+
+type AppNotification = {
+  id: string;
+  title?: string;
+  message?: string;
+  status?: string;
+  createdAt?: string;
+  read?: boolean;
+};
+
 function AddCityModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (name: string, type: 'CITY' | 'REGION') => void }) {
   const [name, setName] = React.useState('');
   const [type, setType] = React.useState<'CITY' | 'REGION'>('CITY');
@@ -113,11 +124,11 @@ const App: React.FC = () => {
     feed: [],
     infrastructure: [],
     dietPlans: [],
-    breeders: MOCK_BREEDERS,
+    breeders: IS_DEMO_MODE ? MOCK_BREEDERS : [],
     categories: FIXED_CATEGORIES,
     customers: [],
-    invoices: MOCK_INVOICES,
-    entities: MOCK_CUSTOMERS,
+    invoices: IS_DEMO_MODE ? MOCK_INVOICES : [],
+    entities: IS_DEMO_MODE ? MOCK_CUSTOMERS : [],
     bills: [],
     ledger: [],
     consumptionLogs: [],
@@ -143,6 +154,9 @@ const App: React.FC = () => {
   const [livestockPageResult, setLivestockPageResult] = useState<{ content: Livestock[]; totalElements: number; totalPages: number } | null>(null);
   const [livestockGridRefresh, setLivestockGridRefresh] = useState(0);
   const [financialsRefresh, setFinancialsRefresh] = useState(0);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [notificationsError, setNotificationsError] = useState<string | null>(null);
 
   // Tenant: on first load read URL and persist companyName & instanceId to localStorage + Redux
   useEffect(() => {
@@ -195,6 +209,7 @@ const App: React.FC = () => {
     const fetchData = async () => {
       try {
         setIsLoading(true);
+        setError(null);
         const companyName = reduxTenant.companyName;
         if (companyName?.trim()) {
           await backendService.ensureTenantSetup(companyName).catch(() => { });
@@ -204,7 +219,7 @@ const App: React.FC = () => {
           backendService.getFarms().catch(() => []),
           backendService.getLivestock(),
           backendService.getExpenses(),
-          backendService.getSales().catch((e) => { console.warn("getSales failed, using persisted:", e); return []; }),
+          backendService.getSales(),
           backendService.getFeed(),
           backendService.getInfrastructure(),
           backendService.getDietPlans(),
@@ -227,7 +242,7 @@ const App: React.FC = () => {
           const inferredFarmId = animal?.farmId;
           return { ...s, farmId: inferredFarmId ?? (s as any).farmId };
         });
-        const persisted = getPersistedSales() as Sale[];
+        const persisted = IS_DEMO_MODE ? getPersistedSales() as Sale[] : [];
         const mergedSales: Sale[] = [...enrichedApiSales];
         if (persisted?.length) {
           persisted.forEach(p => {
@@ -237,7 +252,7 @@ const App: React.FC = () => {
           });
         }
 
-        const statusOverrides = getPersistedLivestockStatus();
+        const statusOverrides = IS_DEMO_MODE ? getPersistedLivestockStatus() : {};
         const livestock = livestockList.map(l => ({
           ...l,
           status: (statusOverrides[l.id] as LivestockStatus) || l.status
@@ -266,24 +281,63 @@ const App: React.FC = () => {
           }
           return next;
         });
-        setPersistedSales(mergedSales);
+        if (IS_DEMO_MODE) setPersistedSales(mergedSales);
       } catch (err: any) {
-        console.error("Failed to load data, falling back to mocks", err);
-        setState(prev => ({
-          ...prev,
-          livestock: MOCK_LIVESTOCK,
-          expenses: MOCK_EXPENSES,
-          sales: MOCK_SALES,
-          feed: MOCK_FEED,
-          infrastructure: MOCK_INFRASTRUCTURE,
-          dietPlans: MOCK_DIET_PLANS
-        }));
+        console.error("Failed to load production data", err);
+        setError(err?.message || 'Failed to load data.');
+        if (IS_DEMO_MODE) {
+          console.warn("Demo mode enabled; falling back to mock data.");
+          setState(prev => ({
+            ...prev,
+            livestock: MOCK_LIVESTOCK,
+            expenses: MOCK_EXPENSES,
+            sales: MOCK_SALES,
+            feed: MOCK_FEED,
+            infrastructure: MOCK_INFRASTRUCTURE,
+            dietPlans: MOCK_DIET_PLANS,
+            breeders: MOCK_BREEDERS,
+            entities: MOCK_CUSTOMERS,
+            invoices: MOCK_INVOICES
+          }));
+        }
       } finally {
         setIsLoading(false);
       }
     };
     fetchData();
   }, [isAuthenticated]);
+
+  const loadNotifications = async () => {
+    try {
+      setNotificationsError(null);
+      const rows = await backendService.getNotifications();
+      setNotifications(Array.isArray(rows) ? rows.map((n: any) => ({
+        id: String(n.id ?? n.notificationId),
+        title: n.title ?? n.type ?? 'Notification',
+        message: n.message ?? n.body ?? n.description ?? '',
+        status: n.status,
+        read: n.read ?? n.status === 'READ',
+        createdAt: n.createdAt ?? n.date
+      })).filter(n => n.id) : []);
+    } catch (e: any) {
+      setNotifications([]);
+      setNotificationsError(e?.message || 'Unable to load notifications.');
+    }
+  };
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    loadNotifications();
+  }, [isAuthenticated]);
+
+  const markNotificationRead = async (id: string) => {
+    try {
+      await backendService.markNotificationRead(id);
+      setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true, status: 'READ' } : n));
+    } catch (e: any) {
+      alert(e?.message || 'Failed to mark notification read.');
+    }
+  };
 
   const handleLoginSuccess = (userData: { name: string; email: string }, token: string) => {
     setUser(userData);
@@ -523,15 +577,39 @@ const App: React.FC = () => {
 
   const updateLivestock = async (updatedAnimal: Livestock) => {
     try {
-      // 1. Perform Livestock Update on Server
-      const saved = await backendService.updateLivestock(updatedAnimal.id, updatedAnimal);
+      const current = state.livestock.find(l => l.id === updatedAnimal.id);
+      const changedKeys = current
+        ? Object.keys(updatedAnimal).filter((key) => JSON.stringify((updatedAnimal as any)[key] ?? null) !== JSON.stringify((current as any)[key] ?? null))
+        : [];
+      const onlyStatusChanged = current
+        && changedKeys.length === 1
+        && changedKeys[0] === 'status';
+      const onlyPalaiChanged = current
+        && changedKeys.length > 0
+        && changedKeys.every((key) => ['ownership', 'palaiCustomerId', 'palaiProfile'].includes(key));
+
+      let saved: Livestock;
+      if (onlyStatusChanged) {
+        await backendService.patchLivestockStatus(updatedAnimal.id, { status: updatedAnimal.status });
+        saved = updatedAnimal;
+      } else if (onlyPalaiChanged) {
+        await backendService.patchPalaiAssignment(updatedAnimal.id, {
+          clientId: updatedAnimal.palaiCustomerId || null,
+          palaiCustomerId: updatedAnimal.palaiCustomerId || null,
+          ownership: updatedAnimal.ownership,
+          palaiProfile: updatedAnimal.palaiProfile,
+        });
+        saved = updatedAnimal;
+      } else {
+        saved = await backendService.updateLivestock(updatedAnimal.id, updatedAnimal);
+      }
       
       // 2. Update Livestock State immediately
       setState(prev => ({
         ...prev,
         livestock: prev.livestock.map(l => l.id === saved.id ? saved : l)
       }));
-      setPersistedLivestockStatus({ [saved.id]: saved.status });
+      if (IS_DEMO_MODE) setPersistedLivestockStatus({ [saved.id]: saved.status });
       setLivestockGridRefresh(r => r + 1);
 
       // 3. Handle Expense (Purchase) Logic
@@ -781,6 +859,27 @@ const App: React.FC = () => {
     }
   };
 
+  const refreshProcurementData = async () => {
+    const [expenses, feed, entities, ledger] = await Promise.all([
+      backendService.getExpenses(),
+      backendService.getFeed(),
+      backendService.getEntities(),
+      backendService.getLedger()
+    ]);
+    setState(prev => ({ ...prev, expenses, feed, entities, ledger }));
+  };
+
+  const refreshFinancialData = async () => {
+    const [expenses, sales, entities, ledger] = await Promise.all([
+      backendService.getExpenses(),
+      backendService.getSales().catch(() => state.sales),
+      backendService.getEntities(),
+      backendService.getLedger()
+    ]);
+    setState(prev => ({ ...prev, expenses, sales, entities, ledger }));
+    setFinancialsRefresh(key => key + 1);
+  };
+
 
   const handleCreateSale = async (sale: Sale & { animalId?: string }) => {
     let targetFarmId = state.currentFarmId;
@@ -804,21 +903,23 @@ const App: React.FC = () => {
       soldAnimalIds: sale.soldAnimalIds ?? ((sale as any).animalId ? [(sale as any).animalId] : undefined)
     };
 
-    // Add to state immediately so the grid shows it (works even if API fails or is offline)
     const saleToShow: Sale = { ...saleWithContext, id: saleWithContext.id };
     const newSalesAfterAdd = [...state.sales, saleToShow];
-    setState(prev => ({ ...prev, sales: newSalesAfterAdd }));
-    setPersistedSales(newSalesAfterAdd);
+    if (IS_DEMO_MODE) {
+      setState(prev => ({ ...prev, sales: newSalesAfterAdd }));
+      setPersistedSales(newSalesAfterAdd);
+    }
 
     try {
       const isBulk = (saleWithContext.soldAnimalIds?.length ?? 0) > 1;
       const saved = isBulk
         ? await backendService.createSaleBulk(saleWithContext)
         : await backendService.createSale(saleWithContext);
-      const [salesFromApi, entities, ledger] = await Promise.all([
+      const [salesFromApi, entities, ledger, livestock] = await Promise.all([
         backendService.getSales().catch(() => []),
         backendService.getEntities(),
-        backendService.getLedger()
+        backendService.getLedger(),
+        backendService.getLivestock().catch(() => state.livestock)
       ]);
       const salesToSet = Array.isArray(salesFromApi) && salesFromApi.length > 0
         ? salesFromApi
@@ -826,13 +927,26 @@ const App: React.FC = () => {
       setState(prev => ({
         ...prev,
         sales: salesToSet,
+        livestock: toLivestockArray(livestock),
         entities,
         ledger
       }));
-      setPersistedSales(salesToSet);
+      if (IS_DEMO_MODE) setPersistedSales(salesToSet);
     } catch (e) {
-      // Sale already in state and persisted; keep it visible after refresh.
-      console.warn("Sale saved locally; backend sync failed:", e);
+      console.error("Sale save failed:", e);
+      if (!IS_DEMO_MODE) alert("Sale was not saved. Please check the backend connection and try again.");
+      throw e;
+    }
+  };
+
+  const handleRecordSalePayment = async (saleId: string, payment: { amount: number; date: string; paymentMethod?: string; notes?: string }) => {
+    try {
+      await backendService.salePayment(saleId, payment);
+      await refreshFinancialData();
+    } catch (e: any) {
+      console.error(e);
+      alert(e?.message || "Failed to record sale payment.");
+      throw e;
     }
   };
 
@@ -842,22 +956,18 @@ const App: React.FC = () => {
     try {
       if (!window.confirm("Are you sure you want to delete this sale? This will revert the animals to ACTIVE status.")) return;
       await backendService.deleteSale(id);
-
-      // Cascading rollback for animals
-      if (saleToDelete.soldAnimalIds) {
-        for (const animalId of saleToDelete.soldAnimalIds) {
-          const animalToRevert = state.livestock.find(l => l.id === animalId);
-          if (animalToRevert) {
-            await updateLivestock({ ...animalToRevert, status: 'ACTIVE' as any });
-          }
-        }
-      }
-
+      const [sales, livestock, entities, ledger] = await Promise.all([
+        backendService.getSales().catch(() => state.sales.filter(s => s.id !== id)),
+        backendService.getLivestock().catch(() => state.livestock),
+        backendService.getEntities(),
+        backendService.getLedger()
+      ]);
       setState(p => {
-        const nextSales = p.sales.filter(s => s.id !== id);
-        setPersistedSales(nextSales);
-        return { ...p, sales: nextSales };
+        const nextSales = Array.isArray(sales) ? sales : p.sales.filter(s => s.id !== id);
+        if (IS_DEMO_MODE) setPersistedSales(nextSales);
+        return { ...p, sales: nextSales, livestock: toLivestockArray(livestock), entities, ledger };
       });
+      setFinancialsRefresh(key => key + 1);
     } catch (e) {
       console.error(e);
       alert("Failed to delete sale completely. Check backend logs.");
@@ -947,6 +1057,8 @@ const App: React.FC = () => {
   if (!isAuthenticated) {
     return <Login onLoginSuccess={handleLoginSuccess} />;
   }
+
+  const unreadNotifications = notifications.filter(n => !n.read && n.status !== 'READ').length;
 
   return (
     <div className="flex min-h-screen bg-slate-50/50">
@@ -1056,18 +1168,85 @@ const App: React.FC = () => {
 
           <div className="hidden lg:flex items-center gap-4 ml-auto">
 
-            {/* Context Tooltip */}
-            <div className="relative group cursor-pointer flex items-center gap-2 text-slate-500 hover:text-emerald-600 transition-colors bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200">
+            {/* Header Context Switcher */}
+            <div className="flex items-center gap-2 text-slate-500 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200">
               <MapPin size={16} />
-              <span className="text-sm font-bold truncate max-w-[150px]">
-                {state.currentFarmId ? state.farms.find(f => f.id === state.currentFarmId)?.name : (state.currentLocationId ? state.locations.find(l => l.id === state.currentLocationId)?.name : 'Global View')}
-              </span>
-              
-              <div className="absolute right-0 top-full mt-2 w-64 bg-slate-800 text-white text-xs rounded-lg p-3 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 shadow-xl">
-                <div className="mb-1"><span className="text-slate-400">City:</span> {state.currentLocationId ? state.locations.find(l => l.id === state.currentLocationId)?.name : 'All Cities'}</div>
-                <div><span className="text-slate-400">Farm:</span> {state.currentFarmId ? state.farms.find(f => f.id === state.currentFarmId)?.name : 'All Farms'}</div>
-                <div className="mt-2 pt-2 border-t border-slate-700 text-slate-300 italic">Change this in Settings</div>
-              </div>
+              <select
+                value={state.currentLocationId || ''}
+                onChange={(e) => setState(prev => ({ ...prev, currentLocationId: e.target.value || null, currentFarmId: null }))}
+                className="bg-transparent text-xs font-bold text-slate-700 outline-none max-w-[140px]"
+                title="City context"
+              >
+                <option value="">All Cities</option>
+                {state.locations.map(location => <option key={location.id} value={location.id}>{location.name}</option>)}
+              </select>
+              <span className="text-slate-300">/</span>
+              <select
+                value={state.currentFarmId || ''}
+                onChange={(e) => setState(prev => ({ ...prev, currentFarmId: e.target.value || null }))}
+                className="bg-transparent text-xs font-bold text-slate-700 outline-none max-w-[150px]"
+                title="Farm context"
+              >
+                <option value="">{state.currentLocationId ? 'All Farms in City' : 'All Farms'}</option>
+                {state.farms
+                  .filter(farm => !state.currentLocationId || farm.locationId === state.currentLocationId)
+                  .map(farm => <option key={farm.id} value={farm.id}>{farm.name}</option>)}
+              </select>
+            </div>
+
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => { setNotificationsOpen(open => !open); if (!notificationsOpen) loadNotifications(); }}
+                className="relative p-2 text-slate-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors border border-slate-200 bg-white"
+                title="Notifications"
+              >
+                <Bell size={18} />
+                {unreadNotifications > 0 && (
+                  <span className="absolute -top-1 -right-1 min-w-5 h-5 px-1 rounded-full bg-red-500 text-white text-[10px] font-black flex items-center justify-center">
+                    {unreadNotifications > 9 ? '9+' : unreadNotifications}
+                  </span>
+                )}
+              </button>
+              {notificationsOpen && (
+                <div className="absolute right-0 top-full mt-2 w-96 max-w-[calc(100vw-2rem)] bg-white border border-slate-200 rounded-2xl shadow-2xl z-50 overflow-hidden">
+                  <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-black text-slate-800">Notifications</p>
+                      <p className="text-xs text-slate-400">{unreadNotifications} unread</p>
+                    </div>
+                    <button onClick={loadNotifications} className="text-xs font-bold text-emerald-700 hover:text-emerald-900">Refresh</button>
+                  </div>
+                  <div className="max-h-96 overflow-y-auto">
+                    {notificationsError && (
+                      <div className="m-3 p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700">{notificationsError}</div>
+                    )}
+                    {!notificationsError && notifications.length === 0 && (
+                      <div className="p-8 text-center">
+                        <Bell size={28} className="mx-auto text-slate-300 mb-2" />
+                        <p className="text-sm font-bold text-slate-500">No notifications</p>
+                      </div>
+                    )}
+                    {notifications.map(notification => (
+                      <button
+                        key={notification.id}
+                        type="button"
+                        onClick={() => !notification.read && notification.status !== 'READ' ? markNotificationRead(notification.id) : undefined}
+                        className={`w-full text-left px-4 py-3 border-b border-slate-100 hover:bg-slate-50 transition-colors ${notification.read || notification.status === 'READ' ? 'bg-white' : 'bg-emerald-50/50'}`}
+                      >
+                        <div className="flex items-start gap-3">
+                          <div className={`mt-1 w-2 h-2 rounded-full ${notification.read || notification.status === 'READ' ? 'bg-slate-300' : 'bg-emerald-500'}`} />
+                          <div className="min-w-0">
+                            <p className="text-sm font-bold text-slate-800 truncate">{notification.title || 'Notification'}</p>
+                            <p className="text-xs text-slate-500 line-clamp-2">{notification.message || 'No message provided.'}</p>
+                            {notification.createdAt && <p className="text-[10px] text-slate-400 mt-1">{notification.createdAt}</p>}
+                          </div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="flex items-center gap-2 text-gray-600">
@@ -1088,6 +1267,19 @@ const App: React.FC = () => {
 
         <main className="flex-1 overflow-y-auto p-4 md:p-8">
           <div className="max-w-7xl mx-auto">
+            {error && !IS_DEMO_MODE && (
+              <div className="mb-6 rounded-xl border border-red-200 bg-red-50 p-4 text-red-800">
+                <p className="font-bold">Unable to load production data</p>
+                <p className="text-sm mt-1">{error}</p>
+                <button
+                  type="button"
+                  onClick={() => window.location.reload()}
+                  className="mt-3 px-4 py-2 rounded-lg bg-red-600 text-white text-sm font-bold hover:bg-red-700"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
             {activeView === 'DASHBOARD' && (
               <Dashboard
                 isGlobalView={!state.currentFarmId && !state.currentLocationId}
@@ -1173,6 +1365,7 @@ const App: React.FC = () => {
                 onAddSale={handleCreateSale}
                 onUpdateLivestock={updateLivestock}
                 onDeleteSale={handleDeleteSale}
+                onRecordSalePayment={handleRecordSalePayment}
               />
             )}
             {activeView === 'FINANCE' && (
@@ -1190,6 +1383,8 @@ const App: React.FC = () => {
                 onAddSale={handleCreateSale}
                 onDeleteExpense={handleDeleteExpense}
                 onDeleteSale={handleDeleteSale}
+                onRecordSalePayment={handleRecordSalePayment}
+                onAfterPaymentMutation={refreshFinancialData}
                 onDeleteLivestock={async (id) => { await backendService.deleteLivestock(id); setState(p => ({ ...p, livestock: p.livestock.filter(l => l.id !== id) })); }}
                 refreshKey={financialsRefresh}
               />
@@ -1296,6 +1491,7 @@ const App: React.FC = () => {
                 }}
                 onUpdateInventory={async (item) => { const updated = await backendService.updateFeed(item.id, item); setState(p => ({ ...p, feed: p.feed.map(f => f.id === item.id ? updated : f) })); }}
                 onDeleteFeed={async (id) => { try { await backendService.deleteFeed(id); setState(p => ({ ...p, feed: p.feed.filter(f => f.id !== id) })); } catch (e) { alert('Failed to delete feed item'); } }}
+                onRefreshProcurement={refreshProcurementData}
               />
             )}
             {activeView === 'REPORTS' && <Reports currentFarmId={state.currentFarmId} state={{

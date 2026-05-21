@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { User, Settings as SettingsIcon, Shield, Key, Bell, Save, Mail, Briefcase, Database, Users, ChevronRight, CheckCircle, AlertTriangle } from 'lucide-react';
 
 import { Location, Farm } from '../types';
+import { backendService } from '../services/backendService';
 
 interface UserRole {
     id: string;
@@ -12,11 +13,14 @@ interface UserRole {
     lastLogin: string;
 }
 
-const initialUsers: UserRole[] = [
-    { id: '1', name: 'SuperAdmin User', email: 'admin@cattleops.com', role: 'SUPERADMIN', status: 'ACTIVE', lastLogin: '2026-02-28 10:00 AM' },
-    { id: '2', name: 'Farm Manager', email: 'manager@cattleops.com', role: 'MANAGER', status: 'ACTIVE', lastLogin: '2026-02-27 04:30 PM' },
-    { id: '3', name: 'Worker One', email: 'worker@cattleops.com', role: 'WORKER', status: 'ACTIVE', lastLogin: '2026-02-28 08:15 AM' }
-];
+const normalizeUser = (u: any): UserRole => ({
+    id: String(u.id ?? u.userId ?? u.email ?? Math.random()),
+    name: u.name ?? u.fullName ?? u.displayName ?? u.email ?? 'Unnamed User',
+    email: u.email ?? '',
+    role: (u.role ?? u.roleName ?? 'VIEWER') as UserRole['role'],
+    status: (u.status ?? (u.enabled === false ? 'INACTIVE' : 'ACTIVE')) as UserRole['status'],
+    lastLogin: u.lastLogin ?? u.lastLoginAt ?? 'Never'
+});
 
 interface SettingsProps {
     locations?: Location[];
@@ -42,7 +46,39 @@ export const SettingsModule: React.FC<SettingsProps> = ({
     onAddFarm
 }) => {
     const [activeDrawer, setActiveDrawer] = useState<'NONE' | 'GENERAL' | 'USERS' | 'SECURITY' | 'API'>('NONE');
-    const [users, setUsers] = useState<UserRole[]>(initialUsers);
+    const [users, setUsers] = useState<UserRole[]>([]);
+    const [usersLoading, setUsersLoading] = useState(false);
+    const [usersError, setUsersError] = useState<string | null>(null);
+
+    const loadUsers = async () => {
+        setUsersLoading(true);
+        setUsersError(null);
+        try {
+            const rows = await backendService.getUsers();
+            setUsers(Array.isArray(rows) ? rows.map(normalizeUser) : []);
+        } catch (e: any) {
+            setUsers([]);
+            setUsersError(e?.message || 'Unable to load team users.');
+        } finally {
+            setUsersLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        loadUsers();
+    }, []);
+
+    const inviteUser = async () => {
+        const email = prompt('Enter team member email');
+        if (!email) return;
+        const name = prompt('Enter team member name') || email;
+        try {
+            const created = await backendService.createUser({ email, name, role: 'VIEWER', status: 'ACTIVE' });
+            setUsers(prev => [...prev, normalizeUser(created)]);
+        } catch (e: any) {
+            alert(e?.message || 'Failed to invite user.');
+        }
+    };
 
     const DrawerTemplate = ({ title, icon: Icon, children }: any) => (
         <div className={`fixed inset-y-0 right-0 w-full md:w-[600px] bg-white shadow-2xl z-50 transform transition-transform duration-300 ease-in-out ${activeDrawer !== 'NONE' ? 'translate-x-0' : 'translate-x-full'}`}>
@@ -144,7 +180,7 @@ export const SettingsModule: React.FC<SettingsProps> = ({
                         <div className="bg-blue-100 text-blue-700 text-xs font-bold px-2 py-1 rounded-md">{users.length} Users</div>
                     </div>
                     <h3 className="font-bold text-slate-800 text-lg">Team Access</h3>
-                    <p className="text-sm text-slate-500 mt-1">Roles & permissions</p>
+                    <p className="text-sm text-slate-500 mt-1">Live team users from backend</p>
                 </div>
 
                 <div onClick={() => setActiveDrawer('SECURITY')} className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 hover:border-slate-300 premium-card cursor-pointer group">
@@ -217,9 +253,16 @@ export const SettingsModule: React.FC<SettingsProps> = ({
             {activeDrawer === 'USERS' && (
                 <DrawerTemplate title="Team Access" icon={Users}>
                     <div className="space-y-6">
-                        <button className="w-full py-4 border-2 border-dashed border-emerald-200 bg-emerald-50 text-emerald-700 font-bold rounded-2xl hover:bg-emerald-100 hover:border-emerald-300 transition-colors flex items-center justify-center gap-2">
+                        <button onClick={inviteUser} className="w-full py-4 border-2 border-dashed border-emerald-200 bg-emerald-50 text-emerald-700 font-bold rounded-2xl hover:bg-emerald-100 hover:border-emerald-300 transition-colors flex items-center justify-center gap-2">
                             + Invite New Member
                         </button>
+                        {usersLoading && <div className="bg-white border border-slate-200 rounded-2xl p-4 text-sm font-bold text-slate-500">Loading team access...</div>}
+                        {usersError && (
+                            <div className="bg-red-50 border border-red-200 rounded-2xl p-4 text-sm text-red-700 flex items-center justify-between gap-3">
+                                <span>{usersError}</span>
+                                <button onClick={loadUsers} className="px-3 py-1.5 rounded-lg bg-red-600 text-white text-xs font-bold">Retry</button>
+                            </div>
+                        )}
                         
                         <div className="space-y-3">
                             {users.map(u => (
@@ -240,6 +283,12 @@ export const SettingsModule: React.FC<SettingsProps> = ({
                                     </span>
                                 </div>
                             ))}
+                            {!usersLoading && !usersError && users.length === 0 && (
+                                <div className="bg-white border border-dashed border-slate-200 rounded-2xl p-8 text-center">
+                                    <Users size={32} className="mx-auto text-slate-300 mb-3" />
+                                    <p className="text-sm font-bold text-slate-500">No users returned by the backend.</p>
+                                </div>
+                            )}
                         </div>
                     </div>
                 </DrawerTemplate>

@@ -586,12 +586,6 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
 
                             await onAddSale(sale);
 
-                            // Update status of sold animals
-                            idsToSell.forEach(id => {
-                                const animal = livestock.find(l => l.id === id);
-                                if (animal) onUpdateLivestock({ ...animal, status: 'SOLD' });
-                            });
-
                             setIsSelling(false);
                             setSelectedBatchIds([]);
                             if (selectedAnimal) setCurrentView('LIST');

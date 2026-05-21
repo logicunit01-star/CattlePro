@@ -1,13 +1,12 @@
 
 import { Livestock, MedicalRecord, Expense, Sale, FeedInventory, Infrastructure, DietPlan, InseminationRecord, WeightRecord, MilkRecord, Entity, LedgerRecord, ConsumptionLog, TreatmentProtocol, TreatmentLog, Location, Farm, ProcessedFeedLedger } from '../types';
 import { getTenantHeaders, getTenant } from './tenantContext';
+import { API_BASE_URL, apiRequest } from './apiClient';
 
 // const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8381/api';
 // const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5003/livestock';
 
 //  const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5003/livestock';
-const API_BASE_URL = (import.meta as any).env.VITE_API_URL || 'https://api.hulmsolutions.com/livestock';
-
 function apiHeaders(json = false): Record<string, string> {
     const h: Record<string, string> = { ...getTenantHeaders() };
     if (json) h['Content-Type'] = 'application/json';
@@ -176,11 +175,10 @@ export const backendService = {
         return handleResponse(res);
     },
     addMilkRecord: async (animalId: string, record: MilkRecord): Promise<MilkRecord> => {
-        const animal = await backendService.getLivestockById(animalId);
-        if (!animal) throw new Error("Animal not found");
-        const updated = { ...animal, milkProductionHistory: [...(animal.milkProductionHistory || []), record] };
-        await backendService.updateLivestock(animalId, updated);
-        return record;
+        return apiRequest<MilkRecord>(`/livestock/${animalId}/milk-records`, {
+            method: 'POST',
+            json: record,
+        });
     },
 
     // Finance (Unified with Ledger)
@@ -316,6 +314,12 @@ export const backendService = {
     addFinancialsPayment: async (payment: { refType: string; refId: string; amount: number; date: string; paymentMethod?: string; notes?: string }): Promise<{ id: string; refType: string; refId: string; amount: number; date: string }> => {
         const res = await fetch(`${API_BASE_URL}/financials/payments`, { method: 'POST', headers: apiHeaders(true), body: JSON.stringify(payment) });
         return handleResponse(res);
+    },
+    deleteFinancialsPayment: async (paymentId: string): Promise<void> => {
+        await apiRequest<void>(`/financials/payments/${paymentId}`, { method: 'DELETE' });
+    },
+    reverseFinancialsPayment: async (paymentId: string): Promise<{ id: string; refType: string; refId: string; amount: number; date: string; paymentMethod?: string; notes?: string }> => {
+        return apiRequest<{ id: string; refType: string; refId: string; amount: number; date: string; paymentMethod?: string; notes?: string }>(`/financials/payments/${paymentId}/reverse`, { method: 'POST' });
     },
     getVendorSummary: async (params: { farmId?: string; dateFilter?: string; startDate?: string; endDate?: string }): Promise<{ supplierId: string; supplierName: string; totalBills: number; totalAmount: number; paidAmount: number; balanceDue: number }[]> => {
         const sp = new URLSearchParams();
@@ -618,11 +622,20 @@ export const backendService = {
         });
         return handleResponse(res);
     },
+    applyTreatmentProtocolById: async (id: string, request: { protocolId?: string; targetAnimalIds: string[]; performedBy?: string; date?: string }): Promise<{ success: boolean; message: string; animalsTreated: number; treatmentLogsCreated: number; totalCost: number; expenseId?: string }> => {
+        return apiRequest<{ success: boolean; message: string; animalsTreated: number; treatmentLogsCreated: number; totalCost: number; expenseId?: string }>(`/operations/treatment-protocols/${id}/apply`, {
+            method: 'POST',
+            json: { ...request, protocolId: request.protocolId || id },
+        });
+    },
 
     /** Medicine batches expiring within the given days (default 30). */
     getMedicineExpirations: async (days: number = 30): Promise<{ id: string; name: string; batchNumber: string; expiryDate: string; daysUntilExpiry: number; quantity: number; unit: string }[]> => {
         const res = await fetch(`${API_BASE_URL}/operations/medicine-expirations?days=${days}`, { headers: apiHeaders() });
         return handleResponse(res);
+    },
+    getInventoryMedicineExpirations: async (days: number = 30): Promise<{ id: string; name: string; batchNumber: string; expiryDate: string; daysUntilExpiry: number; quantity: number; unit: string }[]> => {
+        return apiRequest<{ id: string; name: string; batchNumber: string; expiryDate: string; daysUntilExpiry: number; quantity: number; unit: string }[]>(`/inventory/medicine-expirations?days=${encodeURIComponent(days)}`);
     },
 
     // --- API GAP CHANGES: USERS & NOTIFICATIONS ---
@@ -694,12 +707,10 @@ export const backendService = {
 
     // --- API GAP CHANGES: LIVESTOCK PATCHES ---
     patchLivestockStatus: async (id: string, request: { status?: string, palaiCustomerId?: string }): Promise<void> => {
-        const res = await fetch(`${API_BASE_URL}/livestock/${id}/status`, { method: 'PATCH', headers: apiHeaders(true), body: JSON.stringify(request) });
-        await handleDeleteResponse(res);
+        await apiRequest<void>(`/livestock/${id}/status`, { method: 'PATCH', json: request });
     },
     patchPalaiAssignment: async (id: string, assignment: any): Promise<void> => {
-        const res = await fetch(`${API_BASE_URL}/livestock/${id}/palai-assignment`, { method: 'PATCH', headers: apiHeaders(true), body: JSON.stringify(assignment) });
-        await handleDeleteResponse(res);
+        await apiRequest<void>(`/livestock/${id}/palai-assignment`, { method: 'PATCH', json: assignment });
     },
 
     // --- API GAP CHANGES: FINANCE TARGETED PAYMENTS & ENTITY LEDGER ---
@@ -765,6 +776,39 @@ export const backendService = {
     deleteConsumptionLogsBatch: async (ids: string[]): Promise<void> => {
         const res = await fetch(`${API_BASE_URL}/operations/consumption-logs/delete-batch`, { method: 'POST', headers: apiHeaders(true), body: JSON.stringify(ids) });
         await handleDeleteResponse(res);
+    },
+    migrateLegacyTags: async (): Promise<any> => {
+        return apiRequest<any>('/livestock/migrate-legacy-tags', { method: 'POST' });
+    },
+    getReportFinancial: async (params: { farmId?: string; interval?: string; startDate?: string; endDate?: string; accrual?: boolean }): Promise<any> => {
+        const sp = new URLSearchParams();
+        if (params.farmId) sp.set('farmId', params.farmId);
+        if (params.interval) sp.set('interval', params.interval);
+        if (params.startDate) sp.set('startDate', params.startDate);
+        if (params.endDate) sp.set('endDate', params.endDate);
+        if (params.accrual != null) sp.set('accrual', String(params.accrual));
+        return apiRequest<any>(`/reports/financial?${sp}`);
+    },
+    getReportHerd: async (params: { farmId: string; status?: string }): Promise<any> => {
+        const sp = new URLSearchParams();
+        sp.set('farmId', params.farmId);
+        if (params.status) sp.set('status', params.status);
+        return apiRequest<any>(`/reports/herd?${sp}`);
+    },
+    getReportOperations: async (params: { farmId?: string; medicineExpiryDays?: number }): Promise<any> => {
+        const sp = new URLSearchParams();
+        if (params.farmId) sp.set('farmId', params.farmId);
+        if (params.medicineExpiryDays != null) sp.set('medicineExpiryDays', String(params.medicineExpiryDays));
+        return apiRequest<any>(`/reports/operations?${sp}`);
+    },
+    getReportLogs: async (params: { farmId?: string; limit?: number }): Promise<any> => {
+        const sp = new URLSearchParams();
+        if (params.farmId) sp.set('farmId', params.farmId);
+        if (params.limit != null) sp.set('limit', String(params.limit));
+        return apiRequest<any>(`/reports/logs?${sp}`);
+    },
+    getReportMobileDashboard: async (): Promise<any> => {
+        return apiRequest<any>('/reports/mobile-dashboard');
     },
 
     // Auth (Mock – used when no URL params)

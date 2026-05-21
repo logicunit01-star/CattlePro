@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { backendService } from '../services/backendService';
-import { AppState, Expense, FeedInventory, ExpenseCategory } from '../types';
+import { AppState, Expense, FeedInventory } from '../types';
 import { Truck, ShoppingCart, User, AlertTriangle, CheckCircle, Clock, Search, Layers, Archive, Activity, RefreshCw, MinusCircle, Edit2, X, Save, Plus, Package, TrendingUp, BarChart, DollarSign, ArrowRight, Filter, Download } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart as RechartsBarChart, Bar, PieChart, Pie, Cell } from 'recharts';
 
@@ -11,12 +11,13 @@ interface Props {
     onAddFeed: (f: FeedInventory) => void;
     onUpdateInventory: (item: FeedInventory) => void;
     onDeleteFeed: (id: string) => void;
+    onRefreshProcurement?: () => void | Promise<void>;
 }
 
 const FEED_TYPES = ['GRASS', 'TMR', 'WANDA', 'OTHER'];
 const UNIT_OPTIONS = ['KG', 'TON', 'BUNDLE', 'BAG'];
 
-export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpense, onAddFeed, onUpdateInventory, onDeleteFeed }) => {
+export const Procurement: React.FC<Props> = ({ state, onUpdateExpense, onAddFeed, onUpdateInventory, onDeleteFeed, onRefreshProcurement }) => {
     const [activeTab, setActiveTab] = useState<'DASHBOARD' | 'PROCUREMENT' | 'INVENTORY' | 'SUPPLIERS' | 'ANALYTICS'>('DASHBOARD');
 
     // VENDOR ENTITIES LOGIC - STRICT INTEGRATION
@@ -56,20 +57,45 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
     // Derived dashboard data
     const totalStockValue = feedItems.reduce((sum, item) => sum + (item.quantity * item.unitCost), 0);
     const lowStockCount = feedItems.filter(i => i.quantity <= i.reorderLevel).length;
+    const [lowStockItems, setLowStockItems] = useState<FeedInventory[] | undefined>(undefined);
+    const [inventoryValuation, setInventoryValuation] = useState<any[] | undefined>(undefined);
+    const [procurementRefreshKey, setProcurementRefreshKey] = useState(0);
     const [searchTerm, setSearchTerm] = useState('');
     const [vendorPayablesReport, setVendorPayablesReport] = useState<Awaited<ReturnType<typeof backendService.getReportsVendorPayables>> | undefined>(undefined);
+    const apiLowStockCount = lowStockItems?.length ?? lowStockCount;
+    const apiStockValue = inventoryValuation?.reduce((sum, row) => {
+        const value = row.stockValue ?? row.totalValue ?? row.value ?? row.quantity * row.unitCost ?? 0;
+        return sum + (Number.isFinite(Number(value)) ? Number(value) : 0);
+    }, 0) ?? totalStockValue;
 
     useEffect(() => {
         if (!state.currentFarmId) {
             setVendorPayablesReport(undefined);
+            setLowStockItems(undefined);
+            setInventoryValuation(undefined);
             return;
         }
         let cancelled = false;
-        backendService.getReportsVendorPayables({ farmId: state.currentFarmId })
-            .then(rows => { if (!cancelled) setVendorPayablesReport(rows); })
-            .catch(() => { if (!cancelled) setVendorPayablesReport(undefined); });
+        Promise.all([
+            backendService.getReportsVendorPayables({ farmId: state.currentFarmId }),
+            backendService.getLowStockFeed(state.currentFarmId),
+            backendService.getInventoryValuation(state.currentFarmId)
+        ])
+            .then(([payables, lowStock, valuation]) => {
+                if (cancelled) return;
+                setVendorPayablesReport(payables);
+                setLowStockItems(Array.isArray(lowStock) ? lowStock : undefined);
+                setInventoryValuation(Array.isArray(valuation) ? valuation : undefined);
+            })
+            .catch(() => {
+                if (!cancelled) {
+                    setVendorPayablesReport(undefined);
+                    setLowStockItems(undefined);
+                    setInventoryValuation(undefined);
+                }
+            });
         return () => { cancelled = true; };
-    }, [state.currentFarmId, state.expenses.length]);
+    }, [state.currentFarmId, state.expenses.length, state.feed.length, procurementRefreshKey]);
 
     const vendorExpenses = useMemo(() => {
         let expenses = state.expenses.filter(e => e.category === 'FEED');
@@ -80,7 +106,9 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
     }, [state.expenses, searchTerm]);
 
     const dashboardVendorExpenses = state.expenses.filter(e => e.category === 'FEED');
-    const pendingBills = dashboardVendorExpenses.filter(e => e.paymentStatus === 'PENDING' || e.paymentStatus === 'PARTIAL').reduce((sum, e) => sum + e.amount, 0);
+    const pendingBills = dashboardVendorExpenses
+        .filter(e => e.paymentStatus === 'PENDING' || e.paymentStatus === 'PARTIAL')
+        .reduce((sum, e) => sum + Math.max(0, e.amount - (e.amountPaid || 0)), 0);
     const monthlySpend = dashboardVendorExpenses.filter(e => e.date.startsWith(new Date().toISOString().slice(0, 7))).reduce((sum, e) => sum + e.amount, 0);
 
     const priceTrendData = useMemo(() => {
@@ -218,39 +246,34 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
 
         const desc = isQtyBased ? `Purchase: ${selectedItem.name} (Qty: ${procurementForm.quantity} ${selectedItem.unit}s, Wt: ${procurementForm.weight} kg)` : `Purchase: ${selectedItem.name} (${procurementForm.weight} kg)`;
 
-        const expense: Expense = {
-            id: Math.random().toString(36).substr(2, 9),
-            farmId: state.currentFarmId,
-            category: ExpenseCategory.FEED,
-            amount: totalCost,
-            date: procurementForm.date,
-            description: desc,
-            supplier: procurementForm.vendorId, // We strictly store vendor ID here, allowing tight linkage
-            paymentStatus: procurementForm.paymentStatus as 'PAID' | 'PENDING' | 'PARTIAL',
-            location: procurementForm.location,
-            feedCategory: procurementForm.feedCategory,
-            feedItemId: selectedItem.id,
-            weight: procurementForm.weight,
-            quantity: isQtyBased ? procurementForm.quantity : undefined,
-            rate: procurementForm.rate
-        };
-
         try {
-            await onAddExpense(expense);
-
-            // Auto-update inventory (Keep unitCost native to the Unit e.g. Per Bag)
-            onUpdateInventory({
-                ...selectedItem,
-                quantity: selectedItem.quantity + (isQtyBased ? procurementForm.quantity : addedValue),
+            const result = await backendService.feedPurchase({
+                farmId: state.currentFarmId,
+                feedItemId: selectedItem.id,
+                vendorId: procurementForm.vendorId === CASH_LABEL ? undefined : procurementForm.vendorId,
+                supplier: procurementForm.vendorId,
+                date: procurementForm.date,
+                quantity: isQtyBased ? procurementForm.quantity : addedValue,
+                weight: procurementForm.weight,
                 unitCost: procurementForm.rate,
-                defaultSupplier: procurementForm.vendorId !== CASH_LABEL ? procurementForm.vendorId : selectedItem.defaultSupplier
+                rate: procurementForm.rate,
+                amount: totalCost,
+                amountPaid: procurementForm.paymentStatus === 'PAID' ? totalCost : 0,
+                paymentStatus: procurementForm.paymentStatus,
+                location: procurementForm.location,
+                description: desc
             });
+            const updatedItem = result?.feedItem ?? result?.feedInventory ?? result?.inventory ?? result?.item;
+            if (updatedItem?.id) onUpdateInventory(updatedItem);
+            await onRefreshProcurement?.();
+            setProcurementRefreshKey(key => key + 1);
 
             const vName = procurementForm.vendorId === CASH_LABEL ? "Cash" : vendorEntities.find(v => v.id === procurementForm.vendorId)?.name;
             alert(`Procurement Recorded from ${vName}!`);
             setProcurementForm({ ...procurementForm, weight: 0, quantity: 0 });
         } catch (e) {
-            return alert("Failed to save expense.");
+            console.error(e);
+            return alert("Failed to save procurement purchase.");
         }
     };
 
@@ -394,7 +417,7 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
         });
     };
 
-    const handleRecordUsage = (item: FeedInventory) => {
+    const handleRecordUsage = async (item: FeedInventory) => {
         const isQtyBased = ['BAG', 'BUNDLE'].includes((item.unit || '').toUpperCase());
         const wpu = item.weightPerUnit || 40;
         const stockDisplay = isQtyBased
@@ -406,8 +429,21 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
         if (isNaN(consumedKg) || consumedKg <= 0) return alert("Invalid amount");
         const toDeduct = isQtyBased ? consumedKg / wpu : consumedKg;
         if (toDeduct > (item.quantity ?? 0)) return alert("Cannot consume more than available stock!");
-        onUpdateInventory({ ...item, quantity: (item.quantity ?? 0) - toDeduct });
-        alert(`Successfully deducted ${consumedKg} KG${isQtyBased ? ` (${toDeduct.toFixed(3)} ${item.unit}s)` : ''} of ${item.name}.`);
+        try {
+            const updated = await backendService.adjustFeed({
+                feedItemId: item.id,
+                direction: 'DECREASE',
+                quantity: toDeduct,
+                reason: `Manual outgoing recorded from Procurement (${consumedKg} KG)`
+            });
+            onUpdateInventory(updated?.id ? updated : { ...item, quantity: (item.quantity ?? 0) - toDeduct });
+            await onRefreshProcurement?.();
+            setProcurementRefreshKey(key => key + 1);
+            alert(`Successfully deducted ${consumedKg} KG${isQtyBased ? ` (${toDeduct.toFixed(3)} ${item.unit}s)` : ''} of ${item.name}.`);
+        } catch (e) {
+            console.error(e);
+            alert("Failed to record outgoing stock.");
+        }
     };
 
     // Helper: Map Vendor ID to display Name
@@ -436,7 +472,7 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                 <div className="flex gap-2">
                     <div className="bg-gradient-to-br from-slate-800 to-slate-900 px-5 py-2.5 rounded-xl text-xs font-bold text-slate-300 shadow-md flex items-center gap-2">
                         <Activity size={16} className="text-emerald-400" />
-                        TOTAL STOCK VALUE: <span className="text-emerald-400 text-sm">PKR {totalStockValue.toLocaleString()}</span>
+                        TOTAL STOCK VALUE: <span className="text-emerald-400 text-sm">PKR {apiStockValue.toLocaleString()}</span>
                     </div>
                 </div>
             </div>
@@ -487,7 +523,7 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                             <div className="flex justify-between items-start">
                                 <div>
                                     <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Low Stock Items</p>
-                                    <h3 className="text-3xl font-black text-amber-500 mt-2">{lowStockCount} items <span className="text-sm font-medium text-slate-400 animate-pulse">Critical</span></h3>
+                                    <h3 className="text-3xl font-black text-amber-500 mt-2">{apiLowStockCount} items <span className="text-sm font-medium text-slate-400 animate-pulse">Critical</span></h3>
                                 </div>
                                 <div className="bg-amber-50 p-3 rounded-2xl text-amber-500 group-hover:scale-110 transition-transform"><Layers size={24} /></div>
                             </div>
@@ -562,7 +598,7 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                             <div className="space-y-4">
                                 {['GRASS', 'TMR', 'WANDA'].map(cat => {
                                     const value = feedItems.filter(f => f.feedType === cat).reduce((sum, item) => sum + (item.quantity * item.unitCost), 0);
-                                    const percentage = totalStockValue ? (value / totalStockValue) * 100 : 0;
+                                    const percentage = apiStockValue ? (value / apiStockValue) * 100 : 0;
                                     return (
                                         <div key={cat}>
                                             <div className="flex justify-between text-xs font-bold text-slate-600 mb-1">
@@ -1109,8 +1145,8 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                         {vendorEntities.map(vendor => {
                             const relatedBills = vendorExpenses.filter(e => e.supplier === vendor.id);
                             const total = relatedBills.reduce((sum, e) => sum + e.amount, 0);
-                            const paid = relatedBills.filter(e => e.paymentStatus === 'PAID').reduce((sum, e) => sum + e.amount, 0);
-                            const pending = total - paid;
+                            const paid = relatedBills.reduce((sum, e) => sum + (e.paymentStatus === 'PAID' ? e.amount : (e.amountPaid || 0)), 0);
+                            const pending = relatedBills.reduce((sum, e) => sum + Math.max(0, e.amount - (e.amountPaid || 0)), 0);
 
                             return (
                                 <div key={vendor.id} className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm relative group hover:border-blue-200 transition-colors">
@@ -1136,11 +1172,29 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                     </div>
 
                                     {pending > 0 ? (
-                                        <button onClick={() => {
-                                            if (!confirm(`Log artificial payment clearing ${pending.toLocaleString()} dues? (Accounting Ledger unaffected)`)) return;
-                                            relatedBills.filter(b => b.paymentStatus !== 'PAID').forEach(b => onUpdateExpense({ ...b, paymentStatus: 'PAID', paymentDate: new Date().toISOString().split('T')[0] }));
+                                        <button onClick={async () => {
+                                            if (!confirm(`Create payment entries clearing PKR ${pending.toLocaleString()} dues for ${vendor.name}?`)) return;
+                                            const paymentDate = new Date().toISOString().split('T')[0];
+                                            try {
+                                                for (const bill of relatedBills.filter(b => b.paymentStatus !== 'PAID')) {
+                                                    const balance = Math.max(0, bill.amount - (bill.amountPaid || 0));
+                                                    if (balance <= 0) continue;
+                                                    await backendService.expensePayment(bill.id, {
+                                                        amount: balance,
+                                                        date: paymentDate,
+                                                        paymentMethod: 'CASH',
+                                                        notes: `Vendor settlement from Procurement for ${vendor.name}`
+                                                    });
+                                                    await onUpdateExpense({ ...bill, paymentStatus: 'PAID', amountPaid: bill.amount, paymentDate });
+                                                }
+                                                await onRefreshProcurement?.();
+                                                setProcurementRefreshKey(key => key + 1);
+                                            } catch (e) {
+                                                console.error(e);
+                                                alert("Failed to settle vendor dues.");
+                                            }
                                         }} className="w-full bg-slate-800 hover:bg-slate-700 text-white py-3 rounded-xl text-xs font-black tracking-wider flex items-center justify-center gap-2 shadow-md transition-colors">
-                                            <CheckCircle size={14} /> FORCE SETTLEMENT
+                                            <CheckCircle size={14} /> SETTLE DUES
                                         </button>
                                     ) : (
                                         <div className="w-full text-center py-3 text-xs font-black tracking-wider text-emerald-600 bg-emerald-50 rounded-xl border border-emerald-100 flex items-center justify-center gap-2">

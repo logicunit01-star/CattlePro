@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { AppState, Sale, Livestock, LivestockStatus } from '../types';
+import { AppState, Sale, Livestock } from '../types';
 import { DollarSign, User, Calendar, CheckCircle, Clock, AlertTriangle, Filter, Search, PlusCircle, Trash2 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 
@@ -12,12 +12,13 @@ interface Props {
     currentLocationId?: string | null;
     currentTab?: SalesTab;
     onTabChange?: (tab: SalesTab) => void;
-    onAddSale: (sale: Sale) => void;
+    onAddSale: (sale: Sale) => void | Promise<void>;
     onUpdateLivestock: (animal: Livestock) => void;
     onDeleteSale?: (id: string) => void;
+    onRecordSalePayment?: (saleId: string, payment: { amount: number; date: string; paymentMethod?: string; notes?: string }) => void | Promise<void>;
 }
 
-export const SalesManager: React.FC<Props> = ({ state, currentFarmId, currentLocationId, currentTab, onTabChange, onAddSale, onUpdateLivestock, onDeleteSale }) => {
+export const SalesManager: React.FC<Props> = ({ state, currentFarmId, currentLocationId, currentTab, onTabChange, onAddSale, onDeleteSale, onRecordSalePayment }) => {
     const [internalTab, setInternalTab] = useState<SalesTab>('DASHBOARD');
     const isControlled = currentTab !== undefined && onTabChange !== undefined;
     const activeTab = isControlled ? currentTab! : internalTab;
@@ -64,7 +65,7 @@ export const SalesManager: React.FC<Props> = ({ state, currentFarmId, currentLoc
     const balance = finalTotal - amountReceived;
     const paymentStatus = balance <= 0 ? 'PAID' : (amountReceived > 0 ? 'PARTIAL' : 'PENDING');
 
-    const handleSaleSubmit = () => {
+    const handleSaleSubmit = async () => {
         if (!currentFarmId && !currentLocationId) { alert("Please select a farm or city above to record a sale. Sales and animals are shown for the selected farm only."); return; }
         if (selectedAnimalIds.length === 0) { alert("Select at least one animal"); return; }
         if (finalTotal <= 0) { alert("Invalid Sale Amount"); return; }
@@ -98,15 +99,13 @@ export const SalesManager: React.FC<Props> = ({ state, currentFarmId, currentLoc
             description: `Sale of ${selectedAnimalIds.length} animals`
         };
 
-        onAddSale(newSale);
-
-        // Update Animal Status
-        selectedAnimalIds.forEach(id => {
-            const animal = state.livestock.find(l => l.id === id);
-            if (animal) {
-                onUpdateLivestock({ ...animal, status: 'SOLD' });
-            }
-        });
+        try {
+            await onAddSale(newSale);
+        } catch (e) {
+            console.error(e);
+            alert("Sale was not saved. Please try again.");
+            return;
+        }
 
         alert("Sale Recorded Successfully!");
         setActiveTab('HISTORY');
@@ -114,6 +113,22 @@ export const SalesManager: React.FC<Props> = ({ state, currentFarmId, currentLoc
         setSelectedAnimalIds([]);
         setBuyerName('');
         setAmountReceived(0);
+    };
+
+    const recordSalePayment = async (sale: Sale) => {
+        if (!onRecordSalePayment) return;
+        const due = Math.max(0, (sale.amount ?? 0) - (sale.amountReceived ?? 0));
+        const amountRaw = prompt(`Enter payment amount for ${sale.buyer}. Balance due: PKR ${due.toLocaleString()}`, due > 0 ? String(due) : '');
+        if (!amountRaw) return;
+        const amount = Number(amountRaw);
+        if (!Number.isFinite(amount) || amount <= 0) return alert('Invalid payment amount.');
+        const date = prompt('Payment date', new Date().toISOString().split('T')[0]) || new Date().toISOString().split('T')[0];
+        await onRecordSalePayment(sale.id, {
+            amount,
+            date,
+            paymentMethod,
+            notes: `Sale payment from Sales module for ${sale.buyer}`
+        });
     };
 
     // Dashboard Metrics (farm-wise: state.sales/livestock already filtered by App)
@@ -400,6 +415,14 @@ export const SalesManager: React.FC<Props> = ({ state, currentFarmId, currentLoc
                                         {sale.paymentStatus !== 'PAID' && <div className="text-[10px] text-red-500 font-bold mt-1">Due: {((sale.amount ?? 0) - (sale.amountReceived ?? 0)).toLocaleString()}</div>}
                                     </td>
                                     <td className="px-6 py-4 text-center">
+                                        {sale.paymentStatus !== 'PAID' && onRecordSalePayment && (
+                                            <button
+                                                className="text-emerald-600 hover:text-emerald-800 font-black text-[10px] uppercase mr-3"
+                                                onClick={() => recordSalePayment(sale)}
+                                            >
+                                                Pay
+                                            </button>
+                                        )}
                                         <button className="text-gray-400 hover:text-red-500 transition-colors" onClick={() => onDeleteSale && onDeleteSale(sale.id)}>
                                             <Trash2 size={16} />
                                         </button>

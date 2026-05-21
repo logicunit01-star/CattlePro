@@ -19,12 +19,15 @@ interface Props {
     onAddSale: (s: Sale) => void;
     onDeleteExpense: (id: string) => void;
     onDeleteSale: (id: string) => void;
+    onRecordSalePayment?: (saleId: string, payment: { amount: number; date: string; paymentMethod?: string; notes?: string }) => void | Promise<void>;
+    onAfterPaymentMutation?: () => void | Promise<void>;
     refreshKey?: number;
 }
 
 type FinancialView = 'LIST' | 'ADD_EXPENSE' | 'ADD_SALE';
+type FinancialPayment = { id: string; refType: string; refId: string; amount: number; date: string; paymentMethod?: string; notes?: string; status?: string };
 
-export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [], entities, infrastructure = [], farms = [], locations = [], currentFarmId, currentLocationId, onAddExpense, onUpdateExpense, onAddSale, onDeleteExpense, onDeleteSale, refreshKey }) => {
+export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [], entities, infrastructure = [], farms = [], locations = [], currentFarmId, currentLocationId, onAddExpense, onUpdateExpense, onAddSale, onDeleteExpense, onDeleteSale, onRecordSalePayment, onAfterPaymentMutation, refreshKey }) => {
     const [activeTab, setActiveTab] = useState<'EXPENSES' | 'SALES' | 'LEDGER'>('EXPENSES');
     const [expenseTab, setExpenseTab] = useState<'LIST' | 'DASHBOARD' | 'VENDOR_BILLS'>('LIST');
     const [viewMode, setViewMode] = useState<FinancialView>('LIST');
@@ -42,9 +45,71 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
     const [customCategories, setCustomCategories] = useState<{ id: string; name: string; type: string }[]>([]);
     const [vendorSummary, setVendorSummary] = useState<{ supplierId: string; supplierName: string; totalBills: number; totalAmount: number; paidAmount: number; balanceDue: number }[] | null>(null);
     const [expenseAnalytics, setExpenseAnalytics] = useState<{ byCategory: { category: string; totalCost: number }[]; byDay: { date: string; totalCost: number }[] } | null>(null);
+    const [paymentPanel, setPaymentPanel] = useState<{ refType: 'EXPENSE' | 'SALE'; refId: string; title: string } | null>(null);
+    const [paymentHistory, setPaymentHistory] = useState<FinancialPayment[]>([]);
+    const [paymentHistoryLoading, setPaymentHistoryLoading] = useState(false);
+    const [paymentHistoryError, setPaymentHistoryError] = useState<string | null>(null);
     const pageSize = 50;
 
     const toggleVendor = (id: string) => setExpandedVendors(prev => prev.includes(id) ? prev.filter(v => v !== id) : [...prev, id]);
+
+    const openPaymentHistory = async (panel: { refType: 'EXPENSE' | 'SALE'; refId: string; title: string }) => {
+        setPaymentPanel(panel);
+        setPaymentHistory([]);
+        setPaymentHistoryError(null);
+        setPaymentHistoryLoading(true);
+        try {
+            const rows = await backendService.getFinancialsPayments(panel.refType, panel.refId);
+            setPaymentHistory(Array.isArray(rows) ? rows : []);
+        } catch (e: any) {
+            setPaymentHistoryError(e?.message || 'Unable to load payment history.');
+        } finally {
+            setPaymentHistoryLoading(false);
+        }
+    };
+
+    const refreshOpenPaymentHistory = async () => {
+        if (!paymentPanel) return;
+        await openPaymentHistory(paymentPanel);
+    };
+
+    const reversePayment = async (paymentId: string) => {
+        if (!confirm('Reverse this payment and its ledger impact?')) return;
+        try {
+            await backendService.reverseFinancialsPayment(paymentId);
+            await refreshOpenPaymentHistory();
+            await onAfterPaymentMutation?.();
+        } catch (e: any) {
+            alert(e?.message || 'Failed to reverse payment.');
+        }
+    };
+
+    const deletePayment = async (paymentId: string) => {
+        if (!confirm('Delete this payment record? Use reversal instead when the ledger must remain auditable.')) return;
+        try {
+            await backendService.deleteFinancialsPayment(paymentId);
+            await refreshOpenPaymentHistory();
+            await onAfterPaymentMutation?.();
+        } catch (e: any) {
+            alert(e?.message || 'Failed to delete payment.');
+        }
+    };
+
+    const recordSalePayment = async (sale: Sale) => {
+        if (!onRecordSalePayment) return;
+        const due = Math.max(0, sale.amount - (sale.amountReceived || 0));
+        const amountRaw = prompt(`Enter payment amount for ${sale.buyer}. Balance due: PKR ${due.toLocaleString()}`, due > 0 ? String(due) : '');
+        if (!amountRaw) return;
+        const amount = Number(amountRaw);
+        if (!Number.isFinite(amount) || amount <= 0) return alert('Invalid payment amount.');
+        const date = prompt('Payment date', new Date().toISOString().split('T')[0]) || new Date().toISOString().split('T')[0];
+        await onRecordSalePayment(sale.id, {
+            amount,
+            date,
+            paymentMethod: sale.paymentMethod || 'CASH',
+            notes: `Sale payment from Financials for ${sale.buyer}`
+        });
+    };
 
     const dateRangeFromFilter = useMemo(() => {
         const now = new Date();
@@ -874,10 +939,25 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                                                     <td className="px-6 py-3 whitespace-nowrap text-right text-sm border-b border-gray-50">
                                                                         {!isPaid && onUpdateExpense && (
                                                                             <button
-                                                                                onClick={(e) => {
+                                                                                onClick={async (e) => {
                                                                                     e.stopPropagation();
                                                                                     if (confirm(`Mark bill from ${vendorName} as fully PAID in cash/bank?`)) {
-                                                                                        onUpdateExpense({ ...exp, paymentStatus: 'PAID', amountPaid: exp.amount, paymentDate: new Date().toISOString().split('T')[0] });
+                                                                                        const paymentDate = new Date().toISOString().split('T')[0];
+                                                                                        const balance = Math.max(0, exp.amount - (exp.amountPaid || 0));
+                                                                                        try {
+                                                                                            if (balance > 0) {
+                                                                                                await backendService.expensePayment(exp.id, {
+                                                                                                    amount: balance,
+                                                                                                    date: paymentDate,
+                                                                                                    paymentMethod: 'CASH',
+                                                                                                    notes: `Vendor bill payment from Financials for ${vendorName}`
+                                                                                                });
+                                                                                            }
+                                                                                            await onUpdateExpense({ ...exp, paymentStatus: 'PAID', amountPaid: exp.amount, paymentDate });
+                                                                                        } catch (err) {
+                                                                                            console.error(err);
+                                                                                            alert("Payment could not be recorded.");
+                                                                                        }
                                                                                     }
                                                                                 }}
                                                                                 className="px-4 py-1.5 bg-indigo-50 border border-indigo-200 hover:bg-indigo-600 hover:border-indigo-600 hover:text-white text-indigo-700 font-extrabold text-[11px] uppercase tracking-wider rounded-lg transition-all shadow-sm"
@@ -898,6 +978,15 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                                                                 Revert
                                                                             </button>
                                                                         )}
+                                                                        <button
+                                                                            onClick={(e) => {
+                                                                                e.stopPropagation();
+                                                                                openPaymentHistory({ refType: 'EXPENSE', refId: exp.id, title: `${vendorName} - ${exp.description}` });
+                                                                            }}
+                                                                            className="ml-2 px-2 py-1 text-indigo-500 hover:text-indigo-700 font-bold text-[10px] uppercase underline transition-colors"
+                                                                        >
+                                                                            Payments
+                                                                        </button>
                                                                     </td>
                                                                 </tr>
                                                             )
@@ -1018,6 +1107,22 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                                 +PKR {sale.amount.toLocaleString()}
                                             </td>
                                             <td className="px-6 py-4 whitespace-nowrap text-right">
+                                                {onRecordSalePayment && (sale.paymentStatus !== 'PAID' || (sale.amountReceived || 0) < sale.amount) && (
+                                                    <button
+                                                        onClick={() => recordSalePayment(sale)}
+                                                        className="px-2 py-1 rounded-lg text-[10px] font-black uppercase text-emerald-700 hover:bg-emerald-50 transition-colors mr-2"
+                                                        title="Record Payment"
+                                                    >
+                                                        Pay
+                                                    </button>
+                                                )}
+                                                <button
+                                                    onClick={() => openPaymentHistory({ refType: 'SALE', refId: sale.id, title: `${sale.buyer} - ${saleItemDisplay(sale)}` })}
+                                                    className="px-2 py-1 rounded-lg text-[10px] font-black uppercase text-indigo-600 hover:bg-indigo-50 transition-colors mr-2"
+                                                    title="Payment History"
+                                                >
+                                                    Payments
+                                                </button>
                                                 <button
                                                     onClick={async () => {
                                                         const inv = await backendService.getSaleInvoice(sale.id);
@@ -1130,6 +1235,45 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                     </div>
                 </div>
             ) : null}
+            {paymentPanel && (
+                <div className="fixed inset-0 z-50 flex justify-end bg-slate-900/40 backdrop-blur-sm" onClick={() => setPaymentPanel(null)}>
+                    <div className="h-full w-full max-w-lg bg-white shadow-2xl flex flex-col" onClick={e => e.stopPropagation()}>
+                        <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between">
+                            <div>
+                                <h3 className="text-lg font-black text-slate-800">Payment History</h3>
+                                <p className="text-xs text-slate-500 truncate max-w-sm">{paymentPanel.title}</p>
+                            </div>
+                            <button onClick={() => setPaymentPanel(null)} className="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-600 text-xs font-bold hover:bg-slate-200">Close</button>
+                        </div>
+                        <div className="flex-1 overflow-y-auto p-6 space-y-3 bg-slate-50/50">
+                            {paymentHistoryLoading && <div className="bg-white border border-slate-200 rounded-2xl p-4 text-sm font-bold text-slate-500">Loading payments...</div>}
+                            {paymentHistoryError && <div className="bg-red-50 border border-red-200 rounded-2xl p-4 text-sm text-red-700">{paymentHistoryError}</div>}
+                            {!paymentHistoryLoading && !paymentHistoryError && paymentHistory.length === 0 && (
+                                <div className="bg-white border border-dashed border-slate-200 rounded-2xl p-8 text-center">
+                                    <DollarSign size={32} className="mx-auto text-slate-300 mb-3" />
+                                    <p className="text-sm font-bold text-slate-500">No payment records returned for this item.</p>
+                                </div>
+                            )}
+                            {paymentHistory.map(payment => (
+                                <div key={payment.id} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div>
+                                            <p className="text-lg font-black text-slate-800">PKR {payment.amount.toLocaleString()}</p>
+                                            <p className="text-xs text-slate-500 font-medium">{payment.date} • {payment.paymentMethod || 'Method not set'}</p>
+                                            {payment.notes && <p className="text-xs text-slate-400 mt-2">{payment.notes}</p>}
+                                            {payment.status && <span className="inline-block mt-2 px-2 py-1 rounded-md bg-slate-100 text-slate-500 text-[10px] font-black uppercase">{payment.status}</span>}
+                                        </div>
+                                        <div className="flex flex-col gap-2">
+                                            <button onClick={() => reversePayment(payment.id)} className="px-3 py-1.5 rounded-lg bg-amber-50 text-amber-700 text-[10px] font-black uppercase hover:bg-amber-100">Reverse</button>
+                                            <button onClick={() => deletePayment(payment.id)} className="px-3 py-1.5 rounded-lg bg-red-50 text-red-700 text-[10px] font-black uppercase hover:bg-red-100">Delete</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

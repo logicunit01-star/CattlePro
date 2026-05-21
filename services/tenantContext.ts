@@ -4,6 +4,7 @@
  */
 
 const STORAGE_KEY = 'cattleops_tenant';
+const isDemoMode = (): boolean => (import.meta as any).env.VITE_DEMO_MODE === 'true';
 
 export interface TenantState {
   companyName: string | null;
@@ -74,6 +75,7 @@ const SALES_STORAGE_PREFIX = 'cattleops_sales_';
 
 /** Get persisted sales for current tenant (survives refresh when backend doesn't return them) */
 export function getPersistedSales(): unknown[] {
+  if (!isDemoMode()) return [];
   try {
     const t = getTenant();
     const key = SALES_STORAGE_PREFIX + (t.companyName || 'default');
@@ -88,6 +90,7 @@ export function getPersistedSales(): unknown[] {
 
 /** Persist sales for current tenant */
 export function setPersistedSales(sales: unknown[]): void {
+  if (!isDemoMode()) return;
   try {
     const t = getTenant();
     const key = SALES_STORAGE_PREFIX + (t.companyName || 'default');
@@ -99,6 +102,7 @@ const LIVESTOCK_STATUS_KEY = 'cattleops_livestock_status';
 
 /** Get persisted livestock status overrides (id -> status) so SOLD etc. survive refresh */
 export function getPersistedLivestockStatus(): Record<string, string> {
+  if (!isDemoMode()) return {};
   try {
     const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(LIVESTOCK_STATUS_KEY) : null;
     if (!raw) return {};
@@ -111,6 +115,7 @@ export function getPersistedLivestockStatus(): Record<string, string> {
 
 /** Persist livestock status overrides (e.g. after marking animal SOLD) */
 export function setPersistedLivestockStatus(updates: Record<string, string>): void {
+  if (!isDemoMode()) return;
   try {
     const prev = getPersistedLivestockStatus();
     const next = { ...prev, ...updates };
