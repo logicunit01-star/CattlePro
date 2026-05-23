@@ -17,7 +17,9 @@ import { AppState, Livestock, LivestockStatus, MedicalRecord, Expense, ExpenseCa
 import { Truck, Home, LogOut, FileText, BadgeDollarSign, Activity, Stethoscope, Grab, BrainCircuit, Droplets, LineChart, Settings, Menu, X, ArrowLeft, ArrowRight, Bell, Search, PlusCircle, Filter, ChevronDown, User, DollarSign, LayoutDashboard, Beef, ClipboardList, Tractor, Users, MapPin, Building2 } from 'lucide-react';
 
 import { backendService } from './services/backendService';
-import { trackedFetch, subscribeApiErrors } from './services/apiTracker';
+import { mergeFeedList } from './utils/feedMerge';
+import { newClientMutationId } from './utils/mutationId';
+import { subscribeApiErrors } from './services/apiTracker';
 import { useToast } from './components/Toast';
 import { useConfirm } from './components/ConfirmDialog';
 import { setTenant as setTenantContext, getTenantFromUrl, getPersistedSales, setPersistedSales, getPersistedLivestockStatus, setPersistedLivestockStatus } from './services/tenantContext';
@@ -493,19 +495,33 @@ const App: React.FC = () => {
   };
 
   const processDietPlans = async (
-    requestPayload: { dietPlanIds?: string[]; date?: string; animalIds?: string[] },
+    requestPayload: { dietPlanIds?: string[]; date?: string; fromDate?: string; toDate?: string; animalIds?: string[]; clientMutationId?: string },
     refreshAfter: boolean = true
   ) => {
-    const result = await backendService.processDietPlans(requestPayload);
+    const result = await backendService.processDietPlans({
+      ...requestPayload,
+      clientMutationId: requestPayload.clientMutationId || newClientMutationId('diet'),
+    });
     if (refreshAfter) await refreshDietData();
     return result;
   };
 
   const processDailyConsumption = async () => {
+    if (!state.currentFarmId) {
+      toast.warning('Select a farm first to process today\'s feed.');
+      return;
+    }
+    const activePlanIds = state.dietPlans
+      .filter(d => d.farmId === state.currentFarmId && d.status === 'ACTIVE')
+      .map(d => d.id);
+    if (activePlanIds.length === 0) {
+      toast.info('No ACTIVE diet plans on this farm. Create a plan and set status to Active (Auto-Deduct).');
+      return;
+    }
     try {
-      const result = await processDietPlans({}, true);
+      const result = await processDietPlans({ dietPlanIds: activePlanIds, clientMutationId: newClientMutationId('diet-daily') }, true);
       if (result.plansProcessed === 0 && result.ledgersCreated === 0) {
-        toast.info(result.message || 'No eligible plans to process (none active or already processed today).');
+        toast.info(result.message || 'No eligible plans to process (already processed today or skipped).');
         return;
       }
       toast.success(result.message + (result.totalCost > 0 ? ` Total cost: PKR ${result.totalCost.toLocaleString()}` : ''));
@@ -544,15 +560,13 @@ const App: React.FC = () => {
 
   const handleClearFeedLedger = async () => {
     try {
-      const apiUrl = (import.meta as any).env?.VITE_API_URL || 'https://api.hulmsolutions.com/livestock';
-      await trackedFetch(`${apiUrl}/operations/consumption-logs/clear`, { method: 'DELETE' }).catch(() => { });
-
+      await backendService.clearConsumptionLogsAndLedgers();
       setState(prev => ({ ...prev, consumptionLogs: [], processedFeedLedgers: [] }));
       localStorage.removeItem('cattleops_consumption_logs');
       localStorage.removeItem('cattleops_processed_feed_ledgers');
       toast.success('Ledger history completely purged.');
     } catch (e: any) {
-      toast.error(`Clear failed: ${e.message}`);
+      toast.error(`Clear failed: ${e?.message ?? e}`);
     }
   };
 
@@ -617,7 +631,11 @@ const App: React.FC = () => {
   const addLivestock = async (newAnimal: Livestock) => {
     try {
       if (!state.currentFarmId) { toast.warning('Select a farm first.'); return; }
-      const animalWithFarm = { ...newAnimal, farmId: state.currentFarmId };
+      const animalWithFarm = {
+        ...newAnimal,
+        farmId: state.currentFarmId,
+        clientMutationId: (newAnimal as Livestock & { clientMutationId?: string }).clientMutationId || newClientMutationId('livestock'),
+      };
       const saved = await backendService.createLivestock(animalWithFarm);
 
       let newExpenses: Expense[] = [];
@@ -722,31 +740,14 @@ const App: React.FC = () => {
 
   const addMedicalRecord = async (animalId: string, record: MedicalRecord) => {
     try {
-      const animal = state.livestock.find(l => l.id === animalId);
-      if (!animal) throw new Error("Animal not found");
-      await backendService.addMedicalRecord(animalId, record);
-
-      if (record.cost > 0) {
-        const targetFarmId = state.currentFarmId || animal.farmId;
-        if (!targetFarmId) { toast.warning('Expense recorded but no farm ID could be associated.'); }
-        const expense: Expense = {
-          id: `med_${Date.now()}`,
-          farmId: targetFarmId || 'UNKNOWN_FARM',
-          category: record.type === 'VACCINATION' ? ExpenseCategory.VACCINE : ExpenseCategory.MEDICAL,
-          amount: record.cost,
-          date: record.date,
-          description: `${record.type}: ${record.medicineName} (${animal.tagId})`,
-          relatedAnimalId: animalId,
-          supplier: record.vendorId,
-          farmName: state.farms.find(f => f.id === targetFarmId)?.name
-        };
-        await backendService.createExpense(expense);
+      const onServer = await backendService.getLivestockById(animalId);
+      if (!onServer) {
+        throw new Error('Animal not found on server. Refresh the herd list or save the animal again.');
       }
-
-      // Backend now deducts inventory atomically when record has inventoryId/quantityUsed; refresh feed so UI stays in sync
+      await backendService.addMedicalRecord(animalId, record);
       const [rawLivestock, expenses, feedAfter] = await Promise.all([
         backendService.getLivestock(),
-        record.cost > 0 ? backendService.getExpenses() : Promise.resolve(state.expenses),
+        backendService.getExpenses(),
         record.inventoryId && record.quantityUsed ? backendService.getFeed() : Promise.resolve(state.feed)
       ]);
       setState(prev => ({
@@ -755,7 +756,72 @@ const App: React.FC = () => {
         expenses,
         ...(feedAfter !== state.feed ? { feed: feedAfter } : {})
       }));
-    } catch (e) { toast.error('Failed to add medical record: ' + (e instanceof Error ? e.message : String(e))); }
+      bumpFinancials();
+      setLivestockGridRefresh(r => r + 1);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      toast.error('Failed to add medical record: ' + msg);
+      throw e;
+    }
+  };
+
+  const deleteMedicalRecord = async (animalId: string, recordId: string) => {
+    const ok = await confirmDialog({
+      title: 'Delete medical record',
+      message: 'Remove this record? Medicine stock and linked expense will be restored on the server.',
+      confirmLabel: 'Delete',
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await backendService.deleteMedicalRecord(animalId, recordId);
+      const [rawLivestock, expenses, feed] = await Promise.all([
+        backendService.getLivestock(),
+        backendService.getExpenses(),
+        backendService.getFeed(),
+      ]);
+      setState(prev => ({ ...prev, livestock: toLivestockArray(rawLivestock), expenses, feed }));
+      bumpFinancials();
+      toast.success('Medical record deleted.');
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to delete medical record.');
+    }
+  };
+
+  const deleteWeightRecord = async (animalId: string, recordId: string) => {
+    const ok = await confirmDialog({
+      title: 'Delete weight record',
+      message: 'Remove this weight entry? Animal weight will sync from remaining records.',
+      confirmLabel: 'Delete',
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await backendService.deleteWeightRecord(animalId, recordId);
+      const rawLivestock = await backendService.getLivestock();
+      setState(prev => ({ ...prev, livestock: toLivestockArray(rawLivestock) }));
+      toast.success('Weight record deleted.');
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to delete weight record.');
+    }
+  };
+
+  const deleteMilkRecord = async (animalId: string, recordId: string) => {
+    const ok = await confirmDialog({
+      title: 'Delete milk record',
+      message: 'Remove this milk production entry?',
+      confirmLabel: 'Delete',
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await backendService.deleteMilkRecord(animalId, recordId);
+      const rawLivestock = await backendService.getLivestock();
+      setState(prev => ({ ...prev, livestock: toLivestockArray(rawLivestock) }));
+      toast.success('Milk record deleted.');
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to delete milk record.');
+    }
   };
 
   const bulkVaccinate = async (animalIds: string[], record: MedicalRecord) => {
@@ -900,7 +966,12 @@ const App: React.FC = () => {
     // row even if the followup refetch fails (network blip, timeout). Without this, a refetch
     // failure used to falsely report "Failed to save expense" while the record was actually in
     // the DB — which made auto-logged asset/feed expenses appear to be missing.
-    setState(prev => ({ ...prev, expenses: [...prev.expenses, saved] }));
+    setState(prev => ({
+      ...prev,
+      expenses: prev.expenses.some(e => e.id === saved.id)
+        ? prev.expenses.map(e => (e.id === saved.id ? saved : e))
+        : [...prev.expenses, saved],
+    }));
     bumpFinancials();
     // Step 3: best-effort sync of entities/ledger (PaymentTransaction / LedgerRecord may have
     // been created server-side). Failure here is logged but never reported as a save failure.
@@ -946,91 +1017,68 @@ const App: React.FC = () => {
 
     if (!targetFarmId) { toast.warning('Select a farm to record sales.'); return; }
 
-    const saleWithContext: Sale = {
+    const saleWithContext: Sale & { clientMutationId?: string } = {
       ...sale,
       farmId: targetFarmId,
       paymentStatus: sale.paymentStatus ?? 'PAID',
       amountReceived: sale.amountReceived ?? sale.amount,
-      soldAnimalIds: sale.soldAnimalIds ?? ((sale as any).animalId ? [(sale as any).animalId] : undefined)
+      soldAnimalIds: sale.soldAnimalIds ?? ((sale as any).animalId ? [(sale as any).animalId] : undefined),
+      clientMutationId: (sale as Sale & { clientMutationId?: string }).clientMutationId || newClientMutationId('sale'),
     };
 
-    // Add to state immediately so the grid shows it (works even if API fails or is offline)
-    const saleToShow: Sale = { ...saleWithContext, id: saleWithContext.id };
-    const newSalesAfterAdd = [...state.sales, saleToShow];
-    setState(prev => ({ ...prev, sales: newSalesAfterAdd }));
-    setPersistedSales(newSalesAfterAdd);
-
     try {
-      const isBulk = (saleWithContext.soldAnimalIds?.length ?? 0) > 1;
-      const saved = isBulk
-        ? await backendService.createSaleBulk(saleWithContext)
-        : await backendService.createSale(saleWithContext);
-      const [salesFromApi, entities, ledger] = await Promise.all([
+      const tx = await backendService.createSaleTransaction(saleWithContext);
+      const saved = tx.sale;
+      const [salesFromApi, entities, ledger, rawLivestock] = await Promise.all([
         backendService.getSales().catch(() => []),
         backendService.getEntities(),
-        backendService.getLedger()
+        backendService.getLedger(),
+        backendService.getLivestock().catch(() => []),
       ]);
-      const salesToSet = Array.isArray(salesFromApi) && salesFromApi.length > 0
-        ? salesFromApi
-        : newSalesAfterAdd.slice(0, -1).concat({ ...saved, farmId: saved.farmId || targetFarmId });
+      const salesToSet = Array.isArray(salesFromApi) && salesFromApi.length > 0 ? salesFromApi : [...state.sales, saved];
       setState(prev => ({
         ...prev,
         sales: salesToSet,
         entities,
-        ledger
+        ledger,
+        livestock: toLivestockArray(rawLivestock),
       }));
       setPersistedSales(salesToSet);
       bumpFinancials();
-    } catch (e) {
-      // Sale already in state and persisted; keep it visible after refresh.
-      console.warn("Sale saved locally; backend sync failed:", e);
+      if (tx.idempotentReplay) toast.info('Sale already recorded (idempotent).');
+      else toast.success('Sale recorded. Animal status updated on server.');
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to record sale.');
+      throw e;
     }
   };
 
   const handleDeleteSale = async (id: string) => {
-    const saleToDelete = state.sales.find(s => s.id === id);
-    if (!saleToDelete) return;
+    if (!state.sales.find(s => s.id === id)) return;
     try {
       const ok = await confirmDialog({
-        title: 'Delete sale',
-        message: 'Delete this sale? Animals will be reverted to ACTIVE status.',
-        confirmLabel: 'Delete',
+        title: 'Reverse sale',
+        message: 'Reverse this sale? The server will restore animal status, ledger, and payments.',
+        confirmLabel: 'Reverse',
         danger: true,
       });
       if (!ok) return;
-      await backendService.deleteSale(id);
-
-      // Cascading rollback for animals — only revert those still in SOLD state.
-      // Animals that have since been marked DECEASED (or any other status) must NOT be reset to ACTIVE,
-      // which would silently wipe their deathDate and contradict the actual lifecycle.
-      let revertedCount = 0;
-      let skippedCount = 0;
-      if (saleToDelete.soldAnimalIds) {
-        for (const animalId of saleToDelete.soldAnimalIds) {
-          const animalToRevert = state.livestock.find(l => l.id === animalId);
-          if (!animalToRevert) continue;
-          if (animalToRevert.status !== 'SOLD') {
-            skippedCount += 1;
-            continue;
-          }
-          await updateLivestock({ ...animalToRevert, status: 'ACTIVE' as any });
-          revertedCount += 1;
-        }
-      }
-      if (skippedCount > 0) {
-        toast.info(`${revertedCount} animal(s) reverted to ACTIVE; ${skippedCount} skipped (status changed since the sale).`);
-      }
-
+      await backendService.reverseSale(id);
+      const [salesFromApi, ledger, rawLivestock] = await Promise.all([
+        backendService.getSales(),
+        backendService.getLedger(),
+        backendService.getLivestock(),
+      ]);
       setState(p => {
-        const nextSales = p.sales.filter(s => s.id !== id);
+        const nextSales = salesFromApi.filter(s => s.id !== id);
         setPersistedSales(nextSales);
-        return { ...p, sales: nextSales };
+        return { ...p, sales: nextSales, ledger, livestock: toLivestockArray(rawLivestock) };
       });
       bumpFinancials();
-      toast.success('Sale deleted.');
-    } catch (e) {
+      toast.success('Sale reversed.');
+    } catch (e: any) {
       console.error(e);
-      toast.error('Failed to delete sale completely. Check backend logs.');
+      toast.error(e?.message || 'Failed to reverse sale.');
     }
   };
 
@@ -1046,21 +1094,12 @@ const App: React.FC = () => {
       });
       if (!ok) return;
       await backendService.deleteExpense(id);
-
-      let updatedFeed = state.feed;
-      // Check if it's a feed purchase we need to reverse
-      if (expenseToDelete.feedItemId && expenseToDelete.quantity) {
-        const inventoryItem = state.feed.find(f => f.id === expenseToDelete.feedItemId);
-        if (inventoryItem) {
-          const updatedItem = { ...inventoryItem, quantity: Math.max(0, inventoryItem.quantity - expenseToDelete.quantity) };
-          try {
-            await backendService.updateFeed(updatedItem.id, updatedItem);
-            updatedFeed = state.feed.map(f => f.id === updatedItem.id ? updatedItem : f);
-          } catch (e) { console.warn("Failed to revert inventory on expense delete", e); }
-        }
-      }
-
-      setState(p => ({ ...p, expenses: p.expenses.filter(e => e.id !== id), feed: updatedFeed }));
+      const [expenses, feed, ledger] = await Promise.all([
+        backendService.getExpenses(),
+        backendService.getFeed(),
+        backendService.getLedger(),
+      ]);
+      setState(p => ({ ...p, expenses, feed, ledger }));
       bumpFinancials();
       toast.success('Expense deleted.');
     } catch (e) {
@@ -1072,7 +1111,7 @@ const App: React.FC = () => {
   /* Financial Helpers */
   const handleAddPayment = async (payment: { entityId: string, amount: number, date: string, notes?: string }) => {
     try {
-      await backendService.createPayment(payment);
+      await backendService.createPayment({ ...payment, clientMutationId: newClientMutationId('payment') });
       const [entities, ledger] = await Promise.all([
         backendService.getEntities(),
         backendService.getLedger()
@@ -1318,6 +1357,9 @@ const App: React.FC = () => {
                 onAddMedicalRecord={addMedicalRecord} onAddBreedingRecord={addBreedingRecord} onAddWeightRecord={addWeightRecord} onAddMilkRecord={addMilkRecord}
                 onUpdateBreedingRecord={updateBreedingRecord}
                 onDeleteBreedingRecord={deleteBreedingRecord}
+                onDeleteMedicalRecord={deleteMedicalRecord}
+                onDeleteWeightRecord={deleteWeightRecord}
+                onDeleteMilkRecord={deleteMilkRecord}
                 onBulkVaccinate={bulkVaccinate} onBulkMove={bulkMove}
                 pagination={livestockPageResult ? { totalElements: livestockPageResult.totalElements, totalPages: livestockPageResult.totalPages, page: livestockPageRequest.number, size: livestockPageRequest.size, sortBy: livestockPageRequest.sortBy, sortDirection: livestockPageRequest.sortDirection, searchQ: livestockPageRequest.q, category: livestockPageRequest.category } : undefined}
                 onPageChange={(page) => setLivestockPageRequest(prev => ({ ...prev, number: page }))}
@@ -1338,6 +1380,9 @@ const App: React.FC = () => {
                 onAddMedicalRecord={addMedicalRecord} onAddBreedingRecord={addBreedingRecord} onAddWeightRecord={addWeightRecord} onAddMilkRecord={addMilkRecord}
                 onUpdateBreedingRecord={updateBreedingRecord}
                 onDeleteBreedingRecord={deleteBreedingRecord}
+                onDeleteMedicalRecord={deleteMedicalRecord}
+                onDeleteWeightRecord={deleteWeightRecord}
+                onDeleteMilkRecord={deleteMilkRecord}
                 onBulkVaccinate={bulkVaccinate} onBulkMove={bulkMove}
                 pagination={livestockPageResult ? { totalElements: livestockPageResult.totalElements, totalPages: livestockPageResult.totalPages, page: livestockPageRequest.number, size: livestockPageRequest.size, sortBy: livestockPageRequest.sortBy, sortDirection: livestockPageRequest.sortDirection, searchQ: livestockPageRequest.q, category: livestockPageRequest.category } : undefined}
                 onPageChange={(page) => setLivestockPageRequest(prev => ({ ...prev, number: page }))}
@@ -1411,7 +1456,7 @@ const App: React.FC = () => {
                   if (!state.currentFarmId) { toast.warning('Select a farm first.'); return; }
                   const itemWithFarm = { ...f, farmId: state.currentFarmId }; // Ensure farmId is set
                   const saved = await backendService.createFeed(itemWithFarm);
-                  setState(p => ({ ...p, feed: [...p.feed, saved] }));
+                  setState(p => ({ ...p, feed: mergeFeedList(p.feed, saved) }));
                 }}
                 onUpdateFeed={async (f) => { const updated = await backendService.updateFeed(f.id, f); setState(p => ({ ...p, feed: p.feed.map(i => i.id === f.id ? updated : i) })); }}
                 onDeleteFeed={async (id) => { try { await backendService.deleteFeed(id); setState(p => ({ ...p, feed: p.feed.filter(i => i.id !== id) })); } catch (e) { toast.error('Failed to delete feed item.'); } }}
@@ -1449,7 +1494,12 @@ const App: React.FC = () => {
                 onDeleteTreatmentProtocol={async (id) => { await backendService.deleteTreatmentProtocol(id); setState(s => ({ ...s, treatmentProtocols: s.treatmentProtocols.filter(x => x.id !== id) })); }}
                 onLogTreatment={handleLogTreatment}
                 onApplyProtocol={async (protocolId, targetAnimalIds, performedBy) => {
-                  const result = await backendService.applyProtocol({ protocolId, targetAnimalIds, performedBy });
+                  const result = await backendService.applyProtocol({
+                    protocolId,
+                    targetAnimalIds,
+                    performedBy,
+                    clientMutationId: newClientMutationId('protocol'),
+                  });
                   if (!result.success) throw new Error(result.message);
                   const [feed, treatmentLogs, expenses, livestock] = await Promise.all([
                     backendService.getFeed(),
@@ -1491,10 +1541,24 @@ const App: React.FC = () => {
                 onAddFeed={async (item) => {
                   if (!state.currentFarmId) { toast.warning('Select a farm first.'); return; }
                   const saved = await backendService.createFeed({ ...item, farmId: state.currentFarmId });
-                  setState(p => ({ ...p, feed: [...p.feed, saved] }));
+                  setState(p => ({ ...p, feed: mergeFeedList(p.feed, saved) }));
                 }}
                 onUpdateInventory={async (item) => { const updated = await backendService.updateFeed(item.id, item); setState(p => ({ ...p, feed: p.feed.map(f => f.id === item.id ? updated : f) })); }}
                 onDeleteFeed={async (id) => { try { await backendService.deleteFeed(id); setState(p => ({ ...p, feed: p.feed.filter(f => f.id !== id) })); } catch (e) { toast.error('Failed to delete feed item.'); } }}
+                onRefreshAfterRepair={async () => {
+                  const [feed, expenses, ledger] = await Promise.all([
+                    backendService.getFeed(),
+                    backendService.getExpenses(),
+                    backendService.getLedger(),
+                  ]);
+                  setState(p => ({
+                    ...p,
+                    feed: Array.isArray(feed) ? feed : p.feed,
+                    expenses: Array.isArray(expenses) ? expenses : p.expenses,
+                    ledger: Array.isArray(ledger) ? ledger : p.ledger,
+                  }));
+                  bumpFinancials();
+                }}
               />
             )}
             {activeView === 'REPORTS' && <Reports currentFarmId={state.currentFarmId} state={{

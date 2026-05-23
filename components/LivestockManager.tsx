@@ -21,13 +21,16 @@ interface Props {
     onAddLivestock: (c: Livestock) => void | Promise<void>;
     onUpdateLivestock: (c: Livestock) => void | Promise<void>;
     onDeleteLivestock: (id: string) => void | Promise<void>;
-    onAddMedicalRecord: (animalId: string, record: MedicalRecord) => void;
+    onAddMedicalRecord: (animalId: string, record: MedicalRecord) => void | Promise<void>;
     onAddBreedingRecord: (animalId: string, record: InseminationRecord) => void;
     onAddWeightRecord: (animalId: string, record: WeightRecord) => void;
 
     onAddMilkRecord: (animalId: string, record: MilkRecord) => void;
     onUpdateBreedingRecord: (animalId: string, record: InseminationRecord) => void;
     onDeleteBreedingRecord?: (animalId: string, recordId: string) => void | Promise<void>;
+    onDeleteMedicalRecord?: (animalId: string, recordId: string) => void | Promise<void>;
+    onDeleteWeightRecord?: (animalId: string, recordId: string) => void | Promise<void>;
+    onDeleteMilkRecord?: (animalId: string, recordId: string) => void | Promise<void>;
     onBulkVaccinate?: (animalIds: string[], record: MedicalRecord) => void | Promise<void>;
     onBulkMove?: (animalIds: string[], location: string) => void | Promise<void>;
     pagination?: { totalElements: number; totalPages: number; page: number; size: number; sortBy: string; sortDirection: string; searchQ: string; category?: string };
@@ -43,7 +46,7 @@ interface Props {
 
 type ViewMode = 'LIST' | 'ANIMAL_FORM' | 'DETAILS';
 
-export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species, categories, entities = [], infrastructure = [], onAddLivestock, onUpdateLivestock, onDeleteLivestock, onAddMedicalRecord, onAddBreedingRecord, onAddWeightRecord, onAddMilkRecord, onUpdateBreedingRecord, onDeleteBreedingRecord, onBulkVaccinate, onBulkMove, pagination, onPageChange, onSortChange, onSearchChange, onCategoryChange, inventory, onAddSale, allLivestock, state }) => {
+export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species, categories, entities = [], infrastructure = [], onAddLivestock, onUpdateLivestock, onDeleteLivestock, onAddMedicalRecord, onAddBreedingRecord, onAddWeightRecord, onAddMilkRecord, onUpdateBreedingRecord, onDeleteBreedingRecord, onDeleteMedicalRecord, onDeleteWeightRecord, onDeleteMilkRecord, onBulkVaccinate, onBulkMove, pagination, onPageChange, onSortChange, onSearchChange, onCategoryChange, inventory, onAddSale, allLivestock, state }) => {
     const toast = useToast();
     const { confirm: confirmDialog, prompt: promptDialog } = useConfirm();
     const T = {
@@ -150,8 +153,10 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
     const [selectedAnimalId, setSelectedAnimalId] = useState<string | null>(null);
 
     // Derive selectedAnimal from props to ensure it's always up to date
-    const resolveLivestock = allLivestock && allLivestock.length > 0 ? allLivestock : livestock;
-    const selectedAnimal = resolveLivestock.find(l => l.id === selectedAnimalId) || null;
+    const selectedAnimal =
+        (allLivestock?.find(l => l.id === selectedAnimalId))
+        ?? livestock.find(l => l.id === selectedAnimalId)
+        ?? null;
 
     // Repair legacy gallery URLs saved without https (browser treated them as localhost-relative paths).
     React.useEffect(() => {
@@ -880,21 +885,25 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
             if (!ok) return;
         }
 
-        onAddMedicalRecord(selectedAnimal.id, {
-            id: Math.random().toString(36).substr(2, 9),
-            date: newHealthRecord.date!,
-            time: newHealthRecord.time!,
-            type: newHealthRecord.type!,
-            medicineName: newHealthRecord.medicineName ?? '',
-            doctorName: newHealthRecord.doctorName ?? '',
-            cost: Number(newHealthRecord.cost) || 0,
-            notes: newHealthRecord.notes ?? '',
-            nextDueDate: (newHealthRecord.nextDueDate && newHealthRecord.nextDueDate.trim() !== '') ? newHealthRecord.nextDueDate : undefined,
-            imageUrl: newHealthRecord.imageUrl ?? '',
-            inventoryId: item?.id,
-            quantityUsed: newHealthRecord.quantityUsed,
-            vendorId: newHealthRecord.vendorId
-        });
+        try {
+            await onAddMedicalRecord(selectedAnimal.id, {
+                id: Math.random().toString(36).substr(2, 9),
+                date: newHealthRecord.date!,
+                time: newHealthRecord.time!,
+                type: newHealthRecord.type!,
+                medicineName: newHealthRecord.medicineName ?? '',
+                doctorName: newHealthRecord.doctorName ?? '',
+                cost: Number(newHealthRecord.cost) || 0,
+                notes: newHealthRecord.notes ?? '',
+                nextDueDate: (newHealthRecord.nextDueDate && newHealthRecord.nextDueDate.trim() !== '') ? newHealthRecord.nextDueDate : undefined,
+                imageUrl: newHealthRecord.imageUrl ?? '',
+                inventoryId: item?.id,
+                quantityUsed: newHealthRecord.quantityUsed,
+                vendorId: newHealthRecord.vendorId
+            });
+        } catch {
+            return;
+        }
         setIsAddingHealthRecord(false);
         setNewHealthRecord({ type: 'VACCINATION', date: new Date().toISOString().split('T')[0], medicineName: '', doctorName: '', cost: 0, quantityUsed: undefined, inventoryId: undefined, vendorId: '' });
         setIsManualMedicineEntry(false);
@@ -1964,9 +1973,12 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                                             <p className="text-sm text-gray-400 mt-1">Administered by: <span className="text-gray-600 font-bold">{rec.doctorName}</span></p>
                                             {rec.notes && <p className="text-xs text-gray-500 bg-gray-50 p-2 rounded-lg mt-3 italic">"{rec.notes}"</p>}
                                         </div>
-                                        <div className="flex flex-col items-end justify-center">
+                                        <div className="flex flex-col items-end justify-center gap-2">
                                             <p className="text-lg font-black text-gray-800">PKR {(rec.cost ?? 0).toLocaleString()}</p>
                                             {rec.nextDueDate && <p className="text-[10px] font-bold text-red-500 uppercase flex items-center gap-1 mt-1"><Clock size={10} /> Next Due: {rec.nextDueDate}</p>}
+                                            {onDeleteMedicalRecord && rec.id && (
+                                                <button type="button" onClick={() => onDeleteMedicalRecord(selectedAnimal.id, rec.id)} className="p-2 text-gray-300 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Delete record"><Trash2 size={16} /></button>
+                                            )}
                                         </div>
                                     </div>
                                 ))}
@@ -2065,7 +2077,12 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                                             {selectedAnimal.weightHistory.slice().reverse().map(rec => (
                                                 <div key={rec.id} className="flex justify-between items-center bg-white p-3 rounded-xl border border-gray-100 shadow-sm">
                                                     <div><p className="text-xs font-black text-gray-800">{rec.date}</p><p className="text-[10px] text-gray-400 font-bold uppercase">{rec.notes || 'Routine Check'}</p></div>
-                                                    <div className="text-right"><p className="text-lg font-black text-emerald-600">{rec.weight} <span className="text-[10px] text-gray-400">kg</span></p></div>
+                                                    <div className="flex items-center gap-2">
+                                                        <p className="text-lg font-black text-emerald-600">{rec.weight} <span className="text-[10px] text-gray-400">kg</span></p>
+                                                        {onDeleteWeightRecord && rec.id && (
+                                                            <button type="button" onClick={() => onDeleteWeightRecord(selectedAnimal.id, rec.id)} className="p-1.5 text-gray-300 hover:text-red-600 hover:bg-red-50 rounded-lg" title="Delete"><Trash2 size={14} /></button>
+                                                        )}
+                                                    </div>
                                                 </div>
                                             ))}
                                             {selectedAnimal.weightHistory.length === 0 && <p className="text-xs text-gray-400 font-bold uppercase text-center py-4">No logged records</p>}
@@ -2126,7 +2143,12 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                                                         <div className={`p-1.5 rounded-lg ${rec.session === 'MORNING' ? 'bg-amber-100 text-amber-600' : 'bg-indigo-100 text-indigo-600'}`}><Clock size={14} /></div>
                                                         <div><p className="text-xs font-black text-gray-800">{rec.date}</p><p className="text-[9px] text-gray-400 uppercase font-black">{rec.session}</p></div>
                                                     </div>
-                                                    <div className="text-right"><p className="text-lg font-black text-sky-600">{rec.quantity} <span className="text-[10px] text-gray-400">L</span></p></div>
+                                                    <div className="flex items-center gap-2">
+                                                        <p className="text-lg font-black text-sky-600">{rec.quantity} <span className="text-[10px] text-gray-400">L</span></p>
+                                                        {onDeleteMilkRecord && rec.id && (
+                                                            <button type="button" onClick={() => onDeleteMilkRecord(selectedAnimal.id, rec.id)} className="p-1.5 text-gray-300 hover:text-red-600 hover:bg-red-50 rounded-lg" title="Delete"><Trash2 size={14} /></button>
+                                                        )}
+                                                    </div>
                                                 </div>
                                             ))}
                                         </div>

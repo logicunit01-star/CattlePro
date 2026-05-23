@@ -23,6 +23,16 @@ interface Props {
     onUpdateDietPlan: (plan: DietPlan) => void | Promise<void>;
     onDeleteDietPlan: (id: string) => void | Promise<void>;
     onRunDailyProcessing: () => Promise<void>;
+    onProcessDietPlans?: (request: { dietPlanIds?: string[]; date?: string; fromDate?: string; toDate?: string; animalIds?: string[] }) => Promise<{
+        success: boolean;
+        message: string;
+        plansProcessed: number;
+        ledgersCreated: number;
+        totalCost: number;
+        planResults?: { dietPlanId: string; date?: string; status: string; animalsFed?: number; cost?: number; message?: string }[];
+        totalAnimalsFed?: number;
+    }>;
+    onRefreshDietData?: () => Promise<void>;
     onAddTreatmentProtocol: (plan: TreatmentProtocol) => void | Promise<void>;
     onUpdateTreatmentProtocol: (plan: TreatmentProtocol) => void | Promise<void>;
     onDeleteTreatmentProtocol: (id: string) => void | Promise<void>;
@@ -48,6 +58,8 @@ export const Operations: React.FC<Props> = ({
     onUpdateDietPlan,
     onDeleteDietPlan,
     onRunDailyProcessing,
+    onProcessDietPlans,
+    onRefreshDietData,
     onAddTreatmentProtocol,
     onUpdateTreatmentProtocol,
     onDeleteTreatmentProtocol,
@@ -145,9 +157,30 @@ export const Operations: React.FC<Props> = ({
     const bdTotalDays = bdDateRange().length;
     const bdSelectedPlans = state.dietPlans.filter(p => bdSelectedPlanIds.includes(p.id));
 
+    const planResultToRow = (
+        pr: { dietPlanId: string; date?: string; status: string; animalsFed?: number; cost?: number; message?: string }
+    ): typeof bdResults[0] => {
+        const plan = state.dietPlans.find(p => p.id === pr.dietPlanId);
+        const status = pr.status === 'SUCCESS' ? 'SUCCESS' as const : pr.status === 'ERROR' ? 'ERROR' as const : 'SKIP' as const;
+        return {
+            date: pr.date || '',
+            planId: pr.dietPlanId,
+            planName: plan?.name || pr.dietPlanId,
+            status,
+            message: pr.message || status,
+            totalCost: pr.cost,
+            animalsCount: pr.animalsFed,
+        };
+    };
+
     const handleBackdateProcess = async () => {
         if (!state.currentFarmId) { toast.warning('Select a farm first.'); return; }
         if (bdSelectedPlanIds.length === 0) { toast.warning('Select at least one diet plan.'); return; }
+        const inactive = bdSelectedPlanIds.filter(id => state.dietPlans.find(p => p.id === id)?.status !== 'ACTIVE');
+        if (inactive.length > 0) {
+            toast.warning('Only ACTIVE plans can be processed. Set plan status to Active (Auto-Deduct) or deselect draft/archived plans.');
+            return;
+        }
         const dates = bdDateRange();
         if (dates.length === 0) { toast.warning('Invalid date range.'); return; }
         if (dates.length > 90) { toast.warning('Date range cannot exceed 90 days at once.'); return; }
@@ -158,34 +191,69 @@ export const Operations: React.FC<Props> = ({
         });
         if (!ok) return;
 
+        const runProcess = onProcessDietPlans
+            ? (req: { dietPlanIds?: string[]; fromDate?: string; toDate?: string; animalIds?: string[] }) => onProcessDietPlans(req)
+            : (req: { dietPlanIds?: string[]; fromDate?: string; toDate?: string; animalIds?: string[] }) => backendService.processDietPlans(req);
+
         setBdProcessing(true);
         setBdStep('DONE');
         setBdResults([]);
-        const results: typeof bdResults = [];
 
-        for (const date of dates) {
-            for (const planId of bdSelectedPlanIds) {
-                const plan = state.dietPlans.find(p => p.id === planId);
-                try {
-                    const overrideIds = bdAnimalOverride === 'CUSTOM' && bdSelectedAnimalIds.length > 0 ? bdSelectedAnimalIds : undefined;
-                    const res = await backendService.processDietPlans({ dietPlanIds: [planId], date, ...(overrideIds ? { animalIds: overrideIds } : {}) });
-                    results.push({
+        const overrideIds = bdAnimalOverride === 'CUSTOM' && bdSelectedAnimalIds.length > 0 ? bdSelectedAnimalIds : undefined;
+        let results: typeof bdResults = [];
+
+        try {
+            const res = await runProcess({
+                dietPlanIds: bdSelectedPlanIds,
+                fromDate: bdStartDate,
+                toDate: bdEndDate,
+                ...(overrideIds ? { animalIds: overrideIds } : {}),
+            });
+
+            if (!res.success) {
+                toast.error(res.message || 'Backdate processing failed.');
+                results = bdSelectedPlanIds.flatMap(planId =>
+                    dates.map(date => ({
                         date,
                         planId,
-                        planName: plan?.name || planId,
-                        status: res.success ? 'SUCCESS' : 'SKIP',
-                        message: res.message || 'Processed',
-                        totalCost: res.totalCost,
-                        animalsCount: (res as any).totalAnimalsFed ?? (res as any).animalsFed,
-                    });
-                } catch (e: any) {
-                    results.push({ date, planId, planName: plan?.name || planId, status: 'ERROR', message: e?.message || 'Unknown error' });
-                }
+                        planName: state.dietPlans.find(p => p.id === planId)?.name || planId,
+                        status: 'ERROR' as const,
+                        message: res.message || 'Processing failed',
+                    }))
+                );
+            } else if (res.planResults && res.planResults.length > 0) {
+                results = res.planResults.map(planResultToRow);
+            } else {
+                results = bdSelectedPlanIds.flatMap(planId =>
+                    dates.map(date => ({
+                        date,
+                        planId,
+                        planName: state.dietPlans.find(p => p.id === planId)?.name || planId,
+                        status: 'SKIP' as const,
+                        message: res.message || 'No new processing',
+                    }))
+                );
             }
+        } catch (e: any) {
+            const errMsg = e?.message || 'Unknown error';
+            results = bdSelectedPlanIds.flatMap(planId =>
+                dates.map(date => ({
+                    date,
+                    planId,
+                    planName: state.dietPlans.find(p => p.id === planId)?.name || planId,
+                    status: 'ERROR' as const,
+                    message: errMsg,
+                }))
+            );
+            toast.error(`Backdate failed: ${errMsg}`);
         }
 
         setBdResults(results);
         setBdProcessing(false);
+        const okCount = results.filter(r => r.status === 'SUCCESS').length;
+        if (okCount > 0) toast.success(`Backdate complete: ${okCount} run(s) processed. Inventory and expenses updated.`);
+        else if (results.some(r => r.status === 'ERROR')) toast.error('Backdate finished with errors. See results table.');
+        else toast.info('No new processing — dates may already be in the ledger (duplicate skip).');
     };
 
     // --- HELPERS ---
@@ -518,11 +586,22 @@ export const Operations: React.FC<Props> = ({
         }
     };
 
+    const dietFormTargetIds = (): string[] => {
+        const fromTarget = dietForm.targetIds || [];
+        const fromAssigned = (dietForm as any).assignedAnimalIds || [];
+        return Array.from(new Set([...fromTarget, ...fromAssigned].filter(Boolean)));
+    };
+
     const handleDietSubmit = async () => {
         if (!dietForm.name || (!dietForm.items || dietForm.items.length === 0)) { toast.warning('Name and at least one ingredient are required.'); return; }
         if (!state.currentFarmId) { toast.warning('Select a farm first.'); return; }
-        if ((dietForm.targetType || '') === 'INDIVIDUAL' && (!dietForm.targetIds || dietForm.targetIds.length === 0)) {
-            toast.warning('Select at least one animal under Target Selection when using Individual Animal.');
+        const tt = (dietForm.targetType || '').toUpperCase();
+        if ((tt === 'INDIVIDUAL' || tt === 'GROUP') && dietFormTargetIds().length === 0) {
+            toast.warning(tt === 'GROUP' ? 'Select at least one animal for the group.' : 'Select at least one animal under Target Selection.');
+            return;
+        }
+        if (tt === 'CATEGORY' && !dietForm.targetId && !dietForm.targetName) {
+            toast.warning('Select a category for this plan.');
             return;
         }
 
@@ -544,7 +623,7 @@ export const Operations: React.FC<Props> = ({
             name: dietForm.name!,
             targetType: dietForm.targetType || 'CATEGORY',
             targetId: dietForm.targetId,
-            targetIds: dietForm.targetIds || [],
+            targetIds: (tt === 'INDIVIDUAL' || tt === 'GROUP') ? dietFormTargetIds() : [],
             targetName: dietForm.targetName,
             status: dietForm.status || 'DRAFT',
             distributionMode: dietForm.distributionMode || 'PER_ANIMAL',
@@ -555,6 +634,8 @@ export const Operations: React.FC<Props> = ({
             if (editingDiet) await onUpdateDietPlan(plan);
             else await onAddDietPlan(plan);
             setViewMode('LIST');
+            setEditingDiet(null);
+            toast.success(editingDiet ? 'Diet plan updated.' : 'Diet plan created.');
         } catch (e) {
             console.error(e);
             toast.error('Failed to save diet plan. Is the backend running?');
@@ -588,17 +669,6 @@ export const Operations: React.FC<Props> = ({
         }
     };
 
-    const toggleAnimalAssignment = (animalId: string) => {
-        setDietForm(prev => {
-            const currentIds = prev.assignedAnimalIds || [];
-            if (currentIds.includes(animalId)) {
-                return { ...prev, assignedAnimalIds: currentIds.filter(id => id !== animalId) };
-            } else {
-                return { ...prev, assignedAnimalIds: [...currentIds, animalId] };
-            }
-        });
-    };
-
     const getStatusColor = (status: string) => {
         switch (status) {
             case 'OPERATIONAL': return 'text-green-600 bg-green-100';
@@ -612,7 +682,7 @@ export const Operations: React.FC<Props> = ({
         const farmId = plan.farmId || state.currentFarmId;
         const activeOnFarm = state.livestock.filter(l => l.status === 'ACTIVE' && (!farmId || l.farmId === farmId));
         const t = (plan.targetType || '').toUpperCase();
-        if (t === 'INDIVIDUAL') {
+        if (t === 'INDIVIDUAL' || t === 'GROUP') {
             const ids = plan.targetIds ?? (plan as any).assignedAnimalIds ?? [];
             return Array.isArray(ids) ? ids.length : 0;
         }
@@ -627,7 +697,7 @@ export const Operations: React.FC<Props> = ({
         const farmId = plan.farmId || state.currentFarmId;
         const activeOnFarm = state.livestock.filter(l => l.status === 'ACTIVE' && (!farmId || l.farmId === farmId));
         const t = (plan.targetType || '').toUpperCase();
-        if (t === 'INDIVIDUAL') {
+        if (t === 'INDIVIDUAL' || t === 'GROUP') {
             const ids = plan.targetIds ?? (plan as any).assignedAnimalIds ?? [];
             const idSet = Array.isArray(ids) ? new Set(ids) : new Set<string>();
             return activeOnFarm.filter(l => idSet.has(l.id));
@@ -1867,8 +1937,12 @@ export const Operations: React.FC<Props> = ({
                                             <div className="flex justify-end gap-3">
                                                 <button onClick={() => setViewMode('LIST')} className="px-6 py-2.5 text-gray-500 hover:text-gray-700 font-medium">Cancel</button>
                                                 <button
-                                                    disabled={bdSelectedPlanIds.length === 0 || bdTotalDays === 0}
-                                                    onClick={() => setBdStep('PREVIEW')}
+                                                    disabled={bdSelectedPlanIds.length === 0 || bdTotalDays === 0 || bdSelectedPlanIds.some(id => state.dietPlans.find(p => p.id === id)?.status !== 'ACTIVE')}
+                                                    onClick={() => {
+                                                        const bad = bdSelectedPlanIds.filter(id => state.dietPlans.find(p => p.id === id)?.status !== 'ACTIVE');
+                                                        if (bad.length) { toast.warning('Only ACTIVE plans can be backdated. Activate or deselect draft/archived plans.'); return; }
+                                                        setBdStep('PREVIEW');
+                                                    }}
                                                     className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl font-semibold shadow-sm flex items-center gap-2 transition-all"
                                                 >
                                                     Review &amp; Confirm <ChevronRight size={16} />
@@ -2198,20 +2272,20 @@ export const Operations: React.FC<Props> = ({
                                                         <option key={catName as string} value={catName as string}>{catName as string}</option>
                                                     ))}
                                                 </select>
-                                            ) : dietForm.targetType === 'INDIVIDUAL' ? (
+                                            ) : (dietForm.targetType === 'INDIVIDUAL' || dietForm.targetType === 'GROUP') ? (
                                                 <div className="border border-gray-300 rounded-lg max-h-40 overflow-y-auto p-2">
                                                     {(state.livestock.filter(l => l.status === 'ACTIVE' && (!state.currentFarmId || l.farmId === state.currentFarmId))).map(l => (
                                                         <label key={l.id} htmlFor={`diet-target-${l.id}`} className="flex items-center gap-2 p-1 hover:bg-gray-50 cursor-pointer text-sm">
                                                             <input
                                                                 id={`diet-target-${l.id}`}
                                                                 type="checkbox"
-                                                                checked={(dietForm.targetIds || []).includes(l.id)}
+                                                                checked={dietFormTargetIds().includes(l.id)}
                                                                 onChange={e => {
                                                                     setDietForm(prev => {
-                                                                        const set = new Set(prev.targetIds || []);
+                                                                        const set = new Set([...(prev.targetIds || []), ...((prev as any).assignedAnimalIds || [])]);
                                                                         if (e.target.checked) set.add(l.id);
                                                                         else set.delete(l.id);
-                                                                        return { ...prev, targetIds: Array.from(set) };
+                                                                        return { ...prev, targetIds: Array.from(set), assignedAnimalIds: undefined };
                                                                     });
                                                                 }}
                                                             />
@@ -2220,9 +2294,7 @@ export const Operations: React.FC<Props> = ({
                                                     ))}
                                                     {(state.livestock.filter(l => l.status === 'ACTIVE' && (!state.currentFarmId || l.farmId === state.currentFarmId))).length === 0 && <span className="text-gray-400 italic text-sm">No active animals. Select a farm from the header to list animals.</span>}
                                                 </div>
-                                            ) : (
-                                                <input type="text" disabled placeholder="Group selection logic here..." className="w-full border border-gray-300 bg-gray-100 rounded-lg px-4 py-2 outline-none" />
-                                            )}
+                                            ) : null}
                                         </div>
                                     </div>
 
@@ -2333,8 +2405,9 @@ export const Operations: React.FC<Props> = ({
                                                 let previewAnimals: Livestock[] = [];
                                                 if (dietForm.targetType === 'CATEGORY' && dietForm.targetId) {
                                                     previewAnimals = state.livestock.filter(l => l.category === dietForm.targetName && l.farmId === state.currentFarmId && l.status === 'ACTIVE');
-                                                } else if (dietForm.targetType === 'INDIVIDUAL' && dietForm.targetIds && dietForm.targetIds.length > 0) {
-                                                    previewAnimals = state.livestock.filter(l => dietForm.targetIds!.includes(l.id) && l.status === 'ACTIVE');
+                                                } else if ((dietForm.targetType === 'INDIVIDUAL' || dietForm.targetType === 'GROUP') && dietFormTargetIds().length > 0) {
+                                                    const ids = new Set(dietFormTargetIds());
+                                                    previewAnimals = state.livestock.filter(l => ids.has(l.id) && l.status === 'ACTIVE' && l.farmId === state.currentFarmId);
                                                 } else if (dietForm.targetType === 'ALL') {
                                                     previewAnimals = state.livestock.filter(l => l.farmId === state.currentFarmId && l.status === 'ACTIVE');
                                                 }
