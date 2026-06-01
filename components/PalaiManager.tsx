@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { AppState, Livestock, Entity } from '../types';
 import { User, ClipboardList, TrendingUp, ArrowRight, Activity, Loader2 } from 'lucide-react';
 import { backendService } from '../services/backendService';
+import { newClientMutationId } from '../utils/mutationId';
 import { FeedSkeleton, WidgetSkeleton } from './Skeleton';
 import { useToast } from './Toast';
 
@@ -60,7 +61,8 @@ export const PalaiManager: React.FC<Props> = ({ state, onUpdateLivestock, onAddE
                 farmId: state.currentFarmId || undefined,
                 customerId: selectedCustomerId,
                 billingPeriodStart: invoiceDateRange.start,
-                billingPeriodEnd: invoiceDateRange.end
+                billingPeriodEnd: invoiceDateRange.end,
+                clientMutationId: newClientMutationId('palai-invoice'),
             };
             await backendService.createPalaiInvoice(payload);
             toast.success('Invoice generated. Total auto-calculated from animal plans.', { title: 'Invoice ready' });
@@ -96,7 +98,8 @@ export const PalaiManager: React.FC<Props> = ({ state, onUpdateLivestock, onAddE
                 entityId: selectedCustomerId,
                 amount: paymentAmount,
                 date: new Date().toISOString(),
-                notes: 'Palai Service Payment'
+                notes: 'Palai Service Payment',
+                clientMutationId: newClientMutationId('palai-payment'),
             });
             toast.success('Payment recorded successfully.');
             setPaymentAmount(0);

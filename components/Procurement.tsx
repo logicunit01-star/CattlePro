@@ -10,16 +10,15 @@ interface Props {
     state: AppState;
     onAddExpense: (e: Expense) => void | Promise<void>;
     onUpdateExpense: (e: Expense) => void | Promise<void>;
-    onAddFeed: (f: FeedInventory) => void;
-    onUpdateInventory: (item: FeedInventory) => void;
+    onAddFeed: (f: FeedInventory) => void | Promise<void>;
+    onUpdateInventory: (item: FeedInventory) => void | Promise<void>;
     onDeleteFeed: (id: string) => void;
-    onRefreshProcurement?: () => void | Promise<void>;
 }
 
 const FEED_TYPES = ['GRASS', 'TMR', 'WANDA', 'OTHER'];
 const UNIT_OPTIONS = ['KG', 'TON', 'BUNDLE', 'BAG'];
 
-export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpense, onAddFeed, onUpdateInventory, onDeleteFeed, onRefreshProcurement }) => {
+export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpense, onAddFeed, onUpdateInventory, onDeleteFeed }) => {
     const toast = useToast();
     const { confirm: confirmDialog, prompt: promptDialog } = useConfirm();
     const [activeTab, setActiveTab] = useState<'DASHBOARD' | 'PROCUREMENT' | 'INVENTORY' | 'SUPPLIERS' | 'ANALYTICS'>('DASHBOARD');
@@ -54,6 +53,10 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
     });
     const [isAddingItem, setIsAddingItem] = useState(false);
     const [editingItem, setEditingItem] = useState<FeedInventory | null>(null);
+    /** In-flight guards only — same labels/buttons; prevents duplicate API posts. */
+    const [deployingMaterial, setDeployingMaterial] = useState(false);
+    const [recordingPurchase, setRecordingPurchase] = useState(false);
+    const [repairingData, setRepairingData] = useState(false);
 
     // Filtered Feed items
     const feedItems = useMemo(() => state.feed.filter(f => f.category === 'FEED'), [state.feed]);
@@ -223,6 +226,7 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
     // --- ACTIONS ---
 
     const handleProcurementSubmit = async () => {
+        if (recordingPurchase) return;
         if (!state.currentFarmId) { toast.warning('Select a farm context first.'); return; }
         if (!procurementForm.vendorId || !procurementForm.rate || !procurementForm.feedTypeId) { toast.warning('Please fill all required highlighted fields.'); return; }
 
@@ -250,37 +254,44 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
 
         const desc = isQtyBased ? `Purchase: ${selectedItem.name} (Qty: ${procurementForm.quantity} ${selectedItem.unit}s, Wt: ${procurementForm.weight} kg)` : `Purchase: ${selectedItem.name} (${procurementForm.weight} kg)`;
 
+        const expense: Expense = {
+            id: Math.random().toString(36).substr(2, 9),
+            farmId: state.currentFarmId,
+            category: ExpenseCategory.FEED,
+            amount: totalCost,
+            date: procurementForm.date,
+            description: desc,
+            supplier: procurementForm.vendorId, // We strictly store vendor ID here, allowing tight linkage
+            paymentStatus: procurementForm.paymentStatus as 'PAID' | 'PENDING' | 'PARTIAL',
+            location: procurementForm.location,
+            feedCategory: procurementForm.feedCategory,
+            feedItemId: selectedItem.id,
+            weight: procurementForm.weight,
+            quantity: isQtyBased ? procurementForm.quantity : undefined,
+            rate: procurementForm.rate
+        };
+
         try {
-            const result = await backendService.feedPurchase({
-                farmId: state.currentFarmId,
-                feedItemId: selectedItem.id,
-                vendorId: procurementForm.vendorId === CASH_LABEL ? undefined : procurementForm.vendorId,
-                supplier: procurementForm.vendorId,
-                date: procurementForm.date,
-                quantity: isQtyBased ? procurementForm.quantity : addedValue,
-                weight: procurementForm.weight,
+            await onAddExpense(expense);
+
+            // Auto-update inventory (Keep unitCost native to the Unit e.g. Per Bag)
+            onUpdateInventory({
+                ...selectedItem,
+                quantity: selectedItem.quantity + (isQtyBased ? procurementForm.quantity : addedValue),
                 unitCost: procurementForm.rate,
-                rate: procurementForm.rate,
-                amount: totalCost,
-                amountPaid: procurementForm.paymentStatus === 'PAID' ? totalCost : 0,
-                paymentStatus: procurementForm.paymentStatus,
-                location: procurementForm.location,
-                description: desc
+                defaultSupplier: procurementForm.vendorId !== CASH_LABEL ? procurementForm.vendorId : selectedItem.defaultSupplier
             });
-            const updatedItem = result?.feedItem ?? result?.feedInventory ?? result?.inventory ?? result?.item;
-            if (updatedItem?.id) onUpdateInventory(updatedItem);
-            await onRefreshProcurement?.();
-            setProcurementRefreshKey(key => key + 1);
 
             const vName = procurementForm.vendorId === CASH_LABEL ? 'Cash' : vendorEntities.find(v => v.id === procurementForm.vendorId)?.name;
             toast.success(`Procurement recorded from ${vName}.`);
             setProcurementForm({ ...procurementForm, weight: 0, quantity: 0 });
         } catch (e) {
-            return alert("Failed to save expense.");
+            toast.error('Failed to save expense.');
         }
     };
 
     const handleUpdateExpenseSubmit = async () => {
+        if (recordingPurchase) return;
         if (!editingExpense || !state.currentFarmId) return;
 
         if (!procurementForm.vendorId || !procurementForm.rate || !procurementForm.feedTypeId) { toast.warning('Missing required fields.'); return; }
@@ -320,6 +331,7 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
             rate: procurementForm.rate
         };
 
+        setRecordingPurchase(true);
         try {
             await onUpdateExpense(updated);
 
@@ -332,16 +344,15 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
 
                 // If it's modifying the exact same item ID
                 if (prevItem.id === selectedItem.id) {
-                    onUpdateInventory({
+                    await onUpdateInventory({
                         ...selectedItem,
                         quantity: selectedItem.quantity - prevAddedValue + (isQtyBased ? procurementForm.quantity : newAddedValue),
                         unitCost: procurementForm.rate,
                         defaultSupplier: procurementForm.vendorId !== CASH_LABEL ? procurementForm.vendorId : selectedItem.defaultSupplier
                     });
                 } else {
-                    // Item changed completely, revert old item, supply fresh item
-                    onUpdateInventory({ ...prevItem, quantity: prevItem.quantity - prevAddedValue });
-                    onUpdateInventory({
+                    await onUpdateInventory({ ...prevItem, quantity: prevItem.quantity - prevAddedValue });
+                    await onUpdateInventory({
                         ...selectedItem,
                         quantity: selectedItem.quantity + (isQtyBased ? procurementForm.quantity : newAddedValue),
                         unitCost: procurementForm.rate,
@@ -349,8 +360,7 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                     });
                 }
             } else {
-                // If it was somehow not linked accurately before, just add to the new item
-                onUpdateInventory({
+                await onUpdateInventory({
                     ...selectedItem,
                     quantity: selectedItem.quantity + (isQtyBased ? procurementForm.quantity : newAddedValue),
                     unitCost: procurementForm.rate,
@@ -363,6 +373,8 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
             toast.success('Record updated successfully.');
         } catch (e) {
             console.error(e);
+        } finally {
+            setRecordingPurchase(false);
         }
     };
 
@@ -387,16 +399,56 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
         }));
     };
 
-    const handleSaveInventoryItem = () => {
-        if (!newItemForm.name) { toast.warning('Item name is required.'); return; }
-        if (editingItem) {
-            onUpdateInventory({ ...editingItem, ...newItemForm } as FeedInventory);
-            setEditingItem(null);
-        } else {
-            onAddFeed({ ...newItemForm, id: Math.random().toString(36).substr(2, 9), farmId: state.currentFarmId! } as FeedInventory);
+    const handleRepairMissedData = async () => {
+        if (!state.currentFarmId) {
+            toast.warning('Select a farm first.');
+            return;
         }
-        setIsAddingItem(false);
-        setNewItemForm({ name: '', category: 'FEED', feedType: 'TMR', quantity: 0, unit: 'KG', weightPerUnit: 0, unitCost: 0, reorderLevel: 100, location: 'Feed Store', defaultSupplier: '' });
+        setRepairingData(true);
+        try {
+            const preview = await backendService.repairProcurement(state.currentFarmId, true);
+            if ((preview.stockRowsFixed || 0) === 0 && (preview.ledgerRowsFixed || 0) === 0) {
+                toast.success('No missed procurement rows found for this farm.');
+                return;
+            }
+            const detail = (preview.items || [])
+                .slice(0, 5)
+                .map((item) => `• ${item.feedName || item.feedItemId || item.expenseId}: ${item.message}`)
+                .join('\n');
+            const ok = await confirmDialog({
+                title: 'Repair missed procurement data',
+                message: `${preview.summary}\n\n${detail}${(preview.items?.length || 0) > 5 ? '\n• …' : ''}\n\nApply these fixes? Expenses are not deleted or duplicated.`,
+                confirmLabel: 'Apply repairs',
+            });
+            if (!ok) return;
+            const applied = await backendService.repairProcurement(state.currentFarmId, false);
+            toast.success(applied.summary || 'Repairs applied.');
+            await onRefreshAfterRepair?.();
+        } catch (e: unknown) {
+            toast.error(e instanceof Error ? e.message : 'Repair failed.');
+        } finally {
+            setRepairingData(false);
+        }
+    };
+
+    const handleSaveInventoryItem = async () => {
+        if (deployingMaterial) return;
+        if (!newItemForm.name) { toast.warning('Item name is required.'); return; }
+        setDeployingMaterial(true);
+        try {
+            if (editingItem) {
+                await onUpdateInventory({ ...editingItem, ...newItemForm } as FeedInventory);
+                setEditingItem(null);
+            } else {
+                await onAddFeed({ ...newItemForm, id: Math.random().toString(36).substr(2, 9), farmId: state.currentFarmId! } as FeedInventory);
+            }
+            setIsAddingItem(false);
+            setNewItemForm({ name: '', category: 'FEED', feedType: 'TMR', quantity: 0, unit: 'KG', weightPerUnit: 0, unitCost: 0, reorderLevel: 100, location: 'Feed Store', defaultSupplier: '' });
+        } catch (e) {
+            console.error(e);
+        } finally {
+            setDeployingMaterial(false);
+        }
     };
 
     const startEditItem = (item: FeedInventory) => {
@@ -927,9 +979,9 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                         })()}
                                     </span>
                                     {editingExpense ? (
-                                        <button type="button" onClick={handleUpdateExpenseSubmit} className="w-full bg-slate-800 text-white font-bold py-2.5 rounded-xl hover:bg-slate-700 flex items-center justify-center gap-2 shadow-md transition-all z-10"><Save size={16} /> Update</button>
+                                        <button type="button" onClick={handleUpdateExpenseSubmit} disabled={recordingPurchase} className="w-full bg-slate-800 text-white font-bold py-2.5 rounded-xl hover:bg-slate-700 disabled:opacity-60 flex items-center justify-center gap-2 shadow-md transition-all z-10"><Save size={16} /> Update</button>
                                     ) : (
-                                        <button type="button" onClick={handleProcurementSubmit} className="w-full bg-emerald-600 text-white font-black py-2.5 rounded-xl hover:bg-emerald-700 flex items-center justify-center gap-2 shadow-md hover:shadow-emerald-200/50 transition-all z-10"><Plus size={16} /> RECORD ENTRY</button>
+                                        <button type="button" onClick={handleProcurementSubmit} disabled={recordingPurchase} className="w-full bg-emerald-600 text-white font-black py-2.5 rounded-xl hover:bg-emerald-700 disabled:opacity-60 flex items-center justify-center gap-2 shadow-md hover:shadow-emerald-200/50 transition-all z-10"><Plus size={16} /> RECORD ENTRY</button>
                                     )}
                                 </div>
                             </div>
@@ -1009,9 +1061,14 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                             <h3 className="font-black text-xl flex items-center gap-2"><Package size={20} className="text-emerald-400" /> Master Materials List</h3>
                             <p className="text-xs text-slate-400 font-medium mt-1">Unified view of definitions, rates, and active stock quantities.</p>
                         </div>
-                        <button onClick={() => { setIsAddingItem(!isAddingItem); setEditingItem(null); setNewItemForm({ name: '', category: 'FEED', feedType: 'TMR', quantity: 0, unit: 'KG', weightPerUnit: 0, unitCost: 0, reorderLevel: 100, location: 'Feed Store', defaultSupplier: '' }); }} className="bg-emerald-500 text-white px-5 py-2.5 rounded-xl text-xs font-black tracking-wider hover:bg-emerald-400 transition-all flex items-center gap-2 shadow-lg shadow-emerald-500/30">
-                            {isAddingItem ? 'CANCEL' : <><Plus size={16} /> NEW MATERIAL DEFINITION</>}
-                        </button>
+                        <div className="flex flex-wrap items-center gap-2">
+                            <button type="button" onClick={() => void handleRepairMissedData()} disabled={repairingData} title="Fix stock and ledger gaps from failed saves (preview first)" className="bg-slate-700 text-white px-4 py-2.5 rounded-xl text-xs font-black tracking-wider hover:bg-slate-600 disabled:opacity-60 transition-all flex items-center gap-2 border border-slate-600">
+                                <RefreshCw size={16} className={repairingData ? 'animate-spin' : ''} /> {repairingData ? 'CHECKING…' : 'SYNC MISSED DATA'}
+                            </button>
+                            <button onClick={() => { setIsAddingItem(!isAddingItem); setEditingItem(null); setNewItemForm({ name: '', category: 'FEED', feedType: 'TMR', quantity: 0, unit: 'KG', weightPerUnit: 0, unitCost: 0, reorderLevel: 100, location: 'Feed Store', defaultSupplier: '' }); }} className="bg-emerald-500 text-white px-5 py-2.5 rounded-xl text-xs font-black tracking-wider hover:bg-emerald-400 transition-all flex items-center gap-2 shadow-lg shadow-emerald-500/30">
+                                {isAddingItem ? 'CANCEL' : <><Plus size={16} /> NEW MATERIAL DEFINITION</>}
+                            </button>
+                        </div>
                     </div>
 
                     {isAddingItem && (
@@ -1083,7 +1140,7 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                     </div>
 
                                     <div className="mt-auto pt-4 flex justify-end">
-                                        <button onClick={handleSaveInventoryItem} className="w-full bg-slate-800 text-white font-black px-6 py-3.5 rounded-xl hover:bg-slate-700 transition-colors shadow-lg shadow-slate-200 flex items-center justify-center gap-2"><Save size={18} /> {editingItem ? 'COMMIT CHANGES' : 'DEPLOY MATERIAL'}</button>
+                                        <button onClick={() => void handleSaveInventoryItem()} disabled={deployingMaterial} className="w-full bg-slate-800 text-white font-black px-6 py-3.5 rounded-xl hover:bg-slate-700 disabled:opacity-60 transition-colors shadow-lg shadow-slate-200 flex items-center justify-center gap-2"><Save size={18} /> {editingItem ? 'COMMIT CHANGES' : 'DEPLOY MATERIAL'}</button>
                                     </div>
                                 </div>
                             </div>
