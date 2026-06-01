@@ -31,7 +31,7 @@ type FinancialPayment = { id: string; refType: string; refId: string; amount: nu
 
 export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [], entities, infrastructure = [], farms = [], locations = [], currentFarmId, currentLocationId, onAddExpense, onUpdateExpense, onAddSale, onDeleteExpense, onDeleteSale, onRecordSalePayment, onAfterPaymentMutation, refreshKey }) => {
     const toast = useToast();
-    const { confirm: confirmDialog } = useConfirm();
+    const { confirm: confirmDialog, prompt: promptDialog } = useConfirm();
     const [activeTab, setActiveTab] = useState<'EXPENSES' | 'SALES' | 'LEDGER'>('EXPENSES');
     const [expenseTab, setExpenseTab] = useState<'LIST' | 'DASHBOARD' | 'VENDOR_BILLS'>('LIST');
     const [viewMode, setViewMode] = useState<FinancialView>('LIST');
@@ -78,35 +78,48 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
     };
 
     const reversePayment = async (paymentId: string) => {
-        if (!confirm('Reverse this payment and its ledger impact?')) return;
+        const ok = await confirmDialog({ title: 'Reverse payment', message: 'Reverse this payment and its ledger impact?', confirmLabel: 'Reverse', danger: true });
+        if (!ok) return;
         try {
             await backendService.reverseFinancialsPayment(paymentId);
             await refreshOpenPaymentHistory();
             await onAfterPaymentMutation?.();
+            toast.success('Payment reversed.');
         } catch (e: any) {
-            alert(e?.message || 'Failed to reverse payment.');
+            toast.error(e?.message || 'Failed to reverse payment.');
         }
     };
 
     const deletePayment = async (paymentId: string) => {
-        if (!confirm('Delete this payment record? Use reversal instead when the ledger must remain auditable.')) return;
+        const ok = await confirmDialog({ title: 'Delete payment', message: 'Delete this payment record? Use reversal instead when the ledger must remain auditable.', confirmLabel: 'Delete', danger: true });
+        if (!ok) return;
         try {
             await backendService.deleteFinancialsPayment(paymentId);
             await refreshOpenPaymentHistory();
             await onAfterPaymentMutation?.();
+            toast.success('Payment deleted.');
         } catch (e: any) {
-            alert(e?.message || 'Failed to delete payment.');
+            toast.error(e?.message || 'Failed to delete payment.');
         }
     };
 
     const recordSalePayment = async (sale: Sale) => {
         if (!onRecordSalePayment) return;
         const due = Math.max(0, sale.amount - (sale.amountReceived || 0));
-        const amountRaw = prompt(`Enter payment amount for ${sale.buyer}. Balance due: PKR ${due.toLocaleString()}`, due > 0 ? String(due) : '');
+        const amountRaw = await promptDialog({
+            title: 'Record sale payment',
+            label: `Amount for ${sale.buyer}`,
+            message: `Balance due: PKR ${due.toLocaleString()}`,
+            inputType: 'number',
+            defaultValue: due > 0 ? String(due) : '',
+            validate: value => {
+                const amount = Number(value);
+                return !Number.isFinite(amount) || amount <= 0 ? 'Enter a valid payment amount.' : null;
+            },
+        });
         if (!amountRaw) return;
         const amount = Number(amountRaw);
-        if (!Number.isFinite(amount) || amount <= 0) return alert('Invalid payment amount.');
-        const date = prompt('Payment date', new Date().toISOString().split('T')[0]) || new Date().toISOString().split('T')[0];
+        const date = await promptDialog({ title: 'Payment date', label: 'Date', inputType: 'date', defaultValue: new Date().toISOString().split('T')[0] }) || new Date().toISOString().split('T')[0];
         await onRecordSalePayment(sale.id, {
             amount,
             date,
@@ -980,9 +993,8 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                                                             <button
                                                                                 onClick={async (e) => {
                                                                                     e.stopPropagation();
-                                                                                    if (confirm(`Mark bill from ${vendorName} as fully PAID in cash/bank?`)) {
-                                                                                        onUpdateExpense({ ...exp, paymentStatus: 'PAID', amountPaid: exp.amount, paymentDate: new Date().toISOString().split('T')[0] });
-                                                                                    }
+                                                                                    const ok = await confirmDialog({ title: 'Mark bill paid', message: `Mark bill from ${vendorName} as fully PAID in cash/bank?`, confirmLabel: 'Mark paid' });
+                                                                                    if (ok) onUpdateExpense({ ...exp, paymentStatus: 'PAID', amountPaid: exp.amount, paymentDate: new Date().toISOString().split('T')[0] });
                                                                                 }}
                                                                                 className="px-4 py-1.5 bg-indigo-50 border border-indigo-200 hover:bg-indigo-600 hover:border-indigo-600 hover:text-white text-indigo-700 font-extrabold text-[11px] uppercase tracking-wider rounded-lg transition-all shadow-sm"
                                                                             >

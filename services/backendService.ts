@@ -264,11 +264,19 @@ export const backendService = {
         await handleDeleteResponse(res);
     },
     addMilkRecord: async (animalId: string, record: MilkRecord): Promise<MilkRecord> => {
-        const animal = await backendService.getLivestockById(animalId);
-        if (!animal) throw new Error("Animal not found");
-        const updated = { ...animal, milkProductionHistory: [...(animal.milkProductionHistory || []), record] };
-        await backendService.updateLivestock(animalId, updated);
-        return record;
+        return apiRequest<MilkRecord>(`/livestock/${animalId}/milk-records`, {
+            method: 'POST',
+            json: record,
+        });
+    },
+    updateMilkRecord: async (animalId: string, recordId: string, record: Partial<MilkRecord>): Promise<MilkRecord> => {
+        return apiRequest<MilkRecord>(`/livestock/${animalId}/milk-records/${recordId}`, {
+            method: 'PUT',
+            json: record,
+        });
+    },
+    deleteMilkRecord: async (animalId: string, recordId: string): Promise<void> => {
+        await apiRequest<void>(`/livestock/${animalId}/milk-records/${recordId}`, { method: 'DELETE' });
     },
 
     // Finance (Unified with Ledger)
@@ -946,10 +954,6 @@ export const backendService = {
         const res = await fetch(`${API_BASE_URL}/finance/sales/${id}/payments`, { method: 'POST', headers: apiHeaders(true), body: JSON.stringify(payment) });
         return handleResponse(res);
     },
-    reverseFinancialsPayment: async (paymentId: string): Promise<unknown> => {
-        const res = await fetch(`${API_BASE_URL}/financials/payments/${paymentId}/reverse`, { method: 'POST', headers: apiHeaders(true) });
-        return handleResponse(res);
-    },
     balanceAdjustment: async (id: string, request: { amount: number, direction: string, date: string, reason?: string }): Promise<Entity> => {
         const res = await fetch(`${API_BASE_URL}/entities/${id}/balance-adjustment`, { method: 'PATCH', headers: apiHeaders(true), body: JSON.stringify(request) });
         return handleResponse(res);
@@ -976,6 +980,9 @@ export const backendService = {
         const url = farmId ? `${API_BASE_URL}/procurement/feed-purchases?farmId=${encodeURIComponent(farmId)}` : `${API_BASE_URL}/procurement/feed-purchases`;
         const res = await fetch(url, { headers: apiHeaders() });
         return handleResponse(res);
+    },
+    getFeedPurchases: async (farmId?: string): Promise<Expense[]> => {
+        return backendService.listFeedPurchases(farmId);
     },
     getFeedPurchase: async (id: string): Promise<{ feedItem?: FeedInventory; expense: Expense; ledgerEntries?: LedgerRecord[]; inventoryMovementId?: string; message?: string }> => {
         const res = await fetch(`${API_BASE_URL}/procurement/feed-purchases/${id}`, { headers: apiHeaders() });
@@ -1005,6 +1012,10 @@ export const backendService = {
         if (endDate) sp.set('endDate', endDate);
         const q = sp.toString();
         const res = await fetch(`${API_BASE_URL}/operations/inventory-movements/by-item/${itemId}${q ? `?${q}` : ''}`, { headers: apiHeaders() });
+        return handleResponse(res);
+    },
+    getInventoryMovementAudit: async (movementId: string): Promise<any[]> => {
+        const res = await fetch(`${API_BASE_URL}/operations/inventory-movements/${movementId}/audit`, { headers: apiHeaders() });
         return handleResponse(res);
     },
     repairProcurement: async (farmId?: string, dryRun = true): Promise<{

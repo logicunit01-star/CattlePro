@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { AppState, Livestock, Entity } from '../types';
-import { User, ClipboardList, TrendingUp, ArrowRight, Activity, Loader2 } from 'lucide-react';
+import { User, ClipboardList, TrendingUp, ArrowRight, Activity, Loader2, Receipt, RotateCcw, Shuffle, XCircle } from 'lucide-react';
 import { backendService } from '../services/backendService';
 import { newClientMutationId } from '../utils/mutationId';
 import { FeedSkeleton, WidgetSkeleton } from './Skeleton';
 import { useToast } from './Toast';
+import { useConfirm } from './ConfirmDialog';
 
 interface Props {
     state: AppState;
@@ -14,12 +15,20 @@ interface Props {
 
 export const PalaiManager: React.FC<Props> = ({ state, onUpdateLivestock, onAddExpense }) => {
     const toast = useToast();
-    const [activeTab, setActiveTab] = useState<'OVERVIEW' | 'CUSTOMERS' | 'ANIMALS' | 'PACKAGES'>('OVERVIEW');
+    const { confirm: confirmDialog, prompt: promptDialog } = useConfirm();
+    const [activeTab, setActiveTab] = useState<'OVERVIEW' | 'CUSTOMERS' | 'ANIMALS' | 'INVOICES' | 'PACKAGES'>('OVERVIEW');
     const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
     const [customerTab, setCustomerTab] = useState<'ANIMALS' | 'LEDGER' | 'INVOICE'>('ANIMALS');
 
     const [palaiClients, setPalaiClients] = useState<Entity[]>([]);
     const [palaiSummary, setPalaiSummary] = useState<any>(null);
+    const [palaiInvoices, setPalaiInvoices] = useState<any[]>([]);
+    const [packageHistory, setPackageHistory] = useState<any[]>([]);
+    const [selectedInvoice, setSelectedInvoice] = useState<any | null>(null);
+    const [invoicePayments, setInvoicePayments] = useState<any[]>([]);
+    const [invoicePaymentsLoading, setInvoicePaymentsLoading] = useState(false);
+    const [invoicePaymentAmount, setInvoicePaymentAmount] = useState(0);
+    const [invoicePaymentSaving, setInvoicePaymentSaving] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
 
     // Form States
@@ -40,12 +49,16 @@ export const PalaiManager: React.FC<Props> = ({ state, onUpdateLivestock, onAddE
         try {
             setIsLoading(true);
             const farmId = state.currentFarmId || undefined;
-            const [clients, summary] = await Promise.all([
+            const [clients, summary, invoices, history] = await Promise.all([
                 backendService.getPalaiClients(farmId).catch(() => []),
-                backendService.getPalaiSummary(farmId).catch(() => null)
+                backendService.getPalaiSummary(farmId).catch(() => null),
+                backendService.listPalaiInvoices(farmId).catch(() => []),
+                backendService.getPalaiPackageHistory(farmId).catch(() => []),
             ]);
             setPalaiClients(clients);
             setPalaiSummary(summary);
+            setPalaiInvoices(Array.isArray(invoices) ? invoices : []);
+            setPackageHistory(Array.isArray(history) ? history : []);
         } catch (err) {
             console.error("Failed to fetch Palai data", err);
         } finally {
@@ -113,6 +126,114 @@ export const PalaiManager: React.FC<Props> = ({ state, onUpdateLivestock, onAddE
         }
     };
 
+    const handleVoidInvoice = async (invoiceId: string) => {
+        const ok = await confirmDialog({
+            title: 'Void Palai invoice',
+            message: 'Void this invoice? Backend will reverse receivable and ledger impact.',
+            confirmLabel: 'Void invoice',
+            danger: true,
+        });
+        if (!ok) return;
+        try {
+            await backendService.voidPalaiInvoice(invoiceId);
+            toast.success('Palai invoice voided.');
+            fetchPalaiData();
+        } catch (err: any) {
+            toast.error(err?.message || 'Failed to void Palai invoice.');
+        }
+    };
+
+    const openInvoiceDetail = async (invoice: any) => {
+        setSelectedInvoice(invoice);
+        setInvoicePayments([]);
+        setInvoicePaymentsLoading(true);
+        const id = String(invoice.id ?? invoice.invoiceId ?? invoice.saleId);
+        try {
+            const rows = await backendService.getFinancialsPayments('PALAI_INVOICE', id).catch(() => backendService.getFinancialsPayments('SALE', id));
+            setInvoicePayments(Array.isArray(rows) ? rows : []);
+        } finally {
+            setInvoicePaymentsLoading(false);
+        }
+    };
+
+    const recordInvoicePayment = async () => {
+        if (!selectedInvoice || invoicePaymentAmount <= 0) return;
+        const id = String(selectedInvoice.id ?? selectedInvoice.invoiceId ?? selectedInvoice.saleId);
+        setInvoicePaymentSaving(true);
+        try {
+            await backendService.payPalaiInvoice(id, {
+                amount: invoicePaymentAmount,
+                date: new Date().toISOString().split('T')[0],
+                paymentMethod: 'CASH',
+                notes: 'Palai invoice payment',
+            });
+            setInvoicePaymentAmount(0);
+            await openInvoiceDetail(selectedInvoice);
+            fetchPalaiData();
+            toast.success('Invoice payment recorded.');
+        } catch (err: any) {
+            toast.error(err?.message || 'Failed to record invoice payment.');
+        } finally {
+            setInvoicePaymentSaving(false);
+        }
+    };
+
+    const reverseInvoicePayment = async (paymentId: string) => {
+        const ok = await confirmDialog({
+            title: 'Reverse payment',
+            message: 'Reverse this invoice payment and its ledger impact?',
+            confirmLabel: 'Reverse',
+            danger: true,
+        });
+        if (!ok || !selectedInvoice) return;
+        try {
+            await backendService.reverseFinancialsPayment(paymentId);
+            await openInvoiceDetail(selectedInvoice);
+            fetchPalaiData();
+            toast.success('Invoice payment reversed.');
+        } catch (err: any) {
+            toast.error(err?.message || 'Failed to reverse invoice payment.');
+        }
+    };
+
+    const handleUnassignAnimal = async (animal: Livestock) => {
+        const ok = await confirmDialog({
+            title: 'Unassign Palai animal',
+            message: `Remove ${animal.tagId} from its Palai client? Future billing will stop for this assignment.`,
+            confirmLabel: 'Unassign',
+            danger: true,
+        });
+        if (!ok) return;
+        try {
+            await backendService.unassignPalai(animal.id);
+            onUpdateLivestock({ ...animal, ownership: 'OWNED', palaiCustomerId: undefined, palaiProfile: undefined });
+            toast.success('Palai assignment removed.');
+            fetchPalaiData();
+        } catch (err: any) {
+            toast.error(err?.message || 'Failed to unassign animal.');
+        }
+    };
+
+    const handleTransferAnimal = async (animal: Livestock) => {
+        const nextClientId = await promptDialog({
+            title: 'Transfer Palai animal',
+            label: 'New client',
+            inputType: 'text',
+            defaultValue: animal.palaiCustomerId || '',
+            placeholder: 'Enter destination client ID',
+            validate: value => value === animal.palaiCustomerId ? 'Choose a different client.' : null,
+        });
+        if (!nextClientId) return;
+        try {
+            await backendService.transferPalaiAssignment(animal.id, nextClientId);
+            onUpdateLivestock({ ...animal, ownership: 'PALAI', palaiCustomerId: nextClientId });
+            toast.success('Palai assignment transferred.');
+            fetchPalaiData();
+        } catch (err: any) {
+            toast.error(err?.message || 'Failed to transfer animal.');
+        }
+    };
+
     // Derived from global state to maintain realtime sync for animals
     const palaiAnimals = state.livestock.filter(l => l.ownership === 'PALAI');
 
@@ -164,7 +285,7 @@ export const PalaiManager: React.FC<Props> = ({ state, onUpdateLivestock, onAddE
 
             {/* Navigation Tab */}
             <div className="flex space-x-1 bg-white p-1 rounded-xl border border-gray-200 shadow-sm w-fit">
-                {['OVERVIEW', 'CUSTOMERS', 'ANIMALS', 'PACKAGES'].map(tab => (
+                {['OVERVIEW', 'CUSTOMERS', 'ANIMALS', 'INVOICES', 'PACKAGES'].map(tab => (
                     <button key={tab} onClick={() => setActiveTab(tab as any)} className={`px-6 py-2 rounded-lg text-xs font-bold transition-all ${activeTab === tab ? 'bg-emerald-600 text-white shadow-md' : 'text-gray-500 hover:bg-gray-50'}`}>
                         {tab}
                     </button>
@@ -445,7 +566,62 @@ export const PalaiManager: React.FC<Props> = ({ state, onUpdateLivestock, onAddE
                                                 <td className="px-4 py-3 text-gray-500">{animal.species} - {animal.breed}</td>
                                                 <td className="px-4 py-3 text-right font-medium">{animal.weight} kg</td>
                                                 <td className="px-4 py-3 text-center">
-                                                    <button className="text-emerald-600 font-bold text-xs hover:underline">Update</button>
+                                                    <div className="flex items-center justify-center gap-2">
+                                                        <button onClick={() => void handleTransferAnimal(animal)} className="text-emerald-600 font-bold text-xs hover:underline flex items-center gap-1"><Shuffle size={12} /> Transfer</button>
+                                                        <button onClick={() => void handleUnassignAnimal(animal)} className="text-red-500 font-bold text-xs hover:underline flex items-center gap-1"><XCircle size={12} /> Unassign</button>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+                </div>
+            )}
+            {activeTab === 'INVOICES' && (
+                <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+                    <div className="p-4 bg-gray-50 border-b border-gray-100 font-bold text-gray-700 flex justify-between items-center">
+                        <span className="flex items-center gap-2"><Receipt size={16} /> Palai Invoice Register</span>
+                        <button onClick={fetchPalaiData} className="text-xs bg-white border border-gray-300 px-3 py-1.5 rounded-lg hover:bg-gray-50 font-bold text-gray-600">Refresh</button>
+                    </div>
+                    {palaiInvoices.length === 0 ? (
+                        <div className="p-8 text-center text-gray-400">
+                            <Receipt className="mx-auto mb-2 opacity-50" size={32} />
+                            <p>No Palai invoices returned by backend.</p>
+                        </div>
+                    ) : (
+                        <div className="overflow-x-auto">
+                            <table className="min-w-full text-sm">
+                                <thead className="bg-white border-b border-gray-200">
+                                    <tr>
+                                        <th className="px-4 py-3 text-left font-bold text-gray-500">Invoice</th>
+                                        <th className="px-4 py-3 text-left font-bold text-gray-500">Customer</th>
+                                        <th className="px-4 py-3 text-left font-bold text-gray-500">Period</th>
+                                        <th className="px-4 py-3 text-right font-bold text-gray-500">Total</th>
+                                        <th className="px-4 py-3 text-center font-bold text-gray-500">Status</th>
+                                        <th className="px-4 py-3 text-center font-bold text-gray-500">Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-100">
+                                    {palaiInvoices.map(inv => {
+                                        const id = String(inv.id ?? inv.invoiceId ?? inv.saleId);
+                                        const customer = palaiClients.find(c => c.id === (inv.customerId ?? inv.clientId));
+                                        return (
+                                            <tr key={id} className="hover:bg-gray-50">
+                                                <td className="px-4 py-3 font-bold text-gray-800">{inv.invoiceNumber ?? id}</td>
+                                                <td className="px-4 py-3 text-gray-600">{inv.customerName ?? customer?.name ?? inv.clientName ?? 'Unknown'}</td>
+                                                <td className="px-4 py-3 text-gray-500">{inv.billingPeriodStart ?? inv.startDate ?? '-'} to {inv.billingPeriodEnd ?? inv.endDate ?? '-'}</td>
+                                                <td className="px-4 py-3 text-right font-black text-emerald-600">PKR {Number(inv.totalAmount ?? inv.amount ?? 0).toLocaleString()}</td>
+                                                <td className="px-4 py-3 text-center"><span className="text-[10px] font-bold bg-gray-100 text-gray-700 px-2 py-0.5 rounded-full">{inv.status ?? inv.paymentStatus ?? 'POSTED'}</span></td>
+                                                <td className="px-4 py-3 text-center">
+                                                    <div className="flex items-center justify-center gap-3">
+                                                        <button onClick={() => void openInvoiceDetail(inv)} className="text-emerald-600 font-bold text-xs hover:underline">Detail</button>
+                                                        <button onClick={() => void handleVoidInvoice(id)} disabled={(inv.status ?? '').toString().toUpperCase() === 'VOID'} className="text-amber-600 disabled:text-gray-300 font-bold text-xs hover:underline flex items-center gap-1">
+                                                            <RotateCcw size={12} /> Void
+                                                        </button>
+                                                    </div>
                                                 </td>
                                             </tr>
                                         );
@@ -464,6 +640,20 @@ export const PalaiManager: React.FC<Props> = ({ state, onUpdateLivestock, onAddE
                     </div>
                     <div className="p-6">
                         <p className="text-sm text-gray-500 mb-6">Define standardized feed plans and monthly rates here. These packages can be applied globally to any Palai customer's animals.</p>
+                        {packageHistory.length > 0 && (
+                            <div className="mb-6 bg-slate-50 border border-slate-200 rounded-xl p-4">
+                                <h4 className="font-bold text-slate-700 text-sm mb-3">Recent Package History</h4>
+                                <div className="space-y-2 max-h-40 overflow-y-auto">
+                                    {packageHistory.slice(0, 6).map((row, idx) => (
+                                        <div key={row.id ?? idx} className="flex items-center justify-between text-xs bg-white rounded-lg px-3 py-2 border border-slate-100">
+                                            <span className="font-bold text-slate-700">{row.livestockTag ?? row.tagId ?? row.livestockId ?? 'Animal'}</span>
+                                            <span className="text-slate-500">{row.packageName ?? row.feedPlan ?? row.action ?? 'Package update'}</span>
+                                            <span className="text-slate-400">{row.createdAt ?? row.date ?? ''}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div className="border border-emerald-200 bg-emerald-50 rounded-xl p-5 hover:shadow-md transition-all">
                                 <div className="flex justify-between items-start mb-2">
@@ -488,6 +678,65 @@ export const PalaiManager: React.FC<Props> = ({ state, onUpdateLivestock, onAddE
                                 </div>
                                 <p className="text-xs text-purple-600 mb-4">Special diet or medical isolation as per owner instruction.</p>
                                 <div className="text-xl font-black text-purple-900">Variable Rate</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {selectedInvoice && (
+                <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setSelectedInvoice(null)}>
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[85vh] overflow-hidden" onClick={e => e.stopPropagation()}>
+                        <div className="px-6 py-4 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
+                            <div>
+                                <h3 className="font-black text-slate-800">Palai Invoice Detail</h3>
+                                <p className="text-xs text-slate-500 font-bold">{selectedInvoice.invoiceNumber ?? selectedInvoice.id ?? selectedInvoice.invoiceId}</p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <button onClick={() => window.print()} className="px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-xs font-bold text-slate-600">Print</button>
+                                <button onClick={() => setSelectedInvoice(null)} className="px-3 py-1.5 rounded-lg bg-slate-100 text-xs font-bold text-slate-600">Close</button>
+                            </div>
+                        </div>
+                        <div className="p-6 space-y-5 overflow-y-auto max-h-[72vh]">
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                <div className="bg-slate-50 rounded-xl p-3"><p className="text-[10px] font-bold text-slate-400 uppercase">Customer</p><p className="font-black text-slate-800">{selectedInvoice.customerName ?? selectedInvoice.clientName ?? selectedInvoice.customerId ?? 'Unknown'}</p></div>
+                                <div className="bg-slate-50 rounded-xl p-3"><p className="text-[10px] font-bold text-slate-400 uppercase">Status</p><p className="font-black text-slate-800">{selectedInvoice.status ?? selectedInvoice.paymentStatus ?? 'POSTED'}</p></div>
+                                <div className="bg-slate-50 rounded-xl p-3"><p className="text-[10px] font-bold text-slate-400 uppercase">Total</p><p className="font-black text-emerald-700">PKR {Number(selectedInvoice.totalAmount ?? selectedInvoice.amount ?? 0).toLocaleString()}</p></div>
+                                <div className="bg-slate-50 rounded-xl p-3"><p className="text-[10px] font-bold text-slate-400 uppercase">Paid</p><p className="font-black text-blue-700">PKR {Number(selectedInvoice.amountPaid ?? selectedInvoice.paidAmount ?? 0).toLocaleString()}</p></div>
+                            </div>
+                            <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+                                <div className="px-4 py-3 bg-slate-50 border-b border-slate-100 font-bold text-sm text-slate-700">Invoice Items</div>
+                                {(selectedInvoice.items || selectedInvoice.lineItems || []).length > 0 ? (
+                                    <div className="divide-y divide-slate-100">
+                                        {(selectedInvoice.items || selectedInvoice.lineItems).map((item: any, idx: number) => (
+                                            <div key={idx} className="px-4 py-3 flex items-center justify-between text-sm">
+                                                <span className="font-bold text-slate-700">{item.description ?? item.name ?? 'Invoice item'}</span>
+                                                <span className="font-black text-slate-800">PKR {Number(item.amount ?? item.total ?? 0).toLocaleString()}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <div className="px-4 py-6 text-center text-sm font-bold text-slate-400">No line items returned.</div>
+                                )}
+                            </div>
+                            <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+                                <div className="px-4 py-3 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
+                                    <span className="font-bold text-sm text-slate-700">Payment History</span>
+                                    <div className="flex items-center gap-2">
+                                        <input type="number" value={invoicePaymentAmount || ''} onChange={e => setInvoicePaymentAmount(Number(e.target.value) || 0)} placeholder="Amount" className="w-28 px-2 py-1.5 rounded-lg border border-slate-200 text-xs font-bold" />
+                                        <button onClick={recordInvoicePayment} disabled={invoicePaymentSaving || invoicePaymentAmount <= 0} className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-bold disabled:opacity-50">{invoicePaymentSaving ? 'Saving...' : 'Pay'}</button>
+                                    </div>
+                                </div>
+                                {invoicePaymentsLoading ? <div className="p-6 text-center text-sm font-bold text-slate-400">Loading payments...</div> : (
+                                    invoicePayments.length > 0 ? invoicePayments.map((payment, idx) => (
+                                        <div key={payment.id ?? idx} className="px-4 py-3 flex items-center justify-between border-b border-slate-100 text-sm">
+                                            <span className="font-bold text-slate-700">{payment.date ?? payment.createdAt ?? '-'}</span>
+                                            <div className="flex items-center gap-3">
+                                                <span className="font-black text-emerald-700">PKR {Number(payment.amount ?? 0).toLocaleString()}</span>
+                                                {payment.id && <button onClick={() => void reverseInvoicePayment(payment.id)} className="text-[10px] font-black uppercase text-amber-700 bg-amber-50 px-2 py-1 rounded-lg hover:bg-amber-100">Reverse</button>}
+                                            </div>
+                                        </div>
+                                    )) : <div className="p-6 text-center text-sm font-bold text-slate-400">No payments returned.</div>
+                                )}
                             </div>
                         </div>
                     </div>

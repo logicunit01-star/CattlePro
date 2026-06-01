@@ -4,6 +4,7 @@ import { AppState, Sale, Livestock } from '../types';
 import { DollarSign, User, Calendar, CheckCircle, Clock, AlertTriangle, Filter, Search, PlusCircle, Trash2 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { useToast } from './Toast';
+import { useConfirm } from './ConfirmDialog';
 
 export type SalesTab = 'DASHBOARD' | 'NEW_SALE' | 'HISTORY';
 
@@ -21,6 +22,7 @@ interface Props {
 
 export const SalesManager: React.FC<Props> = ({ state, currentFarmId, currentLocationId, currentTab, onTabChange, onAddSale, onDeleteSale, onRecordSalePayment }) => {
     const toast = useToast();
+    const { prompt: promptDialog } = useConfirm();
     const [internalTab, setInternalTab] = useState<SalesTab>('DASHBOARD');
     const isControlled = currentTab !== undefined && onTabChange !== undefined;
     const activeTab = isControlled ? currentTab! : internalTab;
@@ -68,10 +70,10 @@ export const SalesManager: React.FC<Props> = ({ state, currentFarmId, currentLoc
     const paymentStatus = balance <= 0 ? 'PAID' : (amountReceived > 0 ? 'PARTIAL' : 'PENDING');
 
     const handleSaleSubmit = async () => {
-        if (!currentFarmId && !currentLocationId) { alert("Please select a farm or city above to record a sale. Sales and animals are shown for the selected farm only."); return; }
-        if (selectedAnimalIds.length === 0) { alert("Select at least one animal"); return; }
-        if (finalTotal <= 0) { alert("Invalid Sale Amount"); return; }
-        if (!buyerName) { alert("Buyer Name Required"); return; }
+        if (!currentFarmId && !currentLocationId) { toast.warning('Please select a farm or city above to record a sale.'); return; }
+        if (selectedAnimalIds.length === 0) { toast.warning('Select at least one animal.'); return; }
+        if (finalTotal <= 0) { toast.warning('Enter a valid sale amount.'); return; }
+        if (!buyerName) { toast.warning('Buyer name is required.'); return; }
 
         const farmId = currentFarmId || state.livestock.find(l => l.id === selectedAnimalIds[0])?.farmId || '';
 
@@ -105,7 +107,7 @@ export const SalesManager: React.FC<Props> = ({ state, currentFarmId, currentLoc
             await onAddSale(newSale);
         } catch (e) {
             console.error(e);
-            alert("Sale was not saved. Please try again.");
+            toast.error('Sale was not saved. Please try again.');
             return;
         }
 
@@ -120,11 +122,20 @@ export const SalesManager: React.FC<Props> = ({ state, currentFarmId, currentLoc
     const recordSalePayment = async (sale: Sale) => {
         if (!onRecordSalePayment) return;
         const due = Math.max(0, (sale.amount ?? 0) - (sale.amountReceived ?? 0));
-        const amountRaw = prompt(`Enter payment amount for ${sale.buyer}. Balance due: PKR ${due.toLocaleString()}`, due > 0 ? String(due) : '');
+        const amountRaw = await promptDialog({
+            title: 'Record sale payment',
+            label: `Amount for ${sale.buyer}`,
+            message: `Balance due: PKR ${due.toLocaleString()}`,
+            inputType: 'number',
+            defaultValue: due > 0 ? String(due) : '',
+            validate: value => {
+                const amount = Number(value);
+                return !Number.isFinite(amount) || amount <= 0 ? 'Enter a valid payment amount.' : null;
+            },
+        });
         if (!amountRaw) return;
         const amount = Number(amountRaw);
-        if (!Number.isFinite(amount) || amount <= 0) return alert('Invalid payment amount.');
-        const date = prompt('Payment date', new Date().toISOString().split('T')[0]) || new Date().toISOString().split('T')[0];
+        const date = await promptDialog({ title: 'Payment date', label: 'Date', inputType: 'date', defaultValue: new Date().toISOString().split('T')[0] }) || new Date().toISOString().split('T')[0];
         await onRecordSalePayment(sale.id, {
             amount,
             date,

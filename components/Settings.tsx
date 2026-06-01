@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { User, Settings as SettingsIcon, Shield, Key, Bell, Save, Mail, Briefcase, Database, Users, ChevronRight, CheckCircle, AlertTriangle, Tag, RefreshCw } from 'lucide-react';
+import { User, Settings as SettingsIcon, Shield, Key, Bell, Save, Mail, Briefcase, Database, Users, ChevronRight, CheckCircle, AlertTriangle, Tag, RefreshCw, Edit2, Trash2, Power, FileSearch } from 'lucide-react';
 
 import { Location, Farm } from '../types';
 import { backendService } from '../services/backendService';
+import { useToast } from './Toast';
+import { useConfirm } from './ConfirmDialog';
 
 interface UserRole {
     id: string;
@@ -45,10 +47,26 @@ export const SettingsModule: React.FC<SettingsProps> = ({
     onAddCity,
     onAddFarm
 }) => {
+    const toast = useToast();
+    const { confirm, prompt } = useConfirm();
     const [activeDrawer, setActiveDrawer] = useState<'NONE' | 'GENERAL' | 'USERS' | 'SECURITY' | 'API'>('NONE');
     const [users, setUsers] = useState<UserRole[]>([]);
     const [usersLoading, setUsersLoading] = useState(false);
     const [usersError, setUsersError] = useState<string | null>(null);
+    const [auditLogs, setAuditLogs] = useState<any[]>([]);
+    const [auditLoading, setAuditLoading] = useState(false);
+    const [auditError, setAuditError] = useState<string | null>(null);
+    const [editingLocation, setEditingLocation] = useState<Location | null>(null);
+    const [editingFarm, setEditingFarm] = useState<Farm | null>(null);
+    const [notificationPrefs, setNotificationPrefs] = useState({
+        lowStock: true,
+        animalHealth: true,
+        finance: true,
+        palai: true,
+        email: false,
+        push: true,
+    });
+    const [savingNotificationPrefs, setSavingNotificationPrefs] = useState(false);
     const [migrationBusy, setMigrationBusy] = useState<false | 'preview' | 'apply'>(false);
     const [migrationReport, setMigrationReport] = useState<Awaited<ReturnType<typeof backendService.migrateLegacyTags>> | null>(null);
     const [migrationApplied, setMigrationApplied] = useState(false);
@@ -71,15 +89,101 @@ export const SettingsModule: React.FC<SettingsProps> = ({
         loadUsers();
     }, []);
 
+    const refreshContext = async (message: string) => {
+        await onSyncLocations?.();
+        toast.success(message);
+    };
+
+    const editLocation = async (location: Location) => {
+        setEditingLocation({ ...location });
+    };
+
+    const deactivateLocation = async (location: Location) => {
+        const ok = await confirm({ title: 'Deactivate city', message: 'Deactivate this city? Linked records remain preserved on the backend.', confirmLabel: 'Deactivate', danger: true });
+        if (!ok) return;
+        await backendService.patchLocationStatus(location.id, 'INACTIVE');
+        await refreshContext('City deactivated.');
+    };
+
+    const removeLocation = async (location: Location) => {
+        const ok = await confirm({ title: 'Delete city', message: 'Delete this city only if the backend confirms it has no linked farms or records.', confirmLabel: 'Delete', danger: true });
+        if (!ok) return;
+        await backendService.deleteLocation(location.id);
+        await refreshContext('City deleted.');
+    };
+
+    const editFarm = async (farm: Farm) => {
+        setEditingFarm({ ...farm });
+    };
+
+    const saveLocationForm = async () => {
+        if (!editingLocation?.name.trim()) { toast.warning('City name is required.'); return; }
+        await backendService.updateLocation(editingLocation.id, editingLocation);
+        setEditingLocation(null);
+        await refreshContext('City updated.');
+    };
+
+    const saveFarmForm = async () => {
+        if (!editingFarm?.name.trim()) { toast.warning('Farm name is required.'); return; }
+        if (!editingFarm.locationId) { toast.warning('Farm city is required.'); return; }
+        await backendService.updateFarm(editingFarm.id, editingFarm);
+        setEditingFarm(null);
+        await refreshContext('Farm updated.');
+    };
+
+    const saveNotificationPreferences = async () => {
+        setSavingNotificationPrefs(true);
+        try {
+            await backendService.updateNotificationPreferences(notificationPrefs);
+            toast.success('Notification preferences saved.');
+        } catch (e: any) {
+            toast.error(e?.message || 'Failed to save notification preferences.');
+        } finally {
+            setSavingNotificationPrefs(false);
+        }
+    };
+
+    const deactivateFarm = async (farm: Farm) => {
+        const ok = await confirm({ title: 'Deactivate farm', message: 'Deactivate this farm? Linked livestock, inventory, and ledger records remain preserved on the backend.', confirmLabel: 'Deactivate', danger: true });
+        if (!ok) return;
+        await backendService.patchFarmStatus(farm.id, 'INACTIVE');
+        await refreshContext('Farm deactivated.');
+    };
+
+    const removeFarm = async (farm: Farm) => {
+        const ok = await confirm({ title: 'Delete farm', message: 'Delete this farm only if the backend confirms it has no linked operational or financial records.', confirmLabel: 'Delete', danger: true });
+        if (!ok) return;
+        await backendService.deleteFarm(farm.id);
+        await refreshContext('Farm deleted.');
+    };
+
+    const loadAuditLogs = async () => {
+        setAuditLoading(true);
+        setAuditError(null);
+        try {
+            const rows = await backendService.getAuditLogs({ limit: 50 });
+            setAuditLogs(Array.isArray(rows) ? rows : []);
+        } catch (e: any) {
+            setAuditLogs([]);
+            setAuditError(e?.message || 'Unable to load audit logs.');
+        } finally {
+            setAuditLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        if (activeDrawer === 'SECURITY') loadAuditLogs();
+    }, [activeDrawer]);
+
     const inviteUser = async () => {
-        const email = prompt('Enter team member email');
+        const email = await prompt({ title: 'Invite team member', label: 'Email', inputType: 'text' });
         if (!email) return;
-        const name = prompt('Enter team member name') || email;
+        const name = await prompt({ title: 'Invite team member', label: 'Name', inputType: 'text', defaultValue: email, allowEmpty: true }) || email;
         try {
             const created = await backendService.createUser({ email, name, role: 'VIEWER', status: 'ACTIVE' });
             setUsers(prev => [...prev, normalizeUser(created)]);
         } catch (e: any) {
-            alert(e?.message || 'Failed to invite user.');
+            toast.error(e?.message || 'Failed to invite user.');
         }
     };
 
@@ -89,7 +193,7 @@ export const SettingsModule: React.FC<SettingsProps> = ({
             setMigrationReport(await backendService.migrateLegacyTags(true));
             setMigrationApplied(false);
         } catch (e: any) {
-            alert(e?.message || 'Failed to preview tag migration.');
+            toast.error(e?.message || 'Failed to preview tag migration.');
         } finally {
             setMigrationBusy(false);
         }
@@ -101,7 +205,7 @@ export const SettingsModule: React.FC<SettingsProps> = ({
             setMigrationReport(await backendService.migrateLegacyTags(false));
             setMigrationApplied(true);
         } catch (e: any) {
-            alert(e?.message || 'Failed to apply tag migration.');
+            toast.error(e?.message || 'Failed to apply tag migration.');
         } finally {
             setMigrationBusy(false);
         }
@@ -186,6 +290,54 @@ export const SettingsModule: React.FC<SettingsProps> = ({
                         <button onClick={onSyncLocations} className="px-3 py-2 bg-sky-50 text-sky-600 hover:bg-sky-100 rounded-lg transition-colors shrink-0 flex items-center gap-2 font-bold text-sm" title="Manual Sync">
                             <Database size={14} /> Sync
                         </button>
+                    </div>
+                </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden premium-card">
+                    <div className="px-5 py-3 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
+                        <h3 className="font-bold text-slate-800 text-sm">Cities</h3>
+                        <span className="text-[10px] font-black uppercase text-slate-400">{locations.length} total</span>
+                    </div>
+                    <div className="divide-y divide-slate-100 max-h-72 overflow-y-auto">
+                        {locations.map(location => (
+                            <div key={location.id} className="px-5 py-3 flex items-center justify-between gap-3">
+                                <div className="min-w-0">
+                                    <p className="font-bold text-slate-800 text-sm truncate">{location.name}</p>
+                                    <p className="text-[10px] font-bold text-slate-400 uppercase">{location.type || 'CITY'} · {(location as any).status || 'ACTIVE'}</p>
+                                </div>
+                                <div className="flex items-center gap-1 shrink-0">
+                                    <button onClick={() => void editLocation(location).catch((e: any) => toast.error(e?.message || 'Failed to update city.'))} className="p-2 text-slate-400 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg" title="Edit city"><Edit2 size={14} /></button>
+                                    <button onClick={() => void deactivateLocation(location).catch((e: any) => toast.error(e?.message || 'Failed to deactivate city.'))} className="p-2 text-slate-400 hover:text-amber-700 hover:bg-amber-50 rounded-lg" title="Deactivate city"><Power size={14} /></button>
+                                    <button onClick={() => void removeLocation(location).catch((e: any) => toast.error(e?.message || 'Failed to delete city.'))} className="p-2 text-slate-400 hover:text-red-700 hover:bg-red-50 rounded-lg" title="Delete city"><Trash2 size={14} /></button>
+                                </div>
+                            </div>
+                        ))}
+                        {locations.length === 0 && <div className="p-6 text-center text-sm font-bold text-slate-400">No cities configured.</div>}
+                    </div>
+                </div>
+
+                <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden premium-card">
+                    <div className="px-5 py-3 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
+                        <h3 className="font-bold text-slate-800 text-sm">Farms</h3>
+                        <span className="text-[10px] font-black uppercase text-slate-400">{farms.length} total</span>
+                    </div>
+                    <div className="divide-y divide-slate-100 max-h-72 overflow-y-auto">
+                        {farms.filter(f => !currentLocationId || f.locationId === currentLocationId).map(farm => (
+                            <div key={farm.id} className="px-5 py-3 flex items-center justify-between gap-3">
+                                <div className="min-w-0">
+                                    <p className="font-bold text-slate-800 text-sm truncate">{farm.name}</p>
+                                    <p className="text-[10px] font-bold text-slate-400 uppercase">{farm.type} · {(farm as any).status || 'ACTIVE'}</p>
+                                </div>
+                                <div className="flex items-center gap-1 shrink-0">
+                                    <button onClick={() => void editFarm(farm).catch((e: any) => toast.error(e?.message || 'Failed to update farm.'))} className="p-2 text-slate-400 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg" title="Edit farm"><Edit2 size={14} /></button>
+                                    <button onClick={() => void deactivateFarm(farm).catch((e: any) => toast.error(e?.message || 'Failed to deactivate farm.'))} className="p-2 text-slate-400 hover:text-amber-700 hover:bg-amber-50 rounded-lg" title="Deactivate farm"><Power size={14} /></button>
+                                    <button onClick={() => void removeFarm(farm).catch((e: any) => toast.error(e?.message || 'Failed to delete farm.'))} className="p-2 text-slate-400 hover:text-red-700 hover:bg-red-50 rounded-lg" title="Delete farm"><Trash2 size={14} /></button>
+                                </div>
+                            </div>
+                        ))}
+                        {farms.filter(f => !currentLocationId || f.locationId === currentLocationId).length === 0 && <div className="p-6 text-center text-sm font-bold text-slate-400">No farms in this context.</div>}
                     </div>
                 </div>
             </div>
@@ -454,12 +606,159 @@ export const SettingsModule: React.FC<SettingsProps> = ({
             {/* Security Drawer */}
             {(activeDrawer === 'SECURITY' || activeDrawer === 'API') && (
                 <DrawerTemplate title={activeDrawer === 'SECURITY' ? "Security Settings" : "API Integrations"} icon={activeDrawer === 'SECURITY' ? Shield : Database}>
-                    <div className="text-center py-20 bg-white rounded-3xl border border-slate-200 shadow-sm">
-                        <Key size={48} className="mx-auto text-slate-300 mb-4" />
-                        <h3 className="text-lg font-bold text-slate-600">Advanced Module</h3>
-                        <p className="text-slate-400 max-w-xs mx-auto mt-2 text-sm">This section is restricted in your current role. Contact the system administrator.</p>
-                    </div>
+                    {activeDrawer === 'SECURITY' ? (
+                        <div className="space-y-4">
+                            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                                <div className="px-5 py-3 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
+                                    <div className="flex items-center gap-2">
+                                        <FileSearch size={16} className="text-slate-500" />
+                                        <h3 className="font-bold text-slate-800 text-sm">Audit Logs</h3>
+                                    </div>
+                                    <button onClick={loadAuditLogs} className="px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-xs font-bold text-slate-600 hover:bg-slate-100">Refresh</button>
+                                </div>
+                                {auditLoading && <div className="p-5 text-sm font-bold text-slate-500">Loading audit logs...</div>}
+                                {auditError && <div className="m-4 p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700">{auditError}</div>}
+                                {!auditLoading && !auditError && auditLogs.length === 0 && (
+                                    <div className="p-8 text-center text-slate-400">
+                                        <FileSearch size={32} className="mx-auto mb-2 opacity-40" />
+                                        <p className="text-sm font-bold">No audit events returned.</p>
+                                    </div>
+                                )}
+                                {!auditLoading && !auditError && auditLogs.length > 0 && (
+                                    <div className="divide-y divide-slate-100 max-h-[520px] overflow-y-auto">
+                                        {auditLogs.map((row, idx) => (
+                                            <div key={row.id ?? idx} className="px-5 py-3 hover:bg-slate-50">
+                                                <div className="flex items-center justify-between gap-3">
+                                                    <p className="font-black text-slate-800 text-xs uppercase">{row.action ?? row.eventType ?? row.type ?? 'AUDIT_EVENT'}</p>
+                                                    <span className="text-[10px] font-bold text-slate-400">{row.createdAt ?? row.timestamp ?? row.date ?? ''}</span>
+                                                </div>
+                                                <p className="text-xs text-slate-500 mt-1">{row.entityType ?? row.module ?? 'Entity'} {row.entityId ? `· ${row.entityId}` : ''}</p>
+                                                {(row.actorName || row.actor || row.userName) && <p className="text-[11px] text-slate-400 mt-1">Actor: {row.actorName ?? row.actor ?? row.userName}</p>}
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="space-y-4">
+                            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                                <div className="px-5 py-3 bg-slate-50 border-b border-slate-100 flex items-center gap-2">
+                                    <Bell size={16} className="text-slate-500" />
+                                    <h3 className="font-bold text-slate-800 text-sm">Notification Preferences</h3>
+                                </div>
+                                <div className="p-5 space-y-3">
+                                    {[
+                                        ['lowStock', 'Low stock alerts'],
+                                        ['animalHealth', 'Animal health and due dates'],
+                                        ['finance', 'Finance and payment reminders'],
+                                        ['palai', 'Palai invoice and assignment updates'],
+                                        ['email', 'Email delivery'],
+                                        ['push', 'Push/device delivery'],
+                                    ].map(([key, label]) => (
+                                        <label key={key} className="flex items-center justify-between gap-4 bg-slate-50 border border-slate-100 rounded-xl px-4 py-3">
+                                            <span className="text-sm font-bold text-slate-700">{label}</span>
+                                            <input
+                                                type="checkbox"
+                                                checked={(notificationPrefs as any)[key]}
+                                                onChange={e => setNotificationPrefs(prev => ({ ...prev, [key]: e.target.checked }))}
+                                                className="w-4 h-4 accent-emerald-600"
+                                            />
+                                        </label>
+                                    ))}
+                                    <button onClick={saveNotificationPreferences} disabled={savingNotificationPrefs} className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-bold rounded-xl transition-colors">
+                                        {savingNotificationPrefs ? 'Saving...' : 'Save Preferences'}
+                                    </button>
+                                </div>
+                            </div>
+                            <div className="text-center py-10 bg-white rounded-3xl border border-slate-200 shadow-sm">
+                                <Key size={36} className="mx-auto text-slate-300 mb-3" />
+                                <h3 className="text-base font-bold text-slate-600">API Tokens</h3>
+                                <p className="text-slate-400 max-w-xs mx-auto mt-2 text-sm">Webhook and token management remains restricted until backend exposes permission-aware current-user metadata.</p>
+                            </div>
+                        </div>
+                    )}
                 </DrawerTemplate>
+            )}
+
+            {(editingLocation || editingFarm) && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4" onClick={() => { setEditingLocation(null); setEditingFarm(null); }}>
+                    <div className="bg-white rounded-2xl shadow-2xl max-w-xl w-full overflow-hidden" onClick={e => e.stopPropagation()}>
+                        <div className="px-6 py-4 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
+                            <h3 className="font-black text-slate-800">{editingLocation ? 'Edit City' : 'Edit Farm'}</h3>
+                            <button onClick={() => { setEditingLocation(null); setEditingFarm(null); }} className="text-slate-400 hover:text-slate-700 font-bold">Close</button>
+                        </div>
+                        <div className="p-6 space-y-4">
+                            {editingLocation && (
+                                <>
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">City Name</label>
+                                        <input value={editingLocation.name} onChange={e => setEditingLocation({ ...editingLocation, name: e.target.value })} className="input-premium" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Type</label>
+                                        <select value={editingLocation.type} onChange={e => setEditingLocation({ ...editingLocation, type: e.target.value as Location['type'] })} className="input-premium">
+                                            <option value="CITY">City</option>
+                                            <option value="REGION">Region</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Status</label>
+                                        <select value={(editingLocation as any).status || 'ACTIVE'} onChange={e => setEditingLocation({ ...(editingLocation as any), status: e.target.value })} className="input-premium">
+                                            <option value="ACTIVE">Active</option>
+                                            <option value="INACTIVE">Inactive</option>
+                                        </select>
+                                    </div>
+                                </>
+                            )}
+                            {editingFarm && (
+                                <>
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Farm Name</label>
+                                        <input value={editingFarm.name} onChange={e => setEditingFarm({ ...editingFarm, name: e.target.value })} className="input-premium" />
+                                    </div>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">City</label>
+                                            <select value={editingFarm.locationId} onChange={e => setEditingFarm({ ...editingFarm, locationId: e.target.value })} className="input-premium">
+                                                {locations.map(location => <option key={location.id} value={location.id}>{location.name}</option>)}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Type</label>
+                                            <select value={editingFarm.type} onChange={e => setEditingFarm({ ...editingFarm, type: e.target.value as Farm['type'] })} className="input-premium">
+                                                <option value="DAIRY">Dairy</option>
+                                                <option value="MEAT">Meat</option>
+                                                <option value="MIXED">Mixed</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Currency</label>
+                                            <input value={editingFarm.currency} onChange={e => setEditingFarm({ ...editingFarm, currency: e.target.value })} className="input-premium" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Cost Center</label>
+                                            <input value={editingFarm.costCenterCode} onChange={e => setEditingFarm({ ...editingFarm, costCenterCode: e.target.value })} className="input-premium" />
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Status</label>
+                                        <select value={(editingFarm as any).status || 'ACTIVE'} onChange={e => setEditingFarm({ ...(editingFarm as any), status: e.target.value })} className="input-premium">
+                                            <option value="ACTIVE">Active</option>
+                                            <option value="INACTIVE">Inactive</option>
+                                        </select>
+                                    </div>
+                                </>
+                            )}
+                        </div>
+                        <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex justify-end gap-2">
+                            <button onClick={() => { setEditingLocation(null); setEditingFarm(null); }} className="px-4 py-2 rounded-lg font-bold text-sm text-slate-600 hover:bg-slate-200">Cancel</button>
+                            <button onClick={() => void (editingLocation ? saveLocationForm() : saveFarmForm()).catch((e: any) => toast.error(e?.message || 'Failed to save.'))} className="px-4 py-2 rounded-lg font-bold text-sm text-white bg-emerald-600 hover:bg-emerald-700">Save</button>
+                        </div>
+                    </div>
+                </div>
             )}
         </div>
     );

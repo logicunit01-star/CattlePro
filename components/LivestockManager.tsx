@@ -28,8 +28,11 @@ interface Props {
     onAddMilkRecord: (animalId: string, record: MilkRecord) => void;
     onUpdateBreedingRecord: (animalId: string, record: InseminationRecord) => void;
     onDeleteBreedingRecord?: (animalId: string, recordId: string) => void | Promise<void>;
+    onUpdateMedicalRecord?: (animalId: string, recordId: string, record: Partial<MedicalRecord>) => void | Promise<void>;
     onDeleteMedicalRecord?: (animalId: string, recordId: string) => void | Promise<void>;
+    onUpdateWeightRecord?: (animalId: string, recordId: string, record: Partial<WeightRecord>) => void | Promise<void>;
     onDeleteWeightRecord?: (animalId: string, recordId: string) => void | Promise<void>;
+    onUpdateMilkRecord?: (animalId: string, recordId: string, record: Partial<MilkRecord>) => void | Promise<void>;
     onDeleteMilkRecord?: (animalId: string, recordId: string) => void | Promise<void>;
     onBulkVaccinate?: (animalIds: string[], record: MedicalRecord) => void | Promise<void>;
     onBulkMove?: (animalIds: string[], location: string) => void | Promise<void>;
@@ -46,7 +49,7 @@ interface Props {
 
 type ViewMode = 'LIST' | 'ANIMAL_FORM' | 'DETAILS';
 
-export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species, categories, entities = [], infrastructure = [], onAddLivestock, onUpdateLivestock, onDeleteLivestock, onAddMedicalRecord, onAddBreedingRecord, onAddWeightRecord, onAddMilkRecord, onUpdateBreedingRecord, onDeleteBreedingRecord, onDeleteMedicalRecord, onDeleteWeightRecord, onDeleteMilkRecord, onBulkVaccinate, onBulkMove, pagination, onPageChange, onSortChange, onSearchChange, onCategoryChange, inventory, onAddSale, allLivestock, state }) => {
+export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species, categories, entities = [], infrastructure = [], onAddLivestock, onUpdateLivestock, onDeleteLivestock, onAddMedicalRecord, onAddBreedingRecord, onAddWeightRecord, onAddMilkRecord, onUpdateBreedingRecord, onDeleteBreedingRecord, onUpdateMedicalRecord, onDeleteMedicalRecord, onUpdateWeightRecord, onDeleteWeightRecord, onUpdateMilkRecord, onDeleteMilkRecord, onBulkVaccinate, onBulkMove, pagination, onPageChange, onSortChange, onSearchChange, onCategoryChange, inventory, onAddSale, allLivestock, state }) => {
     const toast = useToast();
     const { confirm: confirmDialog, prompt: promptDialog } = useConfirm();
     const T = {
@@ -151,6 +154,9 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
     const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' }>({ key: 'tagId', direction: 'asc' });
 
     const [selectedAnimalId, setSelectedAnimalId] = useState<string | null>(null);
+    const [editingMedicalRecord, setEditingMedicalRecord] = useState<MedicalRecord | null>(null);
+    const [editingWeightRecord, setEditingWeightRecord] = useState<WeightRecord | null>(null);
+    const [editingMilkRecord, setEditingMilkRecord] = useState<MilkRecord | null>(null);
 
     // Derive selectedAnimal from props to ensure it's always up to date
     const selectedAnimal =
@@ -943,6 +949,49 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
         } finally {
             setImageUploading(false);
         }
+    };
+
+    const editMedicalRecord = async (rec: MedicalRecord) => {
+        if (!selectedAnimal || !onUpdateMedicalRecord || !rec.id) return;
+        setEditingMedicalRecord({ ...rec });
+    };
+
+    const editWeightRecord = async (rec: WeightRecord) => {
+        if (!selectedAnimal || !onUpdateWeightRecord || !rec.id) return;
+        setEditingWeightRecord({ ...rec });
+    };
+
+    const editMilkRecord = async (rec: MilkRecord) => {
+        if (!selectedAnimal || !onUpdateMilkRecord || !rec.id) return;
+        setEditingMilkRecord({ ...rec });
+    };
+
+    const saveEditingMedicalRecord = async () => {
+        if (!selectedAnimal || !editingMedicalRecord?.id || !onUpdateMedicalRecord) return;
+        const dateError = validateRecordDate(editingMedicalRecord.date, 'Medical record date');
+        if (dateError) { toast.warning(dateError); return; }
+        if (!editingMedicalRecord.medicineName?.trim()) { toast.warning('Medicine or service name is required.'); return; }
+        if ((editingMedicalRecord.cost ?? 0) < 0) { toast.warning('Cost cannot be negative.'); return; }
+        await onUpdateMedicalRecord(selectedAnimal.id, editingMedicalRecord.id, editingMedicalRecord);
+        setEditingMedicalRecord(null);
+    };
+
+    const saveEditingWeightRecord = async () => {
+        if (!selectedAnimal || !editingWeightRecord?.id || !onUpdateWeightRecord) return;
+        const dateError = validateRecordDate(editingWeightRecord.date, 'Weight record date');
+        if (dateError) { toast.warning(dateError); return; }
+        if ((editingWeightRecord.weight ?? 0) <= 0) { toast.warning('Weight must be greater than zero.'); return; }
+        await onUpdateWeightRecord(selectedAnimal.id, editingWeightRecord.id, editingWeightRecord);
+        setEditingWeightRecord(null);
+    };
+
+    const saveEditingMilkRecord = async () => {
+        if (!selectedAnimal || !editingMilkRecord?.id || !onUpdateMilkRecord) return;
+        const dateError = validateRecordDate(editingMilkRecord.date, 'Milk record date');
+        if (dateError) { toast.warning(dateError); return; }
+        if ((editingMilkRecord.quantity ?? 0) <= 0) { toast.warning('Milk quantity must be greater than zero.'); return; }
+        await onUpdateMilkRecord(selectedAnimal.id, editingMilkRecord.id, editingMilkRecord);
+        setEditingMilkRecord(null);
     };
 
     const handleGalleryUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1971,9 +2020,14 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                                         <div className="flex flex-col items-end justify-center gap-2">
                                             <p className="text-lg font-black text-gray-800">PKR {(rec.cost ?? 0).toLocaleString()}</p>
                                             {rec.nextDueDate && <p className="text-[10px] font-bold text-red-500 uppercase flex items-center gap-1 mt-1"><Clock size={10} /> Next Due: {rec.nextDueDate}</p>}
-                                            {onDeleteMedicalRecord && rec.id && (
-                                                <button type="button" onClick={() => onDeleteMedicalRecord(selectedAnimal.id, rec.id)} className="p-2 text-gray-300 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Delete record"><Trash2 size={16} /></button>
-                                            )}
+                                            <div className="flex items-center gap-1">
+                                                {onUpdateMedicalRecord && rec.id && (
+                                                    <button type="button" onClick={() => void editMedicalRecord(rec)} className="p-2 text-gray-300 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors" title="Edit record"><Edit2 size={16} /></button>
+                                                )}
+                                                {onDeleteMedicalRecord && rec.id && (
+                                                    <button type="button" onClick={() => onDeleteMedicalRecord(selectedAnimal.id, rec.id)} className="p-2 text-gray-300 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Delete record"><Trash2 size={16} /></button>
+                                                )}
+                                            </div>
                                         </div>
                                     </div>
                                 ))}
@@ -2074,6 +2128,9 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                                                     <div><p className="text-xs font-black text-gray-800">{rec.date}</p><p className="text-[10px] text-gray-400 font-bold uppercase">{rec.notes || 'Routine Check'}</p></div>
                                                     <div className="flex items-center gap-2">
                                                         <p className="text-lg font-black text-emerald-600">{rec.weight} <span className="text-[10px] text-gray-400">kg</span></p>
+                                                        {onUpdateWeightRecord && rec.id && (
+                                                            <button type="button" onClick={() => void editWeightRecord(rec)} className="p-1.5 text-gray-300 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg" title="Edit"><Edit2 size={14} /></button>
+                                                        )}
                                                         {onDeleteWeightRecord && rec.id && (
                                                             <button type="button" onClick={() => onDeleteWeightRecord(selectedAnimal.id, rec.id)} className="p-1.5 text-gray-300 hover:text-red-600 hover:bg-red-50 rounded-lg" title="Delete"><Trash2 size={14} /></button>
                                                         )}
@@ -2140,6 +2197,9 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                                                     </div>
                                                     <div className="flex items-center gap-2">
                                                         <p className="text-lg font-black text-sky-600">{rec.quantity} <span className="text-[10px] text-gray-400">L</span></p>
+                                                        {onUpdateMilkRecord && rec.id && (
+                                                            <button type="button" onClick={() => void editMilkRecord(rec)} className="p-1.5 text-gray-300 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg" title="Edit"><Edit2 size={14} /></button>
+                                                        )}
                                                         {onDeleteMilkRecord && rec.id && (
                                                             <button type="button" onClick={() => onDeleteMilkRecord(selectedAnimal.id, rec.id)} className="p-1.5 text-gray-300 hover:text-red-600 hover:bg-red-50 rounded-lg" title="Delete"><Trash2 size={14} /></button>
                                                         )}
@@ -2893,6 +2953,67 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
             )}
 
             {renderSalesModal()}
+
+            {(editingMedicalRecord || editingWeightRecord || editingMilkRecord) && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4" onClick={() => { setEditingMedicalRecord(null); setEditingWeightRecord(null); setEditingMilkRecord(null); }}>
+                    <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
+                        <div className="px-6 py-4 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
+                            <div>
+                                <h3 className="font-black text-slate-800">
+                                    {editingMedicalRecord ? 'Edit Medical Record' : editingWeightRecord ? 'Edit Weight Record' : 'Edit Milk Record'}
+                                </h3>
+                                <p className="text-xs text-slate-500 font-bold">Corrections sync through backend history APIs.</p>
+                            </div>
+                            <button onClick={() => { setEditingMedicalRecord(null); setEditingWeightRecord(null); setEditingMilkRecord(null); }} className="text-slate-400 hover:text-slate-700 font-bold">Close</button>
+                        </div>
+                        <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
+                            {editingMedicalRecord && (
+                                <>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                        <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Date</label><input type="date" value={editingMedicalRecord.date} onChange={e => setEditingMedicalRecord({ ...editingMedicalRecord, date: e.target.value })} className="input-premium" /></div>
+                                        <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Type</label><select value={editingMedicalRecord.type} onChange={e => setEditingMedicalRecord({ ...editingMedicalRecord, type: e.target.value as MedicalRecordType })} className="input-premium"><option value="VACCINATION">Vaccination</option><option value="TREATMENT">Treatment</option><option value="CHECKUP">Checkup</option><option value="INJURY">Injury</option><option value="HEAT">Heat</option><option value="OTHER">Other</option></select></div>
+                                    </div>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                        <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Medicine / Service</label><input value={editingMedicalRecord.medicineName || ''} onChange={e => setEditingMedicalRecord({ ...editingMedicalRecord, medicineName: e.target.value })} className="input-premium" /></div>
+                                        <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Doctor</label><input value={editingMedicalRecord.doctorName || ''} onChange={e => setEditingMedicalRecord({ ...editingMedicalRecord, doctorName: e.target.value })} className="input-premium" /></div>
+                                    </div>
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                        <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Cost</label><input type="number" value={editingMedicalRecord.cost || 0} onChange={e => setEditingMedicalRecord({ ...editingMedicalRecord, cost: Number(e.target.value) || 0 })} className="input-premium" /></div>
+                                        <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Inventory Item</label><select value={editingMedicalRecord.inventoryId || ''} onChange={e => setEditingMedicalRecord({ ...editingMedicalRecord, inventoryId: e.target.value || undefined })} className="input-premium"><option value="">No inventory item</option>{inventory.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
+                                        <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Qty Used</label><input type="number" value={editingMedicalRecord.quantityUsed || 0} onChange={e => setEditingMedicalRecord({ ...editingMedicalRecord, quantityUsed: Number(e.target.value) || 0 })} className="input-premium" /></div>
+                                    </div>
+                                    <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Next Due</label><input type="date" value={editingMedicalRecord.nextDueDate || ''} onChange={e => setEditingMedicalRecord({ ...editingMedicalRecord, nextDueDate: e.target.value || undefined })} className="input-premium" /></div>
+                                    <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Notes</label><textarea value={editingMedicalRecord.notes || ''} onChange={e => setEditingMedicalRecord({ ...editingMedicalRecord, notes: e.target.value })} className="input-premium min-h-24" /></div>
+                                </>
+                            )}
+                            {editingWeightRecord && (
+                                <>
+                                    <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Date</label><input type="date" value={editingWeightRecord.date} onChange={e => setEditingWeightRecord({ ...editingWeightRecord, date: e.target.value })} className="input-premium" /></div>
+                                    <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Weight (kg)</label><input type="number" value={editingWeightRecord.weight || 0} onChange={e => setEditingWeightRecord({ ...editingWeightRecord, weight: Number(e.target.value) || 0 })} className="input-premium" /></div>
+                                    <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Notes</label><textarea value={editingWeightRecord.notes || ''} onChange={e => setEditingWeightRecord({ ...editingWeightRecord, notes: e.target.value })} className="input-premium min-h-24" /></div>
+                                </>
+                            )}
+                            {editingMilkRecord && (
+                                <>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                        <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Date</label><input type="date" value={editingMilkRecord.date} onChange={e => setEditingMilkRecord({ ...editingMilkRecord, date: e.target.value })} className="input-premium" /></div>
+                                        <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Session</label><select value={editingMilkRecord.session} onChange={e => setEditingMilkRecord({ ...editingMilkRecord, session: e.target.value as MilkRecord['session'] })} className="input-premium"><option value="MORNING">Morning</option><option value="EVENING">Evening</option></select></div>
+                                    </div>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                        <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Quantity (L)</label><input type="number" value={editingMilkRecord.quantity || 0} onChange={e => setEditingMilkRecord({ ...editingMilkRecord, quantity: Number(e.target.value) || 0 })} className="input-premium" /></div>
+                                        <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Fat %</label><input type="number" value={editingMilkRecord.fatContent || 0} onChange={e => setEditingMilkRecord({ ...editingMilkRecord, fatContent: Number(e.target.value) || 0 })} className="input-premium" /></div>
+                                    </div>
+                                    <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Notes</label><textarea value={editingMilkRecord.notes || ''} onChange={e => setEditingMilkRecord({ ...editingMilkRecord, notes: e.target.value })} className="input-premium min-h-24" /></div>
+                                </>
+                            )}
+                        </div>
+                        <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex justify-end gap-2">
+                            <button onClick={() => { setEditingMedicalRecord(null); setEditingWeightRecord(null); setEditingMilkRecord(null); }} className="px-4 py-2 rounded-lg font-bold text-sm text-slate-600 hover:bg-slate-200">Cancel</button>
+                            <button onClick={() => void (editingMedicalRecord ? saveEditingMedicalRecord() : editingWeightRecord ? saveEditingWeightRecord() : saveEditingMilkRecord()).catch((e: any) => toast.error(e?.message || 'Failed to save record.'))} className="px-4 py-2 rounded-lg font-bold text-sm text-white bg-emerald-600 hover:bg-emerald-700">Save</button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Mobile FAB */}
             <button

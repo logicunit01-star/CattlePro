@@ -255,6 +255,7 @@ const App: React.FC = () => {
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notificationsError, setNotificationsError] = useState<string | null>(null);
+  const [notificationsUnreadCount, setNotificationsUnreadCount] = useState<number | null>(null);
   const bumpFinancials = () => setFinancialsRefresh(r => r + 1);
 
   // Tenant: on first load read URL and persist companyName & instanceId to localStorage + Redux
@@ -436,7 +437,10 @@ const App: React.FC = () => {
   const loadNotifications = async () => {
     try {
       setNotificationsError(null);
-      const rows = await backendService.getNotifications();
+      const [rows, unread] = await Promise.all([
+        backendService.getNotifications(),
+        backendService.getNotificationsUnreadCount().catch(() => null),
+      ]);
       setNotifications(Array.isArray(rows) ? rows.map((n: any) => ({
         id: String(n.id ?? n.notificationId),
         title: n.title ?? n.type ?? 'Notification',
@@ -445,8 +449,13 @@ const App: React.FC = () => {
         read: n.read ?? n.status === 'READ',
         createdAt: n.createdAt ?? n.date
       })).filter(n => n.id) : []);
+      if (unread) {
+        const count = (unread as any).count ?? (unread as any).unreadCount ?? (unread as any).total ?? 0;
+        setNotificationsUnreadCount(Number(count) || 0);
+      }
     } catch (e: any) {
       setNotifications([]);
+      setNotificationsUnreadCount(null);
       setNotificationsError(e?.message || 'Unable to load notifications.');
     }
   };
@@ -460,8 +469,20 @@ const App: React.FC = () => {
     try {
       await backendService.markNotificationRead(id);
       setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true, status: 'READ' } : n));
+      setNotificationsUnreadCount(count => count == null ? count : Math.max(0, count - 1));
     } catch (e: any) {
-      alert(e?.message || 'Failed to mark notification read.');
+      toast.error(e?.message || 'Failed to mark notification read.');
+    }
+  };
+
+  const markAllNotificationsRead = async () => {
+    try {
+      await backendService.readAllNotifications();
+      setNotifications(prev => prev.map(n => ({ ...n, read: true, status: 'READ' })));
+      setNotificationsUnreadCount(0);
+      toast.success('All notifications marked read.');
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to mark notifications read.');
     }
   };
 
@@ -864,6 +885,22 @@ const App: React.FC = () => {
     }
   };
 
+  const updateMedicalRecord = async (animalId: string, recordId: string, record: Partial<MedicalRecord>) => {
+    try {
+      await backendService.updateMedicalRecord(animalId, recordId, record);
+      const [rawLivestock, expenses, feed] = await Promise.all([
+        backendService.getLivestock(),
+        backendService.getExpenses(),
+        backendService.getFeed(),
+      ]);
+      setState(prev => ({ ...prev, livestock: toLivestockArray(rawLivestock), expenses, feed }));
+      bumpFinancials();
+      toast.success('Medical record updated.');
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to update medical record.');
+    }
+  };
+
   const deleteWeightRecord = async (animalId: string, recordId: string) => {
     const ok = await confirmDialog({
       title: 'Delete weight record',
@@ -882,6 +919,17 @@ const App: React.FC = () => {
     }
   };
 
+  const updateWeightRecord = async (animalId: string, recordId: string, record: Partial<WeightRecord>) => {
+    try {
+      await backendService.updateWeightRecord(animalId, recordId, record);
+      const rawLivestock = await backendService.getLivestock();
+      setState(prev => ({ ...prev, livestock: toLivestockArray(rawLivestock) }));
+      toast.success('Weight record updated.');
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to update weight record.');
+    }
+  };
+
   const deleteMilkRecord = async (animalId: string, recordId: string) => {
     const ok = await confirmDialog({
       title: 'Delete milk record',
@@ -897,6 +945,17 @@ const App: React.FC = () => {
       toast.success('Milk record deleted.');
     } catch (e: any) {
       toast.error(e?.message || 'Failed to delete milk record.');
+    }
+  };
+
+  const updateMilkRecord = async (animalId: string, recordId: string, record: Partial<MilkRecord>) => {
+    try {
+      await backendService.updateMilkRecord(animalId, recordId, record);
+      const rawLivestock = await backendService.getLivestock();
+      setState(prev => ({ ...prev, livestock: toLivestockArray(rawLivestock) }));
+      toast.success('Milk record updated.');
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to update milk record.');
     }
   };
 
@@ -1122,19 +1181,14 @@ const App: React.FC = () => {
       soldAnimalIds: sale.soldAnimalIds ?? ((sale as any).animalId ? [(sale as any).animalId] : undefined)
     };
 
-    // Add to state immediately so the grid shows it (works even if API fails or is offline)
-    const saleToShow: Sale = { ...saleWithContext, id: saleWithContext.id };
-    const newSalesAfterAdd = [...state.sales, saleToShow];
-    setState(prev => ({ ...prev, sales: newSalesAfterAdd }));
-    setPersistedSales(newSalesAfterAdd);
-
     try {
       const isBulk = (saleWithContext.soldAnimalIds?.length ?? 0) > 1;
       const saved = isBulk
         ? await backendService.createSaleBulk(saleWithContext)
         : await backendService.createSale(saleWithContext);
-      const [salesFromApi, entities, ledger] = await Promise.all([
+      const [salesFromApi, rawLivestock, entities, ledger] = await Promise.all([
         backendService.getSales().catch(() => []),
+        backendService.getLivestock(),
         backendService.getEntities(),
         backendService.getLedger()
       ]);
@@ -1142,21 +1196,21 @@ const App: React.FC = () => {
       setState(prev => ({
         ...prev,
         sales: salesToSet,
-        livestock: toLivestockArray(livestock),
+        livestock: toLivestockArray(rawLivestock),
         entities,
         ledger,
-        livestock: toLivestockArray(rawLivestock),
       }));
-      setPersistedSales(salesToSet);
+      if (IS_DEMO_MODE) setPersistedSales(salesToSet);
       bumpFinancials();
     } catch (e) {
-      // Sale already in state and persisted; keep it visible after refresh.
-      console.warn("Sale saved locally; backend sync failed:", e);
+      console.error("Sale save failed:", e);
+      toast.error(e instanceof Error ? e.message : 'Failed to save sale.');
     }
   };
 
   const handleDeleteSale = async (id: string) => {
-    if (!state.sales.find(s => s.id === id)) return;
+    const saleToDelete = state.sales.find(s => s.id === id);
+    if (!saleToDelete) return;
     try {
       const ok = await confirmDialog({
         title: 'Reverse sale',
@@ -1165,36 +1219,17 @@ const App: React.FC = () => {
         danger: true,
       });
       if (!ok) return;
-      await backendService.deleteSale(id);
-
-      // Cascading rollback for animals — only revert those still in SOLD state.
-      // Animals that have since been marked DECEASED (or any other status) must NOT be reset to ACTIVE,
-      // which would silently wipe their deathDate and contradict the actual lifecycle.
-      let revertedCount = 0;
-      let skippedCount = 0;
-      if (saleToDelete.soldAnimalIds) {
-        for (const animalId of saleToDelete.soldAnimalIds) {
-          const animalToRevert = state.livestock.find(l => l.id === animalId);
-          if (!animalToRevert) continue;
-          if (animalToRevert.status !== 'SOLD') {
-            skippedCount += 1;
-            continue;
-          }
-          await updateLivestock({ ...animalToRevert, status: 'ACTIVE' as any });
-          revertedCount += 1;
-        }
-      }
-      if (skippedCount > 0) {
-        toast.info(`${revertedCount} animal(s) reverted to ACTIVE; ${skippedCount} skipped (status changed since the sale).`);
-      }
-
-      setState(p => {
-        const nextSales = p.sales.filter(s => s.id !== id);
-        setPersistedSales(nextSales);
-        return { ...p, sales: nextSales };
-      });
+      await backendService.reverseSale(id);
+      const [sales, rawLivestock, entities, ledger] = await Promise.all([
+        backendService.getSales().catch(() => state.sales.filter(s => s.id !== id)),
+        backendService.getLivestock(),
+        backendService.getEntities(),
+        backendService.getLedger(),
+      ]);
+      setState(p => ({ ...p, sales, livestock: toLivestockArray(rawLivestock), entities, ledger }));
+      if (IS_DEMO_MODE) setPersistedSales(sales);
       bumpFinancials();
-      toast.success('Sale deleted.');
+      toast.success('Sale reversed.');
     } catch (e) {
       console.error(e);
       toast.error(e?.message || 'Failed to reverse sale.');
@@ -1228,6 +1263,17 @@ const App: React.FC = () => {
   };
 
   /* Financial Helpers */
+  const handleRecordSalePayment = async (saleId: string, payment: { amount: number; date: string; paymentMethod?: string; notes?: string }) => {
+    try {
+      await backendService.salePayment(saleId, { ...payment, clientMutationId: newClientMutationId('sale-payment') });
+      await refreshFinancialData();
+      toast.success('Sale payment recorded.');
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to record sale payment.');
+      throw e;
+    }
+  };
+
   const handleAddPayment = async (payment: { entityId: string, amount: number, date: string, notes?: string }) => {
     try {
       await backendService.createPayment({ ...payment, clientMutationId: newClientMutationId('payment') });
@@ -1284,7 +1330,7 @@ const App: React.FC = () => {
     return <Login onLoginSuccess={handleLoginSuccess} />;
   }
 
-  const unreadNotifications = notifications.filter(n => !n.read && n.status !== 'READ').length;
+  const unreadNotifications = notificationsUnreadCount ?? notifications.filter(n => !n.read && n.status !== 'READ').length;
 
   return (
     <div className="flex min-h-screen bg-slate-50/50">
@@ -1461,7 +1507,10 @@ const App: React.FC = () => {
                       <p className="text-sm font-black text-slate-800">Notifications</p>
                       <p className="text-xs text-slate-400">{unreadNotifications} unread</p>
                     </div>
-                    <button onClick={loadNotifications} className="text-xs font-bold text-emerald-700 hover:text-emerald-900">Refresh</button>
+                    <div className="flex items-center gap-3">
+                      <button onClick={markAllNotificationsRead} disabled={unreadNotifications === 0} className="text-xs font-bold text-slate-500 hover:text-emerald-700 disabled:opacity-40 disabled:hover:text-slate-500">Read all</button>
+                      <button onClick={loadNotifications} className="text-xs font-bold text-emerald-700 hover:text-emerald-900">Refresh</button>
+                    </div>
                   </div>
                   <div className="max-h-96 overflow-y-auto">
                     {notificationsError && (
@@ -1558,8 +1607,11 @@ const App: React.FC = () => {
                 onAddMedicalRecord={addMedicalRecord} onAddBreedingRecord={addBreedingRecord} onAddWeightRecord={addWeightRecord} onAddMilkRecord={addMilkRecord}
                 onUpdateBreedingRecord={updateBreedingRecord}
                 onDeleteBreedingRecord={deleteBreedingRecord}
+                onUpdateMedicalRecord={updateMedicalRecord}
                 onDeleteMedicalRecord={deleteMedicalRecord}
+                onUpdateWeightRecord={updateWeightRecord}
                 onDeleteWeightRecord={deleteWeightRecord}
+                onUpdateMilkRecord={updateMilkRecord}
                 onDeleteMilkRecord={deleteMilkRecord}
                 onBulkVaccinate={bulkVaccinate} onBulkMove={bulkMove}
                 pagination={livestockPageResult ? { totalElements: livestockPageResult.totalElements, totalPages: livestockPageResult.totalPages, page: livestockPageRequest.number, size: livestockPageRequest.size, sortBy: livestockPageRequest.sortBy, sortDirection: livestockPageRequest.sortDirection, searchQ: livestockPageRequest.q, category: livestockPageRequest.category } : undefined}
@@ -1581,8 +1633,11 @@ const App: React.FC = () => {
                 onAddMedicalRecord={addMedicalRecord} onAddBreedingRecord={addBreedingRecord} onAddWeightRecord={addWeightRecord} onAddMilkRecord={addMilkRecord}
                 onUpdateBreedingRecord={updateBreedingRecord}
                 onDeleteBreedingRecord={deleteBreedingRecord}
+                onUpdateMedicalRecord={updateMedicalRecord}
                 onDeleteMedicalRecord={deleteMedicalRecord}
+                onUpdateWeightRecord={updateWeightRecord}
                 onDeleteWeightRecord={deleteWeightRecord}
+                onUpdateMilkRecord={updateMilkRecord}
                 onDeleteMilkRecord={deleteMilkRecord}
                 onBulkVaccinate={bulkVaccinate} onBulkMove={bulkMove}
                 pagination={livestockPageResult ? { totalElements: livestockPageResult.totalElements, totalPages: livestockPageResult.totalPages, page: livestockPageRequest.number, size: livestockPageRequest.size, sortBy: livestockPageRequest.sortBy, sortDirection: livestockPageRequest.sortDirection, searchQ: livestockPageRequest.q, category: livestockPageRequest.category } : undefined}
@@ -1749,6 +1804,7 @@ const App: React.FC = () => {
                 }}
                 onUpdateInventory={async (item) => { const updated = await backendService.updateFeed(item.id, item); setState(p => ({ ...p, feed: p.feed.map(f => f.id === item.id ? updated : f) })); }}
                 onDeleteFeed={async (id) => { try { await backendService.deleteFeed(id); setState(p => ({ ...p, feed: p.feed.filter(f => f.id !== id) })); } catch (e) { toast.error('Failed to delete feed item.'); } }}
+                onRefreshProcurement={refreshProcurementData}
               />
             )}
             {activeView === 'REPORTS' && <Reports currentFarmId={state.currentFarmId} state={{

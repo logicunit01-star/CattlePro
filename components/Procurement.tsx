@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { backendService } from '../services/backendService';
-import { AppState, Expense, FeedInventory } from '../types';
-import { Truck, ShoppingCart, User, AlertTriangle, CheckCircle, Clock, Search, Layers, Archive, Activity, RefreshCw, MinusCircle, Edit2, X, Save, Plus, Package, TrendingUp, BarChart, DollarSign, ArrowRight, Filter, Download } from 'lucide-react';
+import { AppState, Expense, ExpenseCategory, FeedInventory } from '../types';
+import { Truck, ShoppingCart, User, AlertTriangle, CheckCircle, Clock, Search, Layers, Archive, Activity, RefreshCw, MinusCircle, Edit2, X, Save, Plus, Package, TrendingUp, BarChart, DollarSign, ArrowRight, Filter, Download, RotateCcw } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart as RechartsBarChart, Bar, PieChart, Pie, Cell } from 'recharts';
 import { useToast } from './Toast';
 import { useConfirm } from './ConfirmDialog';
@@ -13,12 +13,13 @@ interface Props {
     onAddFeed: (f: FeedInventory) => void | Promise<void>;
     onUpdateInventory: (item: FeedInventory) => void | Promise<void>;
     onDeleteFeed: (id: string) => void;
+    onRefreshProcurement?: () => void | Promise<void>;
 }
 
 const FEED_TYPES = ['GRASS', 'TMR', 'WANDA', 'OTHER'];
 const UNIT_OPTIONS = ['KG', 'TON', 'BUNDLE', 'BAG'];
 
-export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpense, onAddFeed, onUpdateInventory, onDeleteFeed }) => {
+export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpense, onAddFeed, onUpdateInventory, onDeleteFeed, onRefreshProcurement }) => {
     const toast = useToast();
     const { confirm: confirmDialog, prompt: promptDialog } = useConfirm();
     const [activeTab, setActiveTab] = useState<'DASHBOARD' | 'PROCUREMENT' | 'INVENTORY' | 'SUPPLIERS' | 'ANALYTICS'>('DASHBOARD');
@@ -57,6 +58,14 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
     const [deployingMaterial, setDeployingMaterial] = useState(false);
     const [recordingPurchase, setRecordingPurchase] = useState(false);
     const [repairingData, setRepairingData] = useState(false);
+    const [movementItem, setMovementItem] = useState<FeedInventory | null>(null);
+    const [inventoryMovements, setInventoryMovements] = useState<any[]>([]);
+    const [movementsLoading, setMovementsLoading] = useState(false);
+    const [movementsError, setMovementsError] = useState<string | null>(null);
+    const [selectedMovement, setSelectedMovement] = useState<any | null>(null);
+    const [movementAuditRows, setMovementAuditRows] = useState<any[]>([]);
+    const [movementAuditLoading, setMovementAuditLoading] = useState(false);
+    const [movementAuditError, setMovementAuditError] = useState<string | null>(null);
 
     // Filtered Feed items
     const feedItems = useMemo(() => state.feed.filter(f => f.category === 'FEED'), [state.feed]);
@@ -111,6 +120,7 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
         }
         return expenses.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
     }, [state.expenses, searchTerm]);
+    const purchaseIdForExpense = (expense: Expense) => String((expense as any).feedPurchaseId ?? (expense as any).purchaseId ?? (expense as any).procurementId ?? expense.id);
 
     const dashboardVendorExpenses = state.expenses.filter(e => e.category === 'FEED');
     const pendingBills = dashboardVendorExpenses
@@ -333,41 +343,16 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
 
         setRecordingPurchase(true);
         try {
-            await onUpdateExpense(updated);
-
-            // Fetch explicitly what it was before updating to reverse the impact accurately
-            const prevItem = state.feed.find(f => f.id === editingExpense.feedItemId);
-            let prevAddedValue = 0;
-
-            if (prevItem) {
-                prevAddedValue = isQtyBased ? (editingExpense.quantity || 0) : (editingExpense.weight || 0);
-
-                // If it's modifying the exact same item ID
-                if (prevItem.id === selectedItem.id) {
-                    await onUpdateInventory({
-                        ...selectedItem,
-                        quantity: selectedItem.quantity - prevAddedValue + (isQtyBased ? procurementForm.quantity : newAddedValue),
-                        unitCost: procurementForm.rate,
-                        defaultSupplier: procurementForm.vendorId !== CASH_LABEL ? procurementForm.vendorId : selectedItem.defaultSupplier
-                    });
-                } else {
-                    await onUpdateInventory({ ...prevItem, quantity: prevItem.quantity - prevAddedValue });
-                    await onUpdateInventory({
-                        ...selectedItem,
-                        quantity: selectedItem.quantity + (isQtyBased ? procurementForm.quantity : newAddedValue),
-                        unitCost: procurementForm.rate,
-                        defaultSupplier: procurementForm.vendorId !== CASH_LABEL ? procurementForm.vendorId : selectedItem.defaultSupplier
-                    });
-                }
-            } else {
-                await onUpdateInventory({
-                    ...selectedItem,
-                    quantity: selectedItem.quantity + (isQtyBased ? procurementForm.quantity : newAddedValue),
-                    unitCost: procurementForm.rate,
-                    defaultSupplier: procurementForm.vendorId !== CASH_LABEL ? procurementForm.vendorId : selectedItem.defaultSupplier
-                });
-            }
-
+            await backendService.updateFeedPurchase(purchaseIdForExpense(editingExpense), {
+                ...updated,
+                vendorId: procurementForm.vendorId,
+                feedItemId: selectedItem.id,
+                quantity: isQtyBased ? procurementForm.quantity : procurementForm.weight,
+                weight: procurementForm.weight,
+                rate: procurementForm.rate,
+                paymentStatus: procurementForm.paymentStatus,
+            });
+            await onRefreshProcurement?.();
             setEditingExpense(null);
             setProcurementForm({ ...procurementForm, weight: 0, quantity: 0 });
             toast.success('Record updated successfully.');
@@ -375,6 +360,55 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
             console.error(e);
         } finally {
             setRecordingPurchase(false);
+        }
+    };
+
+    const reversePurchase = async (expense: Expense) => {
+        const ok = await confirmDialog({
+            title: 'Reverse feed purchase',
+            message: 'Reverse this purchase? Backend will adjust inventory, payable balance, ledger, and movement history.',
+            confirmLabel: 'Reverse',
+            danger: true,
+        });
+        if (!ok) return;
+        try {
+            await backendService.reverseFeedPurchase(purchaseIdForExpense(expense));
+            await onRefreshProcurement?.();
+            setProcurementRefreshKey(key => key + 1);
+            toast.success('Feed purchase reversed.');
+        } catch (e: any) {
+            toast.error(e?.message || 'Failed to reverse feed purchase.');
+        }
+    };
+
+    const openInventoryMovements = async (item: FeedInventory) => {
+        setMovementItem(item);
+        setMovementsLoading(true);
+        setMovementsError(null);
+        try {
+            const rows = await backendService.getInventoryMovementsByItem(item.id);
+            setInventoryMovements(Array.isArray(rows) ? rows : []);
+        } catch (e: any) {
+            setInventoryMovements([]);
+            setMovementsError(e?.message || 'Unable to load inventory movement history.');
+        } finally {
+            setMovementsLoading(false);
+        }
+    };
+
+    const openMovementAudit = async (movement: any) => {
+        setSelectedMovement(movement);
+        setMovementAuditRows([]);
+        setMovementAuditError(null);
+        setMovementAuditLoading(true);
+        try {
+            const movementId = String(movement.id ?? movement.movementId);
+            const rows = await backendService.getInventoryMovementAudit(movementId);
+            setMovementAuditRows(Array.isArray(rows) ? rows : []);
+        } catch (e: any) {
+            setMovementAuditError(e?.message || 'Unable to load movement audit trail.');
+        } finally {
+            setMovementAuditLoading(false);
         }
     };
 
@@ -423,7 +457,7 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
             if (!ok) return;
             const applied = await backendService.repairProcurement(state.currentFarmId, false);
             toast.success(applied.summary || 'Repairs applied.');
-            await onRefreshAfterRepair?.();
+            await onRefreshProcurement?.();
         } catch (e: unknown) {
             toast.error(e instanceof Error ? e.message : 'Repair failed.');
         } finally {
@@ -1032,10 +1066,13 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                                 </span>
                                             </td>
                                             <td className="px-6 py-4 text-center opacity-0 group-hover:opacity-100 transition-opacity">
-                                                <button onClick={() => {
-                                                    startEditExpense(e);
-                                                    window.scrollTo({ top: 0, behavior: 'smooth' });
-                                                }} className="text-slate-400 hover:text-emerald-600 bg-white shadow-sm border border-slate-100 p-2 rounded-xl transition-colors"><Edit2 size={16} /></button>
+                                                <div className="flex items-center justify-center gap-1">
+                                                    <button onClick={() => {
+                                                        startEditExpense(e);
+                                                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                                                    }} className="text-slate-400 hover:text-emerald-600 bg-white shadow-sm border border-slate-100 p-2 rounded-xl transition-colors" title="Edit purchase"><Edit2 size={16} /></button>
+                                                    <button onClick={() => void reversePurchase(e)} className="text-slate-400 hover:text-amber-600 bg-white shadow-sm border border-slate-100 p-2 rounded-xl transition-colors" title="Reverse purchase"><RotateCcw size={16} /></button>
+                                                </div>
                                             </td>
                                         </tr>
                                     ))}
@@ -1193,6 +1230,7 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                     </div>
                                     <div className="px-6 py-4 flex gap-2">
                                         <button onClick={() => handleRecordUsage(item)} className="flex-1 bg-white border border-slate-200 text-slate-600 font-bold text-xs py-2.5 rounded-xl hover:bg-slate-50 hover:text-slate-800 transition-colors flex items-center justify-center gap-2"><MinusCircle size={14} /> RECORD OUTGOING</button>
+                                        <button onClick={() => void openInventoryMovements(item)} className="flex-1 bg-slate-800 border border-slate-800 text-white font-bold text-xs py-2.5 rounded-xl hover:bg-slate-700 transition-colors flex items-center justify-center gap-2"><Activity size={14} /> STOCK CARD</button>
                                     </div>
                                     <div className="bg-slate-800 px-6 py-2.5 text-center flex justify-between items-center">
                                         <span className="text-[10px] font-medium text-slate-400">Pref Vendor:</span>
@@ -1354,6 +1392,98 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                 <p className="text-xs font-medium text-slate-500 mt-4 text-center">Visualizes base pricing differentials to support economic purchasing.</p>
                             </div>
                         )}
+                    </div>
+                </div>
+            )}
+
+            {movementItem && (
+                <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setMovementItem(null)}>
+                    <div className="bg-white rounded-3xl shadow-2xl w-full max-w-4xl max-h-[85vh] overflow-hidden" onClick={e => e.stopPropagation()}>
+                        <div className="px-6 py-4 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
+                            <div>
+                                <h3 className="font-black text-slate-800">Stock Card: {movementItem.name}</h3>
+                                <p className="text-xs text-slate-500 font-bold mt-0.5">Backend inventory movement ledger</p>
+                            </div>
+                            <button onClick={() => setMovementItem(null)} className="p-2 text-slate-400 hover:text-slate-700 hover:bg-white rounded-lg"><X size={18} /></button>
+                        </div>
+                        <div className="overflow-auto max-h-[70vh]">
+                            {movementsLoading && <div className="p-8 text-center text-sm font-bold text-slate-500">Loading movement history...</div>}
+                            {movementsError && <div className="m-5 p-4 rounded-xl bg-red-50 border border-red-200 text-sm text-red-700">{movementsError}</div>}
+                            {!movementsLoading && !movementsError && inventoryMovements.length === 0 && (
+                                <div className="p-10 text-center text-slate-400">
+                                    <Activity size={32} className="mx-auto mb-2 opacity-40" />
+                                    <p className="text-sm font-bold">No movement rows returned for this item.</p>
+                                </div>
+                            )}
+                            {!movementsLoading && !movementsError && inventoryMovements.length > 0 && (
+                                <table className="w-full text-sm">
+                                    <thead className="bg-white sticky top-0 border-b border-slate-100">
+                                        <tr className="text-[10px] font-black uppercase tracking-wider text-slate-500">
+                                            <th className="px-5 py-3 text-left">Date</th>
+                                            <th className="px-5 py-3 text-left">Movement</th>
+                                            <th className="px-5 py-3 text-right">Qty</th>
+                                            <th className="px-5 py-3 text-right">Value</th>
+                                            <th className="px-5 py-3 text-left">Reference</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">
+                                        {inventoryMovements.map((row, idx) => (
+                                            <tr key={row.id ?? idx} onClick={() => void openMovementAudit(row)} className="hover:bg-slate-50 cursor-pointer">
+                                                <td className="px-5 py-3 font-bold text-slate-700">{row.date ?? row.createdAt ?? '-'}</td>
+                                                <td className="px-5 py-3">
+                                                    <span className={`px-2 py-1 rounded-lg text-[10px] font-black uppercase ${row.direction === 'OUT' || row.direction === 'DECREASE' ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'}`}>
+                                                        {row.movementType ?? row.type ?? row.direction ?? 'MOVEMENT'}
+                                                    </span>
+                                                </td>
+                                                <td className="px-5 py-3 text-right font-black text-slate-800">{Number(row.quantity ?? row.qty ?? 0).toLocaleString()} {row.unit ?? movementItem.unit}</td>
+                                                <td className="px-5 py-3 text-right font-bold text-emerald-700">PKR {Number(row.totalCost ?? row.value ?? 0).toLocaleString()}</td>
+                                                <td className="px-5 py-3 text-slate-500">{row.referenceType ?? '-'} {row.referenceId ? `· ${row.referenceId}` : ''}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
+            {selectedMovement && (
+                <div className="fixed inset-0 z-[60] bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setSelectedMovement(null)}>
+                    <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
+                        <div className="px-6 py-4 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
+                            <div>
+                                <h3 className="font-black text-slate-800">Movement Audit</h3>
+                                <p className="text-xs text-slate-500 font-bold mt-0.5">{selectedMovement.movementType ?? selectedMovement.type ?? 'Movement'} · {selectedMovement.id ?? selectedMovement.movementId}</p>
+                            </div>
+                            <button onClick={() => setSelectedMovement(null)} className="p-2 text-slate-400 hover:text-slate-700 hover:bg-white rounded-lg"><X size={18} /></button>
+                        </div>
+                        <div className="p-5 max-h-[65vh] overflow-y-auto">
+                            {movementAuditLoading && <div className="text-sm font-bold text-slate-500 text-center py-8">Loading audit trail...</div>}
+                            {movementAuditError && <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-sm text-red-700">{movementAuditError}</div>}
+                            {!movementAuditLoading && !movementAuditError && movementAuditRows.length === 0 && (
+                                <div className="text-center py-8 text-slate-400">
+                                    <Activity size={30} className="mx-auto mb-2 opacity-40" />
+                                    <p className="text-sm font-bold">No audit rows returned for this movement.</p>
+                                </div>
+                            )}
+                            {!movementAuditLoading && !movementAuditError && movementAuditRows.length > 0 && (
+                                <div className="space-y-3">
+                                    {movementAuditRows.map((row, idx) => (
+                                        <div key={row.id ?? idx} className="border border-slate-100 rounded-xl p-3 bg-slate-50">
+                                            <div className="flex items-center justify-between">
+                                                <p className="text-xs font-black uppercase text-slate-700">{row.action ?? row.eventType ?? 'AUDIT'}</p>
+                                                <span className="text-[10px] font-bold text-slate-400">{row.createdAt ?? row.timestamp ?? row.date ?? ''}</span>
+                                            </div>
+                                            <p className="text-xs text-slate-500 mt-1">{row.actorName ?? row.actor ?? row.userName ?? ''}</p>
+                                            {(row.beforeValue || row.afterValue) && (
+                                                <p className="text-xs text-slate-600 mt-2">Before: {String(row.beforeValue ?? '-')} · After: {String(row.afterValue ?? '-')}</p>
+                                            )}
+                                            {row.message && <p className="text-xs text-slate-600 mt-2">{row.message}</p>}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
                     </div>
                 </div>
             )}
