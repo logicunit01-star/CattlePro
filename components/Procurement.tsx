@@ -19,7 +19,9 @@ interface Props {
 const FEED_TYPES = ['GRASS', 'TMR', 'WANDA', 'OTHER'];
 const UNIT_OPTIONS = ['KG', 'TON', 'BUNDLE', 'BAG'];
 
-export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpense, onAddFeed, onUpdateInventory, onDeleteFeed }) => {
+export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpense, onAddFeed, onUpdateInventory, onDeleteFeed, onRefreshProcurement }) => {
+    const toast = useToast();
+    const { confirm: confirmDialog, prompt: promptDialog } = useConfirm();
     const [activeTab, setActiveTab] = useState<'DASHBOARD' | 'PROCUREMENT' | 'INVENTORY' | 'SUPPLIERS' | 'ANALYTICS'>('DASHBOARD');
 
     // VENDOR ENTITIES LOGIC - STRICT INTEGRATION
@@ -442,9 +444,22 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
         if (!qtyStr) return;
         const consumedKg = parseFloat(qtyStr);
         const toDeduct = isQtyBased ? consumedKg / wpu : consumedKg;
-        if (toDeduct > (item.quantity ?? 0)) return alert("Cannot consume more than available stock!");
-        onUpdateInventory({ ...item, quantity: (item.quantity ?? 0) - toDeduct });
-        alert(`Successfully deducted ${consumedKg} KG${isQtyBased ? ` (${toDeduct.toFixed(3)} ${item.unit}s)` : ''} of ${item.name}.`);
+        if (toDeduct > (item.quantity ?? 0)) { toast.warning('Cannot consume more than available stock.'); return; }
+        try {
+            const updated = await backendService.adjustFeed({
+                feedItemId: item.id,
+                direction: 'DECREASE',
+                quantity: toDeduct,
+                reason: `Manual outgoing recorded from Procurement (${consumedKg} KG)`
+            });
+            onUpdateInventory(updated?.id ? updated : { ...item, quantity: (item.quantity ?? 0) - toDeduct });
+            await onRefreshProcurement?.();
+            setProcurementRefreshKey(key => key + 1);
+            toast.success(`Deducted ${consumedKg} KG${isQtyBased ? ` (${toDeduct.toFixed(3)} ${item.unit}s)` : ''} of ${item.name}.`);
+        } catch (e) {
+            console.error(e);
+            toast.error('Failed to record outgoing stock.');
+        }
     };
 
     // Helper: Map Vendor ID to display Name
@@ -1183,9 +1198,33 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                     </div>
 
                                     {pending > 0 ? (
-                                        <button onClick={() => {
-                                            if (!confirm(`Log artificial payment clearing ${pending.toLocaleString()} dues? (Accounting Ledger unaffected)`)) return;
-                                            relatedBills.filter(b => b.paymentStatus !== 'PAID').forEach(b => onUpdateExpense({ ...b, paymentStatus: 'PAID', paymentDate: new Date().toISOString().split('T')[0] }));
+                                        <button onClick={async () => {
+                                            const ok = await confirmDialog({
+                                                title: 'Settle vendor dues',
+                                                message: `Create payment entries clearing PKR ${pending.toLocaleString()} dues for ${vendor.name}?`,
+                                                confirmLabel: 'Settle',
+                                            });
+                                            if (!ok) return;
+                                            const paymentDate = new Date().toISOString().split('T')[0];
+                                            try {
+                                                for (const bill of relatedBills.filter(b => b.paymentStatus !== 'PAID')) {
+                                                    const balance = Math.max(0, bill.amount - (bill.amountPaid || 0));
+                                                    if (balance <= 0) continue;
+                                                    await backendService.expensePayment(bill.id, {
+                                                        amount: balance,
+                                                        date: paymentDate,
+                                                        paymentMethod: 'CASH',
+                                                        notes: `Vendor settlement from Procurement for ${vendor.name}`
+                                                    });
+                                                    await onUpdateExpense({ ...bill, paymentStatus: 'PAID', amountPaid: bill.amount, paymentDate });
+                                                }
+                                                await onRefreshProcurement?.();
+                                                setProcurementRefreshKey(key => key + 1);
+                                                toast.success('Vendor dues settled.');
+                                            } catch (e) {
+                                                console.error(e);
+                                                toast.error('Failed to settle vendor dues.');
+                                            }
                                         }} className="w-full bg-slate-800 hover:bg-slate-700 text-white py-3 rounded-xl text-xs font-black tracking-wider flex items-center justify-center gap-2 shadow-md transition-colors">
                                             <CheckCircle size={14} /> SETTLE DUES
                                         </button>

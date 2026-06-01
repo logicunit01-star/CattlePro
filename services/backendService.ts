@@ -1,6 +1,7 @@
 
 import { Livestock, MedicalRecord, Expense, Sale, FeedInventory, Infrastructure, DietPlan, InseminationRecord, WeightRecord, MilkRecord, Entity, LedgerRecord, ConsumptionLog, TreatmentProtocol, TreatmentLog, Location, Farm, ProcessedFeedLedger } from '../types';
 import { getTenantHeaders, getTenant } from './tenantContext';
+import { API_BASE_URL, apiRequest } from './apiClient';
 
 // const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8381/api';
 // const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5003/livestock';
@@ -794,9 +795,6 @@ export const backendService = {
     deleteConsumptionLogsBatch: async (ids: string[]): Promise<void> => {
         const res = await fetch(`${API_BASE_URL}/operations/consumption-logs/delete-batch`, { method: 'POST', headers: apiHeaders(true), body: JSON.stringify(ids) });
         await handleDeleteResponse(res);
-    },
-    migrateLegacyTags: async (): Promise<any> => {
-        return apiRequest<any>('/livestock/migrate-legacy-tags', { method: 'POST' });
     },
     getReportFinancial: async (params: { farmId?: string; interval?: string; startDate?: string; endDate?: string; accrual?: boolean }): Promise<any> => {
         const sp = new URLSearchParams();

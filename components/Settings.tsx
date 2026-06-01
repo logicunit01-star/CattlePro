@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
-import { User, Settings as SettingsIcon, Shield, Key, Bell, Save, Mail, Briefcase, Database, Users, ChevronRight, CheckCircle, AlertTriangle } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { User, Settings as SettingsIcon, Shield, Key, Bell, Save, Mail, Briefcase, Database, Users, ChevronRight, CheckCircle, AlertTriangle, Tag, RefreshCw } from 'lucide-react';
 
 import { Location, Farm } from '../types';
+import { backendService } from '../services/backendService';
 
 interface UserRole {
     id: string;
@@ -45,7 +46,66 @@ export const SettingsModule: React.FC<SettingsProps> = ({
     onAddFarm
 }) => {
     const [activeDrawer, setActiveDrawer] = useState<'NONE' | 'GENERAL' | 'USERS' | 'SECURITY' | 'API'>('NONE');
-    const [users, setUsers] = useState<UserRole[]>(initialUsers);
+    const [users, setUsers] = useState<UserRole[]>([]);
+    const [usersLoading, setUsersLoading] = useState(false);
+    const [usersError, setUsersError] = useState<string | null>(null);
+    const [migrationBusy, setMigrationBusy] = useState<false | 'preview' | 'apply'>(false);
+    const [migrationReport, setMigrationReport] = useState<Awaited<ReturnType<typeof backendService.migrateLegacyTags>> | null>(null);
+    const [migrationApplied, setMigrationApplied] = useState(false);
+
+    const loadUsers = async () => {
+        setUsersLoading(true);
+        setUsersError(null);
+        try {
+            const rows = await backendService.getUsers();
+            setUsers(Array.isArray(rows) ? rows.map(normalizeUser) : []);
+        } catch (e: any) {
+            setUsers([]);
+            setUsersError(e?.message || 'Unable to load team users.');
+        } finally {
+            setUsersLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        loadUsers();
+    }, []);
+
+    const inviteUser = async () => {
+        const email = prompt('Enter team member email');
+        if (!email) return;
+        const name = prompt('Enter team member name') || email;
+        try {
+            const created = await backendService.createUser({ email, name, role: 'VIEWER', status: 'ACTIVE' });
+            setUsers(prev => [...prev, normalizeUser(created)]);
+        } catch (e: any) {
+            alert(e?.message || 'Failed to invite user.');
+        }
+    };
+
+    const handlePreviewMigration = async () => {
+        setMigrationBusy('preview');
+        try {
+            setMigrationReport(await backendService.migrateLegacyTags(true));
+            setMigrationApplied(false);
+        } catch (e: any) {
+            alert(e?.message || 'Failed to preview tag migration.');
+        } finally {
+            setMigrationBusy(false);
+        }
+    };
+
+    const handleApplyMigration = async () => {
+        setMigrationBusy('apply');
+        try {
+            setMigrationReport(await backendService.migrateLegacyTags(false));
+            setMigrationApplied(true);
+        } catch (e: any) {
+            alert(e?.message || 'Failed to apply tag migration.');
+        } finally {
+            setMigrationBusy(false);
+        }
+    };
 
     const DrawerTemplate = ({ title, icon: Icon, children }: any) => (
         <div className={`fixed inset-y-0 right-0 w-full md:w-[600px] bg-white shadow-2xl z-50 transform transition-transform duration-300 ease-in-out ${activeDrawer !== 'NONE' ? 'translate-x-0' : 'translate-x-full'}`}>

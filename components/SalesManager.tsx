@@ -19,7 +19,8 @@ interface Props {
     onRecordSalePayment?: (saleId: string, payment: { amount: number; date: string; paymentMethod?: string; notes?: string }) => void | Promise<void>;
 }
 
-export const SalesManager: React.FC<Props> = ({ state, currentFarmId, currentLocationId, currentTab, onTabChange, onAddSale, onUpdateLivestock, onDeleteSale }) => {
+export const SalesManager: React.FC<Props> = ({ state, currentFarmId, currentLocationId, currentTab, onTabChange, onAddSale, onDeleteSale, onRecordSalePayment }) => {
+    const toast = useToast();
     const [internalTab, setInternalTab] = useState<SalesTab>('DASHBOARD');
     const isControlled = currentTab !== undefined && onTabChange !== undefined;
     const activeTab = isControlled ? currentTab! : internalTab;
@@ -66,7 +67,7 @@ export const SalesManager: React.FC<Props> = ({ state, currentFarmId, currentLoc
     const balance = finalTotal - amountReceived;
     const paymentStatus = balance <= 0 ? 'PAID' : (amountReceived > 0 ? 'PARTIAL' : 'PENDING');
 
-    const handleSaleSubmit = () => {
+    const handleSaleSubmit = async () => {
         if (!currentFarmId && !currentLocationId) { alert("Please select a farm or city above to record a sale. Sales and animals are shown for the selected farm only."); return; }
         if (selectedAnimalIds.length === 0) { alert("Select at least one animal"); return; }
         if (finalTotal <= 0) { alert("Invalid Sale Amount"); return; }

@@ -29,7 +29,9 @@ interface Props {
 type FinancialView = 'LIST' | 'ADD_EXPENSE' | 'ADD_SALE';
 type FinancialPayment = { id: string; refType: string; refId: string; amount: number; date: string; paymentMethod?: string; notes?: string; status?: string };
 
-export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [], entities, infrastructure = [], farms = [], locations = [], currentFarmId, currentLocationId, onAddExpense, onUpdateExpense, onAddSale, onDeleteExpense, onDeleteSale, refreshKey }) => {
+export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [], entities, infrastructure = [], farms = [], locations = [], currentFarmId, currentLocationId, onAddExpense, onUpdateExpense, onAddSale, onDeleteExpense, onDeleteSale, onRecordSalePayment, onAfterPaymentMutation, refreshKey }) => {
+    const toast = useToast();
+    const { confirm: confirmDialog } = useConfirm();
     const [activeTab, setActiveTab] = useState<'EXPENSES' | 'SALES' | 'LEDGER'>('EXPENSES');
     const [expenseTab, setExpenseTab] = useState<'LIST' | 'DASHBOARD' | 'VENDOR_BILLS'>('LIST');
     const [viewMode, setViewMode] = useState<FinancialView>('LIST');

@@ -250,6 +250,10 @@ const App: React.FC = () => {
   const [livestockPageResult, setLivestockPageResult] = useState<{ content: Livestock[]; totalElements: number; totalPages: number } | null>(null);
   const [livestockGridRefresh, setLivestockGridRefresh] = useState(0);
   const [financialsRefresh, setFinancialsRefresh] = useState(0);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [notificationsError, setNotificationsError] = useState<string | null>(null);
+  const bumpFinancials = () => setFinancialsRefresh(r => r + 1);
 
   // Tenant: on first load read URL and persist companyName & instanceId to localStorage + Redux
   useEffect(() => {
@@ -1075,7 +1079,7 @@ const App: React.FC = () => {
         entities,
         ledger
       }));
-      setPersistedSales(salesToSet);
+      if (IS_DEMO_MODE) setPersistedSales(salesToSet);
     } catch (e) {
       console.error("Sale save failed:", e);
       if (!IS_DEMO_MODE) alert("Sale was not saved. Please check the backend connection and try again.");
@@ -1106,22 +1110,18 @@ const App: React.FC = () => {
       });
       if (!ok) return;
       await backendService.deleteSale(id);
-
-      // Cascading rollback for animals
-      if (saleToDelete.soldAnimalIds) {
-        for (const animalId of saleToDelete.soldAnimalIds) {
-          const animalToRevert = state.livestock.find(l => l.id === animalId);
-          if (animalToRevert) {
-            await updateLivestock({ ...animalToRevert, status: 'ACTIVE' as any });
-          }
-        }
-      }
-
+      const [sales, livestock, entities, ledger] = await Promise.all([
+        backendService.getSales().catch(() => state.sales.filter(s => s.id !== id)),
+        backendService.getLivestock().catch(() => state.livestock),
+        backendService.getEntities(),
+        backendService.getLedger()
+      ]);
       setState(p => {
         const nextSales = Array.isArray(sales) ? sales : p.sales.filter(s => s.id !== id);
         if (IS_DEMO_MODE) setPersistedSales(nextSales);
         return { ...p, sales: nextSales, livestock: toLivestockArray(livestock), entities, ledger };
       });
+      bumpFinancials();
     } catch (e) {
       console.error(e);
       toast.error('Failed to delete sale completely. Check backend logs.');

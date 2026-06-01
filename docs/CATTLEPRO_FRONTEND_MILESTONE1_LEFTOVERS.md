@@ -424,3 +424,36 @@ Run this after backend updates land:
 - Create sale and verify livestock refreshes from backend status.
 - Confirm failed sale does not leave local-only production sale.
 - Re-audit leftover tasks in this file against backend Swagger and frontend code.
+
+## Version 2.0 Re-Audit Update
+
+Re-audited on 2026-06-01 after backend Swagger update.
+
+New documents:
+
+- `docs/CATTLEPRO_BACKEND_API_AUDIT_V2.md`
+- `docs/CATTLEPRO_FRONTEND_INTEGRATION_GAPS_V2.md`
+
+Backend dependencies now unblocked by Swagger:
+
+- Farm/location update, delete, and status changes.
+- Medical, weight, and milk record edit/delete.
+- Sale update and sale reverse.
+- Feed purchase list/detail/update/reverse.
+- Inventory movement history and movement audit.
+- Palai assignment unassign/transfer, invoice list/detail/void, and package history.
+- Notification unread count and read-all.
+- Audit log list.
+
+Backend dependencies still missing or unclear:
+
+- `GET /api/users/me`
+- `GET /api/roles`
+- Explicit `POST /api/finance/expenses/{id}/reverse`
+- Clear production contract for delete versus reverse behavior on financial and inventory-affecting records.
+
+Frontend work now remaining:
+
+- Implement the v2 service wrappers and DTOs listed in `docs/CATTLEPRO_FRONTEND_INTEGRATION_GAPS_V2.md`.
+- Replace remaining browser prompts/confirmations with shared modals and toasts.
+- Build the newly unblocked correction workflows for animal history, sale reverse, procurement reverse, Palai invoice void, and inventory movement history.
