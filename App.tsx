@@ -1,17 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { Dashboard } from './components/Dashboard';
-import { LivestockManager } from './components/LivestockManager';
-import { PalaiManager } from './components/PalaiManager';
-import { SalesManager } from './components/SalesManager';
-import { Financials } from './components/Financials';
-import { Operations } from './components/Operations';
-import { Procurement } from './components/Procurement';
-import { Reports } from './components/Reports';
-import { GeminiAdvisor } from './components/GeminiAdvisor';
 import { Login } from './components/Login';
-import { EntityManager } from './components/EntityManager';
-import { SettingsModule } from './components/Settings';
 import { MOCK_LIVESTOCK, MOCK_EXPENSES, MOCK_FEED, MOCK_SALES, FIXED_CATEGORIES, MOCK_INFRASTRUCTURE, MOCK_DIET_PLANS, MOCK_BREEDERS, MOCK_CUSTOMERS, MOCK_INVOICES } from './constants';
 import { AppState, Livestock, LivestockStatus, MedicalRecord, Expense, ExpenseCategory, FeedInventory, Infrastructure, InseminationRecord, Sale, WeightRecord, DietPlan, MilkRecord, Breeder, Entity, LedgerRecord, Farm, TreatmentLog, Location, ProcessedFeedLedger } from './types';
 import { Truck, Home, LogOut, FileText, BadgeDollarSign, Activity, Stethoscope, Grab, BrainCircuit, Droplets, LineChart, Settings, Menu, X, ArrowLeft, ArrowRight, Bell, Search, PlusCircle, Filter, ChevronDown, User, DollarSign, LayoutDashboard, Beef, ClipboardList, Tractor, Users, MapPin, Building2 } from 'lucide-react';
@@ -23,6 +12,18 @@ import { subscribeApiErrors } from './services/apiTracker';
 import { useToast } from './components/Toast';
 import { useConfirm } from './components/ConfirmDialog';
 import { setTenant as setTenantContext, getTenantFromUrl, getPersistedSales, setPersistedSales, getPersistedLivestockStatus, setPersistedLivestockStatus } from './services/tenantContext';
+
+const Dashboard = React.lazy(() => import('./components/Dashboard').then(module => ({ default: module.Dashboard })));
+const LivestockManager = React.lazy(() => import('./components/LivestockManager').then(module => ({ default: module.LivestockManager })));
+const PalaiManager = React.lazy(() => import('./components/PalaiManager').then(module => ({ default: module.PalaiManager })));
+const SalesManager = React.lazy(() => import('./components/SalesManager').then(module => ({ default: module.SalesManager })));
+const Financials = React.lazy(() => import('./components/Financials').then(module => ({ default: module.Financials })));
+const Operations = React.lazy(() => import('./components/Operations').then(module => ({ default: module.Operations })));
+const Procurement = React.lazy(() => import('./components/Procurement').then(module => ({ default: module.Procurement })));
+const Reports = React.lazy(() => import('./components/Reports').then(module => ({ default: module.Reports })));
+const GeminiAdvisor = React.lazy(() => import('./components/GeminiAdvisor').then(module => ({ default: module.GeminiAdvisor })));
+const EntityManager = React.lazy(() => import('./components/EntityManager').then(module => ({ default: module.EntityManager })));
+const SettingsModule = React.lazy(() => import('./components/Settings').then(module => ({ default: module.SettingsModule })));
 
 function toLivestockArray(r: Livestock[] | { content?: Livestock[] }): Livestock[] {
   return Array.isArray(r) ? r : (r?.content ?? []);
@@ -1446,7 +1447,10 @@ const App: React.FC = () => {
         <header className="bg-white border-b border-gray-200 p-4 flex items-center justify-between sticky top-0 z-30 shadow-sm">
           <div className="flex items-center gap-2 lg:hidden">
             <div className="bg-emerald-600 text-white p-1.5 rounded-md"><Tractor size={20} /></div>
-            <span className="font-bold text-gray-800">CattleOps</span>
+            <div className="min-w-0">
+              <span className="block font-bold text-gray-800 leading-tight">CattleOps</span>
+              <span className="block text-[10px] font-semibold text-slate-500 truncate max-w-[210px]">{state.farms.find(farm => farm.id === state.currentFarmId)?.name || 'All farms'}</span>
+            </div>
           </div>
 
           {/* Add City Modal */}
@@ -1557,7 +1561,7 @@ const App: React.FC = () => {
               <span className="hidden md:inline">Logout</span>
             </button>
           </div>
-          <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="text-gray-600 lg:hidden">{isSidebarOpen ? <X size={24} /> : <Menu size={24} />}</button>
+          <button type="button" aria-label={isSidebarOpen ? 'Close navigation menu' : 'Open navigation menu'} aria-expanded={isSidebarOpen} onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="text-gray-600 lg:hidden p-2 -mr-2 rounded-lg hover:bg-slate-100">{isSidebarOpen ? <X size={24} /> : <Menu size={24} />}</button>
         </header>
 
         <main ref={mainScrollRef} className="page-scroll flex-1 overflow-y-auto px-4 md:px-8 pt-4 md:pt-6 pb-12 md:pb-16">
@@ -1575,6 +1579,13 @@ const App: React.FC = () => {
                 </button>
               </div>
             )}
+            <React.Suspense fallback={(
+              <div className="flex min-h-[50vh] items-center justify-center" role="status" aria-live="polite">
+                <div className="rounded-2xl border border-slate-200 bg-white px-6 py-4 text-sm font-semibold text-slate-600 shadow-sm">
+                  Loading module…
+                </div>
+              </div>
+            )}>
             {activeView === 'DASHBOARD' && (
               <Dashboard
                 isGlobalView={!state.currentFarmId && !state.currentLocationId}
@@ -1809,9 +1820,14 @@ const App: React.FC = () => {
             )}
             {activeView === 'REPORTS' && <Reports currentFarmId={state.currentFarmId} state={{
               ...state,
-              livestock: state.currentFarmId ? state.livestock.filter(l => l.farmId === state.currentFarmId) : (state.currentLocationId ? state.livestock.filter(l => state.farms.find(f => f.id === l.farmId)?.locationId === state.currentLocationId) : []),
-              expenses: state.currentFarmId ? state.expenses.filter(e => e.farmId === state.currentFarmId) : (state.currentLocationId ? state.expenses.filter(e => state.farms.find(f => f.id === e.farmId)?.locationId === state.currentLocationId) : []),
+              livestock: state.currentFarmId ? state.livestock.filter(l => l.farmId === state.currentFarmId) : (state.currentLocationId ? state.livestock.filter(l => state.farms.find(f => f.id === l.farmId)?.locationId === state.currentLocationId) : state.livestock),
+              expenses: state.currentFarmId ? state.expenses.filter(e => e.farmId === state.currentFarmId) : (state.currentLocationId ? state.expenses.filter(e => state.farms.find(f => f.id === e.farmId)?.locationId === state.currentLocationId) : state.expenses),
               sales: state.currentFarmId ? state.sales.filter(s => s.farmId === state.currentFarmId) : (state.currentLocationId ? state.sales.filter(s => s.farmId && state.farms.find(f => f.id === s.farmId)?.locationId === state.currentLocationId) : state.sales),
+              feed: state.currentFarmId ? state.feed.filter(f => f.farmId === state.currentFarmId) : (state.currentLocationId ? state.feed.filter(f => state.farms.find(farm => farm.id === f.farmId)?.locationId === state.currentLocationId) : state.feed),
+              dietPlans: state.currentFarmId ? state.dietPlans.filter(d => d.farmId === state.currentFarmId) : (state.currentLocationId ? state.dietPlans.filter(d => state.farms.find(farm => farm.id === d.farmId)?.locationId === state.currentLocationId) : state.dietPlans),
+              consumptionLogs: state.currentFarmId ? state.consumptionLogs.filter(log => log.farmId === state.currentFarmId) : (state.currentLocationId ? state.consumptionLogs.filter(log => state.farms.find(farm => farm.id === log.farmId)?.locationId === state.currentLocationId) : state.consumptionLogs),
+              processedFeedLedgers: state.currentFarmId ? state.processedFeedLedgers.filter(ledger => ledger.farmId === state.currentFarmId) : (state.currentLocationId ? state.processedFeedLedgers.filter(ledger => state.farms.find(farm => farm.id === ledger.farmId)?.locationId === state.currentLocationId) : state.processedFeedLedgers),
+              treatmentLogs: state.currentFarmId ? state.treatmentLogs.filter(log => log.farmId === state.currentFarmId) : (state.currentLocationId ? state.treatmentLogs.filter(log => state.farms.find(farm => farm.id === log.farmId)?.locationId === state.currentLocationId) : state.treatmentLogs),
             }} />}
             {activeView === 'ENTITIES' && (
               <EntityManager
@@ -1839,6 +1855,7 @@ const App: React.FC = () => {
                 onAddFarm={() => setShowAddFarmModal(true)}
               />
             )}
+            </React.Suspense>
           </div>
           {/* Bottom fade hint — only visible while there's still scrollable content below. */}
           <div className="page-scroll-fade" aria-hidden="true" />

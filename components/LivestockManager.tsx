@@ -2736,9 +2736,9 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
 
             <div className="flex justify-between px-2 mb-4 items-center">
                 <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
-                    <button onClick={() => { setViewLayout('TIMELINE'); if (isBatchMode) { setIsBatchMode(false); setSelectedBatchIds([]); } }} title="Chronological Feed" className={`p-2 rounded-lg transition-all ${viewLayout === 'TIMELINE' ? 'bg-white shadow-sm text-emerald-600' : 'text-slate-400 hover:text-slate-600'}`}><Clock size={18} /></button>
-                    <button onClick={() => setViewLayout('GRID')} title="Grid View" className={`p-2 rounded-lg transition-all ${viewLayout === 'GRID' ? 'bg-white shadow-sm text-emerald-600' : 'text-slate-400 hover:text-slate-600'}`}><LayoutGrid size={18} /></button>
-                    <button onClick={() => setViewLayout('TABLE')} title="Table View" className={`p-2 rounded-lg transition-all ${viewLayout === 'TABLE' ? 'bg-white shadow-sm text-emerald-600' : 'text-slate-400 hover:text-slate-600'}`}><List size={18} /></button>
+                    <button aria-label="Chronological feed" onClick={() => { setViewLayout('TIMELINE'); if (isBatchMode) { setIsBatchMode(false); setSelectedBatchIds([]); } }} title="Chronological Feed" className={`p-2 rounded-lg transition-all ${viewLayout === 'TIMELINE' ? 'bg-white shadow-sm text-emerald-600' : 'text-slate-400 hover:text-slate-600'}`}><Clock size={18} /></button>
+                    <button aria-label="Grid view" onClick={() => setViewLayout('GRID')} title="Grid View" className={`p-2 rounded-lg transition-all ${viewLayout === 'GRID' ? 'bg-white shadow-sm text-emerald-600' : 'text-slate-400 hover:text-slate-600'}`}><LayoutGrid size={18} /></button>
+                    <button aria-label="Table view" onClick={() => setViewLayout('TABLE')} title="Table View" className={`p-2 rounded-lg transition-all ${viewLayout === 'TABLE' ? 'bg-white shadow-sm text-emerald-600' : 'text-slate-400 hover:text-slate-600'}`}><List size={18} /></button>
                 </div>
                 <button
                     onClick={() => {
@@ -2899,7 +2899,7 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                                             <td className="p-4">
                                                 <div className="flex items-center gap-3">
                                                     <div className="w-10 h-10 rounded-xl overflow-hidden bg-slate-100 border border-slate-200 shrink-0">
-                                                        {animal.imageUrl ? <img src={animal.imageUrl} className="w-full h-full object-cover" /> : getPlaceholderVisual(animal.category)}
+                                                        {animal.imageUrl ? <img src={animal.imageUrl} alt={`${animal.tagId} profile`} className="w-full h-full object-cover" /> : getPlaceholderVisual(animal.category)}
                                                     </div>
                                                     <span className="font-extrabold text-slate-800 text-sm">{animal.tagId}</span>
                                                 </div>
@@ -2912,7 +2912,7 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                                                 <span className={`px-2 py-1 rounded-md text-[9px] font-black uppercase tracking-widest ${getStatusColor(animal.status)}`}>{animal.status}</span>
                                             </td>
                                             <td className="p-4">
-                                                <p className="font-bold text-slate-700 text-xs">{animal.weight} KG</p>
+                                                <p className="font-bold text-slate-700 text-xs">{animal.weight > 0 ? `${animal.weight} KG` : 'Not recorded'}</p>
                                                 <p className="text-[10px] text-slate-500 font-bold uppercase mt-0.5 tracking-wider">{getAgeDisplay(animal.dob)}</p>
                                             </td>
                                             <td className="p-4">
@@ -2926,7 +2926,7 @@ export const LivestockManager: React.FC<Props> = ({ livestock, breeders, species
                                                 </div>
                                             </td>
                                             <td className="p-4 text-right">
-                                                <button onClick={async (e) => { e.stopPropagation(); const ok = await confirmDialog({ title: 'Delete animal', message: `Remove ${animal.tagId}? This cannot be undone.`, confirmLabel: 'Delete', danger: true }); if (!ok) return; await onDeleteLivestock(animal.id); toast.success(`${animal.tagId} deleted.`); }} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"><Trash2 size={16} /></button>
+                                                <button aria-label={`Delete ${animal.tagId}`} title={`Delete ${animal.tagId}`} onClick={async (e) => { e.stopPropagation(); const ok = await confirmDialog({ title: 'Delete animal', message: `Remove ${animal.tagId}? This cannot be undone.`, confirmLabel: 'Delete', danger: true }); if (!ok) return; await onDeleteLivestock(animal.id); toast.success(`${animal.tagId} deleted.`); }} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"><Trash2 size={16} /></button>
                                             </td>
                                         </tr>
                                     );

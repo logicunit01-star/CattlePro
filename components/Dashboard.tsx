@@ -4,6 +4,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import { DollarSign, TrendingUp, AlertTriangle, Activity, Milk, Calendar, ArrowRight, CheckCircle, Syringe, Stethoscope, HelpCircle, MapPin, Users, Settings } from 'lucide-react';
 import { backendService } from '../services/backendService';
 import { ActivityFeed } from './ActivityFeed';
+import { formatCurrency, periodLabel } from '../utils/format';
 
 type DashboardView = 'CATTLE_MANAGER' | 'GOAT_MANAGER' | 'FINANCE' | 'OPERATIONS' | 'SALES' | 'PROCUREMENT' | 'REPORTS' | 'ENTITIES' | 'SETTINGS';
 
@@ -64,10 +65,11 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
   const filteredSales = state.sales.filter(s => isDateInRange(s.date));
 
   // --- KPIs (server when available) ---
-  const totalLivestock = kpisData?.totalLivestock ?? filteredLivestock.length;
+  const totalRecords = kpisData?.totalLivestock ?? filteredLivestock.length;
   const activeAnimals = filteredLivestock.filter(l => l.status === 'ACTIVE');
-  const cattleCount = speciesFilter === 'CATTLE' ? totalLivestock : (speciesFilter === 'GOAT' ? 0 : filteredLivestock.filter(l => l.species === 'CATTLE').length);
-  const goatCount = speciesFilter === 'GOAT' ? totalLivestock : (speciesFilter === 'CATTLE' ? 0 : filteredLivestock.filter(l => l.species === 'GOAT').length);
+  const activeLivestockCount = kpisData?.activeAnimals ?? activeAnimals.length;
+  const cattleCount = speciesFilter === 'GOAT' ? 0 : activeAnimals.filter(l => l.species === 'CATTLE').length;
+  const goatCount = speciesFilter === 'CATTLE' ? 0 : activeAnimals.filter(l => l.species === 'GOAT').length;
   const farmCount = isGlobalView ? new Set(filteredLivestock.map(l => l.farmId).filter(Boolean)).size : 1;
 
   const totalExpenses = summaryData?.totalExpenses ?? filteredExpenses.reduce((acc, curr) => acc + curr.amount, 0);
@@ -101,10 +103,10 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
   }, 0);
 
   // --- UPCOMING TASKS (Vaccinations/Checks due) ---
-  const upcomingTasks = filteredLivestock.flatMap(animal => {
+  const allDueTasks = filteredLivestock.flatMap(animal => {
     // Check medical records for nextDueDate
     const medicalTasks = (animal.medicalHistory || [])
-      .filter(r => r.nextDueDate && r.nextDueDate >= todayStr)
+      .filter(r => Boolean(r.nextDueDate))
       .map(r => ({
         id: r.id,
         animalId: animal.id,
@@ -117,7 +119,7 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
       }));
 
     const breedingTasks = (animal.breedingHistory || [])
-      .filter(r => r.expectedBirthDate && r.status === 'CONFIRMED' && r.expectedBirthDate >= todayStr)
+      .filter(r => r.expectedBirthDate && r.status === 'CONFIRMED')
       .map(r => ({
         id: r.id,
         animalId: animal.id,
@@ -130,7 +132,14 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
       }));
 
     return [...medicalTasks, ...breedingTasks];
-  }).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()).slice(0, 10);
+  }).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+  const alertCutoff = new Date();
+  alertCutoff.setDate(alertCutoff.getDate() + 30);
+  const alertCutoffStr = alertCutoff.toISOString().split('T')[0];
+  const pendingTasks = allDueTasks.filter(task => task.date <= alertCutoffStr);
+  const overdueTasks = pendingTasks.filter(task => task.date < todayStr);
+  const upcomingTasks = pendingTasks.slice(0, 10);
 
   // --- FINANCIAL TREND (Mini) ---
   const expenseByCategory = filteredExpenses.reduce((acc, curr) => {
@@ -152,13 +161,18 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
     .filter(e => e.category === 'FEED' && new Date(e.date).getMonth() === currentMonth && new Date(e.date).getFullYear() === currentYear)
     .reduce((sum, e) => sum + e.amount, 0);
 
-  const avgCostPerAnimal = totalLivestock > 0 ? (totalOperatingExpenses / totalLivestock) : 0;
+  const avgCostPerAnimal = activeLivestockCount > 0 ? (totalOperatingExpenses / activeLivestockCount) : 0;
 
   const deceasedCount = kpisData?.deceasedCount ?? filteredLivestock.filter(l => l.status === 'DECEASED' && isDateInRange(l.deathDate)).length;
   const sickCountForScore = kpisData?.sickCount ?? filteredLivestock.filter(l => l.status === 'SICK').length;
-  const mortalityRate = totalLivestock > 0 ? (deceasedCount / totalLivestock) * 100 : 0;
-  const sickRatio = totalLivestock > 0 ? sickCountForScore / totalLivestock : 0;
-  const farmHealthScore = Math.max(0, 100 - (mortalityRate * 2) - (sickRatio * 100 * 1.5));
+  const mortalityRate = totalRecords > 0 ? (deceasedCount / totalRecords) * 100 : 0;
+  const sickRatio = activeLivestockCount > 0 ? sickCountForScore / activeLivestockCount : 0;
+  const dataCompleteAnimals = activeAnimals.filter(animal => animal.weight > 0 && Boolean(animal.dob) && Boolean(animal.breed)).length;
+  const dataCompleteness = activeAnimals.length > 0 ? (dataCompleteAnimals / activeAnimals.length) * 100 : 100;
+  const farmHealthScore = Math.max(0, 100 - (mortalityRate * 2) - (sickRatio * 100 * 1.5) - Math.min(20, overdueTasks.length * 2));
+  const isGoatOperation = speciesFilter === 'GOAT' || (cattleCount === 0 && goatCount > 0);
+  const pregnantDoes = activeAnimals.filter(animal => animal.species === 'GOAT' && animal.gender === 'FEMALE' && animal.breedingHistory?.some(record => record.status === 'CONFIRMED')).length;
+  const selectedPeriodLabel = periodLabel(dateFilter);
 
   if (state.farms.length === 0) {
     return (
@@ -223,13 +237,30 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
         </div>
       </div>
 
+      <div className="md:hidden sticky top-[64px] z-20 -mx-2 px-2 py-2 bg-slate-50/95 backdrop-blur border-y border-slate-200 flex gap-2" aria-label="Dashboard filters">
+        <label className="sr-only" htmlFor="dashboard-species-filter">Species</label>
+        <select id="dashboard-species-filter" aria-label="Dashboard species" value={speciesFilter} onChange={e => setSpeciesFilter(e.target.value as any)} className="min-w-0 flex-1 bg-white border text-xs font-bold text-emerald-700 border-slate-200 rounded-lg px-3 py-2">
+          <option value="ALL">All Species</option>
+          <option value="CATTLE">Cattle Only</option>
+          <option value="GOAT">Goats Only</option>
+        </select>
+        <label className="sr-only" htmlFor="dashboard-period-filter">Period</label>
+        <select id="dashboard-period-filter" aria-label="Dashboard period" value={dateFilter} onChange={e => setDateFilter(e.target.value as any)} className="min-w-0 flex-1 bg-white border text-xs font-bold text-slate-600 border-slate-200 rounded-lg px-3 py-2">
+          <option value="7_DAYS">Last 7 Days</option>
+          <option value="30_DAYS">Last 30 Days</option>
+          <option value="90_DAYS">Last 90 Days</option>
+          <option value="ALL">All Time</option>
+        </select>
+      </div>
+
       {/* HEADER STATS */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <div role="button" tabIndex={0} onClick={() => onNavigate?.(speciesFilter === 'GOAT' ? 'GOAT_MANAGER' : 'CATTLE_MANAGER')} onKeyDown={e => e.key === 'Enter' && onNavigate?.(speciesFilter === 'GOAT' ? 'GOAT_MANAGER' : 'CATTLE_MANAGER')} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex items-center justify-between premium-card group cursor-pointer relative overflow-hidden hover:shadow-md transition-shadow">
           <div className="bg-gradient-to-br from-blue-500/10 to-blue-600/10 absolute -right-6 -top-6 w-32 h-32 rounded-full blur-2xl group-hover:scale-150 transition-all duration-500"></div>
           <div className="relative z-10">
-            <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Total Animals{isGlobalView && farmCount > 0 ? ` (${farmCount} farm${farmCount !== 1 ? 's' : ''})` : ''}</p>
-            <h3 className="text-4xl font-black text-slate-800 mt-2 font-display">{totalLivestock}</h3>
+            <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Active Herd{isGlobalView && farmCount > 0 ? ` (${farmCount} farm${farmCount !== 1 ? 's' : ''})` : ''}</p>
+            <h3 className="text-4xl font-black text-slate-800 mt-2 font-display">{activeLivestockCount}</h3>
+            <p className="text-[10px] text-slate-400 mt-1">{totalRecords} total records</p>
             <div className="flex gap-2 mt-3 text-[10px] font-extrabold uppercase tracking-wide">
               <button type="button" onClick={e => { e.stopPropagation(); onNavigate?.('CATTLE_MANAGER'); }} onKeyDown={e => { if (e.key === 'Enter') { e.stopPropagation(); onNavigate?.('CATTLE_MANAGER'); } }} className="text-blue-700 bg-blue-50 px-2 py-1 rounded-md border border-blue-100 shadow-sm hover:bg-blue-100 hover:border-blue-200 transition-colors cursor-pointer">{cattleCount} Cattle</button>
               <button type="button" onClick={e => { e.stopPropagation(); onNavigate?.('GOAT_MANAGER'); }} onKeyDown={e => { if (e.key === 'Enter') { e.stopPropagation(); onNavigate?.('GOAT_MANAGER'); } }} className="text-purple-700 bg-purple-50 px-2 py-1 rounded-md border border-purple-100 shadow-sm hover:bg-purple-100 hover:border-purple-200 transition-colors cursor-pointer">{goatCount} Goats</button>
@@ -240,26 +271,26 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
           </div>
         </div>
 
-        <div role="button" tabIndex={0} onClick={() => onNavigate?.(speciesFilter === 'GOAT' ? 'GOAT_MANAGER' : 'CATTLE_MANAGER', { filterCategory: 'Dairy' })} onKeyDown={e => e.key === 'Enter' && onNavigate?.(speciesFilter === 'GOAT' ? 'GOAT_MANAGER' : 'CATTLE_MANAGER', { filterCategory: 'Dairy' })} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex items-center justify-between premium-card group cursor-pointer relative overflow-hidden hover:shadow-md transition-shadow">
+        <div role="button" tabIndex={0} onClick={() => onNavigate?.(isGoatOperation ? 'GOAT_MANAGER' : (speciesFilter === 'GOAT' ? 'GOAT_MANAGER' : 'CATTLE_MANAGER'), { filterCategory: isGoatOperation ? 'Breeding' : 'Dairy' })} onKeyDown={e => e.key === 'Enter' && onNavigate?.(isGoatOperation ? 'GOAT_MANAGER' : (speciesFilter === 'GOAT' ? 'GOAT_MANAGER' : 'CATTLE_MANAGER'), { filterCategory: isGoatOperation ? 'Breeding' : 'Dairy' })} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex items-center justify-between premium-card group cursor-pointer relative overflow-hidden hover:shadow-md transition-shadow">
           <div className="bg-gradient-to-br from-sky-500/10 to-cyan-600/10 absolute -right-6 -top-6 w-32 h-32 rounded-full blur-2xl group-hover:scale-150 transition-all duration-500"></div>
           <div className="relative z-10">
-            <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Milk Today</p>
-            <h3 className="text-4xl font-black text-sky-600 mt-2 font-display">{totalMilkToday.toFixed(1)} <span className="text-lg text-sky-400 font-bold">L</span></h3>
-            <p className="text-xs text-slate-400 mt-3 font-medium flex items-center gap-1"><TrendingUp size={12} className="text-emerald-500" /> Avg Yield Stable</p>
+            <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">{isGoatOperation ? 'Pregnant Does' : 'Milk Today'}</p>
+            <h3 className="text-4xl font-black text-sky-600 mt-2 font-display">{isGoatOperation ? pregnantDoes : totalMilkToday.toFixed(1)} {!isGoatOperation && <span className="text-lg text-sky-400 font-bold">L</span>}</h3>
+            <p className="text-xs text-slate-400 mt-3 font-medium flex items-center gap-1">{isGoatOperation ? 'Confirmed breeding records' : 'Recorded today'}</p>
           </div>
           <div className="bg-sky-50 p-4 rounded-xl text-sky-500 group-hover:bg-sky-500 group-hover:text-white transition-all duration-300 shadow-inner">
             <Milk size={24} />
           </div>
         </div>
 
-        <div role="button" tabIndex={0} onClick={() => onNavigate?.('FINANCE')} onKeyDown={e => e.key === 'Enter' && onNavigate?.('FINANCE')} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex items-center justify-between premium-card group cursor-pointer relative overflow-hidden hover:shadow-md transition-shadow" title={`Total Revenue (PKR ${totalRevenue.toLocaleString()}) − Total Expenses (PKR ${totalExpenses.toLocaleString()}) = Net Profit for selected period.`}>
+        <div role="button" tabIndex={0} onClick={() => onNavigate?.('FINANCE')} onKeyDown={e => e.key === 'Enter' && onNavigate?.('FINANCE')} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex items-center justify-between premium-card group cursor-pointer relative overflow-hidden hover:shadow-md transition-shadow" title={`Farm revenue (${formatCurrency(totalRevenue)}) − farm expenses (${formatCurrency(totalExpenses)}) for the selected period. The species filter does not change farm-wide finance totals.`}>
           <div className="bg-gradient-to-br from-emerald-500/10 to-green-600/10 absolute -right-6 -top-6 w-32 h-32 rounded-full blur-2xl group-hover:scale-150 transition-all duration-500"></div>
           <div className="relative z-10">
-            <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Net Profit</p>
+            <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Farm Net Profit</p>
             <h3 className={`text-3xl font-black mt-2 font-display ${netProfit >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
-              {netProfit >= 0 ? '+' : ''}PKR {Math.abs(netProfit).toLocaleString()}
+              {netProfit >= 0 ? '+' : '-'}{formatCurrency(Math.abs(netProfit))}
             </h3>
-            <p className="text-xs text-slate-400 mt-3 font-medium">Total Revenue − Total Expenses (selected period)</p>
+            <p className="text-xs text-slate-400 mt-3 font-medium">All species · revenue − expenses · {selectedPeriodLabel}</p>
           </div>
           <div className={`p-4 rounded-xl shadow-inner transition-all duration-300 ${netProfit >= 0 ? 'bg-emerald-50 text-emerald-600 group-hover:bg-emerald-600 group-hover:text-white' : 'bg-red-50 text-red-600 group-hover:bg-red-600 group-hover:text-white'}`}>
             <TrendingUp size={24} />
@@ -270,8 +301,8 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
           <div className="bg-gradient-to-br from-amber-500/10 to-orange-600/10 absolute -right-6 -top-6 w-32 h-32 rounded-full blur-2xl group-hover:scale-150 transition-all duration-500"></div>
           <div className="relative z-10">
             <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Pending Alerts</p>
-            <h3 className="text-4xl font-black text-amber-500 mt-2 font-display">{upcomingTasks.length}</h3>
-            <p className="text-xs text-slate-400 mt-3 font-medium">Tasks / Vaccine Checks</p>
+            <h3 className="text-4xl font-black text-amber-500 mt-2 font-display">{pendingTasks.length}</h3>
+            <p className="text-xs text-slate-400 mt-3 font-medium">{overdueTasks.length} overdue · next 30 days</p>
           </div>
           <div className="bg-amber-50 p-4 rounded-xl text-amber-500 group-hover:bg-amber-500 group-hover:text-white transition-all duration-300 shadow-inner">
             <AlertTriangle size={24} />
@@ -284,7 +315,7 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex items-center justify-between premium-card relative overflow-hidden" title="Average operating cost per animal for the selected period. Total operating expenses (feed, health, breeding, labor, etc., excluding infrastructure) divided by total livestock head count.">
           <div className="relative z-10">
             <p className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5" title="Average operating cost per animal for the selected period. Total operating expenses (feed, health, breeding, labor, etc., excluding infrastructure) divided by total livestock head count.">
-              Avg Spend Per Head (Period)
+              Avg Spend Per Active Head · {selectedPeriodLabel}
               <HelpCircle size={12} className="text-slate-400 shrink-0" aria-hidden />
             </p>
             <h3 className="text-2xl font-black text-slate-800 mt-2 font-display">PKR {avgCostPerAnimal.toLocaleString(undefined, { maximumFractionDigits: 0 })}</h3>
@@ -297,6 +328,7 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
           <div className="relative z-10">
             <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Current Month Feed</p>
             <h3 className="text-2xl font-black text-slate-800 mt-2 font-display">PKR {currentMonthFeedExpense.toLocaleString(undefined, { maximumFractionDigits: 0 })}</h3>
+            <p className="text-[10px] text-slate-400 mt-1">{activeLivestockCount > 0 ? formatCurrency(currentMonthFeedExpense / activeLivestockCount) : 'PKR 0'} / active head</p>
           </div>
           <div className="bg-orange-50 p-4 rounded-xl text-orange-500 shadow-inner">
             <Activity size={24} />
@@ -335,7 +367,7 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 h-full premium-card">
             <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2 font-display">
               <Calendar size={20} className="text-amber-500" />
-              Upcoming Tasks
+              Due & Upcoming Tasks
             </h3>
 
             <div className="space-y-4">
@@ -352,7 +384,7 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
                     <AlertTriangle size={18} />
                   </div>
                   <div>
-                    <p className="text-xs font-extrabold text-amber-600 uppercase mb-0.5 tracking-wide">{task.date} • {task.tag}</p>
+                    <p className={`text-xs font-extrabold uppercase mb-0.5 tracking-wide ${task.date < todayStr ? 'text-red-600' : 'text-amber-600'}`}>{task.date < todayStr ? 'OVERDUE' : task.date} • {task.tag}</p>
                     <p className="text-sm font-bold text-slate-800 group-hover:text-amber-900 transition-colors">{task.description}</p>
                     <p className="text-[10px] text-slate-400 mt-1 font-bold bg-slate-100 inline-block px-2 py-0.5 rounded-md">{task.task} Due</p>
                   </div>
@@ -374,7 +406,8 @@ export const Dashboard: React.FC<Props> = ({ state, isGlobalView, onNavigate }) 
           <div role="button" tabIndex={0} onClick={() => onNavigate?.(speciesFilter === 'GOAT' ? 'GOAT_MANAGER' : 'CATTLE_MANAGER')} onKeyDown={e => e.key === 'Enter' && onNavigate?.(speciesFilter === 'GOAT' ? 'GOAT_MANAGER' : 'CATTLE_MANAGER')} className="bg-gradient-to-br from-emerald-600 to-teal-700 p-6 rounded-2xl shadow-lg text-white cursor-pointer hover:shadow-xl transition-shadow relative overflow-hidden">
             <h3 className="font-bold text-lg mb-2">Farm Health Score</h3>
             <div className="text-5xl font-black mb-2">{Math.round(farmHealthScore)}<span className="text-2xl opacity-60">%</span></div>
-            <p className="text-emerald-100 text-sm mb-6">Based on mortality, illness prevalence, and vitality.</p>
+            <p className="text-emerald-100 text-sm mb-2">Mortality, illness and overdue-care adjusted.</p>
+            <p className="text-emerald-100/80 text-xs mb-6">Core data completeness: {Math.round(dataCompleteness)}%</p>
             <div className="h-2 bg-black/20 rounded-full overflow-hidden">
               <div className="h-full bg-emerald-300 transition-all duration-1000" style={{ width: `${Math.round(farmHealthScore)}%` }}></div>
             </div>
