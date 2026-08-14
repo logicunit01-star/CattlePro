@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { backendService } from '../services/backendService';
-import { AppState, Expense, ExpenseCategory, FeedInventory } from '../types';
+import { AppState, Expense, FeedInventory } from '../types';
 import { Truck, ShoppingCart, User, AlertTriangle, CheckCircle, Clock, Search, Layers, Archive, Activity, RefreshCw, MinusCircle, Edit2, X, Save, Plus, Package, TrendingUp, BarChart, DollarSign, ArrowRight, Filter, Download, RotateCcw } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart as RechartsBarChart, Bar, PieChart, Pie, Cell } from 'recharts';
 import { useToast } from './Toast';
@@ -19,7 +19,42 @@ interface Props {
 const FEED_TYPES = ['GRASS', 'TMR', 'WANDA', 'OTHER'];
 const UNIT_OPTIONS = ['KG', 'TON', 'BUNDLE', 'BAG'];
 
-export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpense, onAddFeed, onUpdateInventory, onDeleteFeed, onRefreshProcurement }) => {
+const normalizeText = (value: unknown) => String(value ?? '').trim().toLowerCase();
+
+const isSystemFeedUsage = (expense: Expense) => {
+    const description = normalizeText(expense.description);
+    const supplier = normalizeText(expense.supplier);
+    const referenceType = normalizeText((expense as any).referenceType);
+    return supplier === 'internal inventory'
+        || referenceType.includes('diet')
+        || referenceType.includes('consumption')
+        || description.includes('daily feed allocation')
+        || description.includes('diet consumption')
+        || description.includes('feed consumption');
+};
+
+const isFeedPurchase = (expense: Expense) => expense.category === 'FEED'
+    && !isSystemFeedUsage(expense)
+    && Boolean(
+        expense.feedItemId
+        || normalizeText((expense as any).referenceType).includes('purchase')
+        || normalizeText(expense.description).startsWith('purchase:')
+    );
+
+const purchaseWeightKg = (expense: Expense, item?: FeedInventory) => {
+    if (Number(expense.weight) > 0) return Number(expense.weight);
+    const quantity = Number(expense.quantity);
+    if (!(quantity > 0)) return 0;
+    if (Number(item?.weightPerUnit) > 0) return quantity * Number(item?.weightPerUnit);
+    return normalizeText(item?.unit) === 'kg' ? quantity : 0;
+};
+
+const createMutationId = () => {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+    return `feed-purchase-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+};
+
+export const Procurement: React.FC<Props> = ({ state, onAddFeed, onUpdateInventory, onDeleteFeed, onRefreshProcurement }) => {
     const toast = useToast();
     const { confirm: confirmDialog, prompt: promptDialog } = useConfirm();
     const [activeTab, setActiveTab] = useState<'DASHBOARD' | 'PROCUREMENT' | 'INVENTORY' | 'SUPPLIERS' | 'ANALYTICS'>('DASHBOARD');
@@ -57,6 +92,7 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
     /** In-flight guards only — same labels/buttons; prevents duplicate API posts. */
     const [deployingMaterial, setDeployingMaterial] = useState(false);
     const [recordingPurchase, setRecordingPurchase] = useState(false);
+    const [purchaseMutationId, setPurchaseMutationId] = useState(createMutationId);
     const [repairingData, setRepairingData] = useState(false);
     const [movementItem, setMovementItem] = useState<FeedInventory | null>(null);
     const [inventoryMovements, setInventoryMovements] = useState<any[]>([]);
@@ -77,35 +113,34 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
     const [inventoryValuation, setInventoryValuation] = useState<any[] | undefined>(undefined);
     const [procurementRefreshKey, setProcurementRefreshKey] = useState(0);
     const [searchTerm, setSearchTerm] = useState('');
-    const [vendorPayablesReport, setVendorPayablesReport] = useState<Awaited<ReturnType<typeof backendService.getReportsVendorPayables>> | undefined>(undefined);
+    const [purchaseReportPeriod, setPurchaseReportPeriod] = useState<'MONTH' | 'QUARTER' | 'YEAR' | 'ALL'>('MONTH');
+    const [purchaseReportMonth, setPurchaseReportMonth] = useState(new Date().toISOString().slice(0, 7));
     const apiLowStockCount = lowStockItems?.length ?? lowStockCount;
-    const apiStockValue = inventoryValuation?.reduce((sum, row) => {
+    const feedNames = useMemo(() => new Set(feedItems.map(item => normalizeText(item.name))), [feedItems]);
+    const feedValuationRows = inventoryValuation?.filter(row => feedNames.has(normalizeText(row.itemName ?? row.name ?? row.feedItemName))) ?? [];
+    const apiStockValue = inventoryValuation ? feedValuationRows.reduce((sum, row) => {
         const value = row.stockValue ?? row.totalValue ?? row.value ?? row.quantity * row.unitCost ?? 0;
         return sum + (Number.isFinite(Number(value)) ? Number(value) : 0);
-    }, 0) ?? totalStockValue;
+    }, 0) : totalStockValue;
 
     useEffect(() => {
         if (!state.currentFarmId) {
-            setVendorPayablesReport(undefined);
             setLowStockItems(undefined);
             setInventoryValuation(undefined);
             return;
         }
         let cancelled = false;
         Promise.all([
-            backendService.getReportsVendorPayables({ farmId: state.currentFarmId }),
             backendService.getLowStockFeed(state.currentFarmId),
             backendService.getInventoryValuation(state.currentFarmId)
         ])
-            .then(([payables, lowStock, valuation]) => {
+            .then(([lowStock, valuation]) => {
                 if (cancelled) return;
-                setVendorPayablesReport(payables);
                 setLowStockItems(Array.isArray(lowStock) ? lowStock : undefined);
                 setInventoryValuation(Array.isArray(valuation) ? valuation : undefined);
             })
             .catch(() => {
                 if (!cancelled) {
-                    setVendorPayablesReport(undefined);
                     setLowStockItems(undefined);
                     setInventoryValuation(undefined);
                 }
@@ -114,7 +149,7 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
     }, [state.currentFarmId, state.expenses.length, state.feed.length, procurementRefreshKey]);
 
     const vendorExpenses = useMemo(() => {
-        let expenses = state.expenses.filter(e => e.category === 'FEED');
+        let expenses = state.expenses.filter(isFeedPurchase);
         if (searchTerm) {
             expenses = expenses.filter(e => e.description.toLowerCase().includes(searchTerm.toLowerCase()));
         }
@@ -122,7 +157,7 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
     }, [state.expenses, searchTerm]);
     const purchaseIdForExpense = (expense: Expense) => String((expense as any).feedPurchaseId ?? (expense as any).purchaseId ?? (expense as any).procurementId ?? expense.id);
 
-    const dashboardVendorExpenses = state.expenses.filter(e => e.category === 'FEED');
+    const dashboardVendorExpenses = state.expenses.filter(isFeedPurchase);
     const pendingBills = dashboardVendorExpenses
         .filter(e => e.paymentStatus === 'PENDING' || e.paymentStatus === 'PARTIAL')
         .reduce((sum, e) => sum + Math.max(0, e.amount - (e.amountPaid || 0)), 0);
@@ -133,16 +168,22 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
         vendorExpenses.forEach(e => {
             const item = state.feed.find(f => f.id === e.feedItemId);
             if (!item) return;
-            const key = new Date(e.date).toLocaleDateString('en-GB', { month: 'short', year: '2-digit' }); // e.g. Oct 26
-            if (!grouped[key]) grouped[key] = { name: key };
-            const ratePerKg = e.weight > 0 ? (e.amount / e.weight) : e.rate;
-            if (!grouped[key][item.name]) grouped[key][item.name] = { sum: 0, count: 0 };
-            grouped[key][item.name].sum += ratePerKg;
-            grouped[key][item.name].count += 1;
+            const weightKg = purchaseWeightKg(e, item);
+            if (!(weightKg > 0)) return;
+            const month = e.date.substring(0, 7);
+            if (!grouped[month]) grouped[month] = { month };
+            if (!grouped[month][item.name]) grouped[month][item.name] = { cost: 0, kg: 0 };
+            grouped[month][item.name].cost += Number(e.amount) || 0;
+            grouped[month][item.name].kg += weightKg;
         });
-        return Object.values(grouped).map(g => {
-            const finalObj: any = { name: g.name };
-            Object.keys(g).forEach(k => { if (k !== 'name') finalObj[k] = Math.round(g[k].sum / g[k].count); });
+        return Object.values(grouped).sort((a: any, b: any) => a.month.localeCompare(b.month)).map((g: any) => {
+            const finalObj: any = {
+                month: g.month,
+                name: new Date(`${g.month}-01T00:00:00`).toLocaleDateString('en-GB', { month: 'short', year: '2-digit' })
+            };
+            Object.keys(g).forEach(k => {
+                if (k !== 'month' && g[k].kg > 0) finalObj[k] = Number((g[k].cost / g[k].kg).toFixed(2));
+            });
             return finalObj;
         });
     }, [vendorExpenses, state.feed]);
@@ -157,22 +198,23 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
             const vendorObj = vendorEntities.find(v => v.id === e.supplier);
             const vendorName = vendorObj ? vendorObj.name : (e.supplier === 'CASH' ? 'Cash' : 'Unknown');
             vendorsSet.add(vendorName);
-            const ratePerKg = e.weight > 0 ? (e.amount / e.weight) : e.rate;
+            const weightKg = purchaseWeightKg(e, item);
+            if (!(weightKg > 0)) return;
 
             if (!itemVendors[item.name]) itemVendors[item.name] = { name: item.name };
-            if (!itemVendors[item.name][`${vendorName}_sum`]) {
-                itemVendors[item.name][`${vendorName}_sum`] = 0;
-                itemVendors[item.name][`${vendorName}_count`] = 0;
+            if (!itemVendors[item.name][`${vendorName}_cost`]) {
+                itemVendors[item.name][`${vendorName}_cost`] = 0;
+                itemVendors[item.name][`${vendorName}_kg`] = 0;
             }
-            itemVendors[item.name][`${vendorName}_sum`] += ratePerKg;
-            itemVendors[item.name][`${vendorName}_count`] += 1;
+            itemVendors[item.name][`${vendorName}_cost`] += Number(e.amount) || 0;
+            itemVendors[item.name][`${vendorName}_kg`] += weightKg;
         });
 
         const chartData = Object.values(itemVendors).map((iv: any) => {
             const finalObj: any = { name: iv.name };
             vendorsSet.forEach((v: string) => {
-                if (iv[`${v}_count`]) {
-                    finalObj[v] = Math.round(iv[`${v}_sum`] / iv[`${v}_count`]);
+                if (iv[`${v}_kg`]) {
+                    finalObj[v] = Number((iv[`${v}_cost`] / iv[`${v}_kg`]).toFixed(2));
                 }
             });
             return finalObj;
@@ -197,10 +239,77 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
             const item = state.feed.find(f => f.id === e.feedItemId);
             if (!item) return;
             const ex = m.get(item.name) || { qty: 0, cost: 0, bg: item.feedType === 'GRASS' ? 'bg-emerald-500' : item.feedType === 'TMR' ? 'bg-blue-500' : 'bg-amber-500' };
-            m.set(item.name, { ...ex, qty: ex.qty + (e.weight || e.quantity || 0), cost: ex.cost + e.amount });
+            m.set(item.name, { ...ex, qty: ex.qty + purchaseWeightKg(e, item), cost: ex.cost + e.amount });
         });
         return Array.from(m.entries()).map(([name, data]) => ({ name, ...data })).sort((a, b) => b.cost - a.cost).slice(0, 5);
     }, [vendorExpenses, state.feed]);
+
+    const purchaseReport = useMemo(() => {
+        const safeReferenceMonth = /^\d{4}-(0[1-9]|1[0-2])$/.test(purchaseReportMonth) ? purchaseReportMonth : new Date().toISOString().slice(0, 7);
+        const [referenceYear, referenceMonth] = safeReferenceMonth.split('-').map(Number);
+        const quarterStartMonth = Math.floor((referenceMonth - 1) / 3) * 3;
+        const toDateKey = (year: number, zeroBasedMonth: number) => `${year + Math.floor(zeroBasedMonth / 12)}-${String(((zeroBasedMonth % 12) + 12) % 12 + 1).padStart(2, '0')}-01`;
+
+        let start = '';
+        let end = '9999-12-31';
+        let previousStart = '';
+        let previousEnd = '';
+        let label = 'All recorded history';
+
+        if (purchaseReportPeriod === 'MONTH') {
+            start = toDateKey(referenceYear, referenceMonth - 1);
+            end = toDateKey(referenceYear, referenceMonth);
+            previousStart = toDateKey(referenceYear, referenceMonth - 2);
+            previousEnd = start;
+            label = new Date(`${safeReferenceMonth}-01T00:00:00`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+        } else if (purchaseReportPeriod === 'QUARTER') {
+            start = toDateKey(referenceYear, quarterStartMonth);
+            end = toDateKey(referenceYear, quarterStartMonth + 3);
+            previousStart = toDateKey(referenceYear, quarterStartMonth - 3);
+            previousEnd = start;
+            label = `Q${Math.floor(quarterStartMonth / 3) + 1} ${referenceYear}`;
+        } else if (purchaseReportPeriod === 'YEAR') {
+            start = `${referenceYear}-01-01`;
+            end = `${referenceYear + 1}-01-01`;
+            previousStart = `${referenceYear - 1}-01-01`;
+            previousEnd = start;
+            label = String(referenceYear);
+        }
+
+        const inRange = (expense: Expense, rangeStart: string, rangeEnd: string) => expense.date >= rangeStart && expense.date < rangeEnd;
+        const currentExpenses = purchaseReportPeriod === 'ALL' ? vendorExpenses : vendorExpenses.filter(expense => inRange(expense, start, end));
+        const previousExpenses = previousStart ? vendorExpenses.filter(expense => inRange(expense, previousStart, previousEnd)) : [];
+        const previousCostByItem = new Map<string, number>();
+        previousExpenses.forEach(expense => previousCostByItem.set(expense.feedItemId || '', (previousCostByItem.get(expense.feedItemId || '') || 0) + Number(expense.amount || 0)));
+
+        const grouped = new Map<string, { itemId: string; name: string; quantityKg: number; cost: number; purchases: number }>();
+        currentExpenses.forEach(expense => {
+            const item = state.feed.find(feed => feed.id === expense.feedItemId);
+            if (!item) return;
+            const existing = grouped.get(item.id) || { itemId: item.id, name: item.name, quantityKg: 0, cost: 0, purchases: 0 };
+            existing.quantityKg += purchaseWeightKg(expense, item);
+            existing.cost += Number(expense.amount || 0);
+            existing.purchases += 1;
+            grouped.set(item.id, existing);
+        });
+
+        const rows = Array.from(grouped.values()).map(row => {
+            const previousCost = previousCostByItem.get(row.itemId) || 0;
+            return {
+                ...row,
+                averageRate: row.quantityKg > 0 ? row.cost / row.quantityKg : null,
+                changePct: purchaseReportPeriod !== 'ALL' && previousCost > 0 ? ((row.cost - previousCost) / previousCost) * 100 : null
+            };
+        }).sort((a, b) => b.cost - a.cost);
+
+        return {
+            label,
+            rows,
+            totalCost: rows.reduce((sum, row) => sum + row.cost, 0),
+            totalKg: rows.reduce((sum, row) => sum + row.quantityKg, 0),
+            transactionCount: currentExpenses.length
+        };
+    }, [purchaseReportMonth, purchaseReportPeriod, vendorExpenses, state.feed]);
 
     const vendorSpendDist = useMemo(() => {
         const m = new Map<string, number>();
@@ -217,10 +326,11 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
         let current = 0, days30 = 0, days60 = 0, days90 = 0;
         pending.forEach(e => {
             const diff = (now - new Date(e.date).getTime()) / (1000 * 3600 * 24);
-            if (diff <= 30) current += e.amount;
-            else if (diff <= 60) days30 += e.amount;
-            else if (diff <= 90) days60 += e.amount;
-            else days90 += e.amount;
+            const outstanding = Math.max(0, Number(e.amount) - Number(e.amountPaid || 0));
+            if (diff <= 30) current += outstanding;
+            else if (diff <= 60) days30 += outstanding;
+            else if (diff <= 90) days60 += outstanding;
+            else days90 += outstanding;
         });
         return [
             { name: '0-30 Days', amount: current, fill: '#10b981' },
@@ -229,6 +339,22 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
             { name: '> 90 Days', amount: days90, fill: '#ef4444' }
         ].filter(x => x.amount > 0);
     }, [vendorExpenses]);
+
+    const feedVendorPayables = useMemo(() => {
+        const grouped = new Map<string, { vendorId: string; vendorName: string; totalBilled: number; totalPaid: number; outstanding: number }>();
+        dashboardVendorExpenses.forEach(expense => {
+            const vendorId = expense.supplier || CASH_LABEL;
+            const vendorName = vendorId === CASH_LABEL
+                ? 'Cash / Walk-in'
+                : (vendorEntities.find(v => v.id === vendorId)?.name || 'Unknown vendor');
+            const row = grouped.get(vendorId) || { vendorId, vendorName, totalBilled: 0, totalPaid: 0, outstanding: 0 };
+            row.totalBilled += Number(expense.amount) || 0;
+            row.totalPaid += Math.min(Number(expense.amount) || 0, Number(expense.amountPaid || (expense.paymentStatus === 'PAID' ? expense.amount : 0)));
+            row.outstanding = Math.max(0, row.totalBilled - row.totalPaid);
+            grouped.set(vendorId, row);
+        });
+        return Array.from(grouped.values()).filter(row => row.outstanding > 0.005).sort((a, b) => b.outstanding - a.outstanding);
+    }, [dashboardVendorExpenses, vendorEntities]);
 
     // Available items for procurement depending on category
     const availableProcurementItems = feedItems.filter(f => f.feedType === procurementForm.feedCategory || (!f.feedType && procurementForm.feedCategory === 'OTHER'));
@@ -243,17 +369,15 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
         const selectedItem = state.feed.find(f => f.id === procurementForm.feedTypeId);
         if (!selectedItem) { toast.error('Invalid feed item selected.'); return; }
 
-        // Define unit behavior: BAG/BUNDLE (or WANDA/TMR) = quantity in native unit (bags); else weight in kg.
-        const isQtyBased = ['BAG', 'BUNDLE'].includes((selectedItem.unit || '').toUpperCase()) || ['WANDA', 'TMR'].includes(selectedItem.feedType || '');
+        // Unit behavior follows the inventory master's native unit, never a feed-type assumption.
+        const isQtyBased = ['BAG', 'BUNDLE'].includes((selectedItem.unit || '').toUpperCase());
         const addedValue = isQtyBased ? procurementForm.quantity : procurementForm.weight;
-        const assumedWeightPerUnit = selectedItem.weightPerUnit || 40;
+        const totalWeight = Number(procurementForm.weight) > 0
+            ? Number(procurementForm.weight)
+            : (isQtyBased && Number(selectedItem.weightPerUnit) > 0 ? Number(procurementForm.quantity) * Number(selectedItem.weightPerUnit) : 0);
 
-        // If they left weight blank but filled quantity (for legacy data), auto compute it
-        if (isQtyBased && procurementForm.quantity && !procurementForm.weight) {
-            procurementForm.weight = procurementForm.quantity * assumedWeightPerUnit;
-        }
-
-        if (isQtyBased && (!procurementForm.quantity || !procurementForm.weight)) { toast.warning('Quantity (Bags/Bundles) and Total Weight are required.'); return; }
+        if (isQtyBased && !procurementForm.quantity) { toast.warning('Quantity (bags/bundles) is required.'); return; }
+        if (isQtyBased && !totalWeight) { toast.warning('Enter total weight or configure weight per unit for this item.'); return; }
         if (!isQtyBased && !procurementForm.weight) { toast.warning('Total Weight is required.'); return; }
 
         // CORRECTED COST FORMULA:
@@ -262,41 +386,33 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
             ? procurementForm.quantity * procurementForm.rate
             : procurementForm.weight * procurementForm.rate;
 
-        const desc = isQtyBased ? `Purchase: ${selectedItem.name} (Qty: ${procurementForm.quantity} ${selectedItem.unit}s, Wt: ${procurementForm.weight} kg)` : `Purchase: ${selectedItem.name} (${procurementForm.weight} kg)`;
+        const desc = isQtyBased ? `Purchase: ${selectedItem.name} (Qty: ${procurementForm.quantity} ${selectedItem.unit}s, Wt: ${totalWeight} kg)` : `Purchase: ${selectedItem.name} (${totalWeight} kg)`;
 
-        const expense: Expense = {
-            id: Math.random().toString(36).substr(2, 9),
-            farmId: state.currentFarmId,
-            category: ExpenseCategory.FEED,
-            amount: totalCost,
-            date: procurementForm.date,
-            description: desc,
-            supplier: procurementForm.vendorId, // We strictly store vendor ID here, allowing tight linkage
-            paymentStatus: procurementForm.paymentStatus as 'PAID' | 'PENDING' | 'PARTIAL',
-            location: procurementForm.location,
-            feedCategory: procurementForm.feedCategory,
-            feedItemId: selectedItem.id,
-            weight: procurementForm.weight,
-            quantity: isQtyBased ? procurementForm.quantity : undefined,
-            rate: procurementForm.rate
-        };
-
+        setRecordingPurchase(true);
         try {
-            await onAddExpense(expense);
-
-            // Auto-update inventory (Keep unitCost native to the Unit e.g. Per Bag)
-            onUpdateInventory({
-                ...selectedItem,
-                quantity: selectedItem.quantity + (isQtyBased ? procurementForm.quantity : addedValue),
+            await backendService.feedPurchase({
+                farmId: state.currentFarmId,
+                feedItemId: selectedItem.id,
+                vendorId: procurementForm.vendorId,
+                quantity: addedValue,
                 unitCost: procurementForm.rate,
-                defaultSupplier: procurementForm.vendorId !== CASH_LABEL ? procurementForm.vendorId : selectedItem.defaultSupplier
+                amount: totalCost,
+                amountPaid: procurementForm.paymentStatus === 'PAID' ? totalCost : 0,
+                date: procurementForm.date,
+                description: desc,
+                clientMutationId: purchaseMutationId
             });
+            await onRefreshProcurement?.();
+            setProcurementRefreshKey(key => key + 1);
+            setPurchaseMutationId(createMutationId());
 
             const vName = procurementForm.vendorId === CASH_LABEL ? 'Cash' : vendorEntities.find(v => v.id === procurementForm.vendorId)?.name;
             toast.success(`Procurement recorded from ${vName}.`);
             setProcurementForm({ ...procurementForm, weight: 0, quantity: 0 });
-        } catch (e) {
-            toast.error('Failed to save expense.');
+        } catch (e: any) {
+            toast.error(e?.message || 'Failed to record the feed purchase. You can retry safely.');
+        } finally {
+            setRecordingPurchase(false);
         }
     };
 
@@ -309,15 +425,12 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
         const selectedItem = state.feed.find(f => f.id === procurementForm.feedTypeId);
         if (!selectedItem) return;
 
-        const isQtyBased = ['BAG', 'BUNDLE'].includes((selectedItem.unit || '').toUpperCase()) || ['WANDA', 'TMR'].includes(selectedItem.feedType || '');
-        const newAddedValue = procurementForm.weight;
-        const assumedWeightPerUnit = selectedItem.weightPerUnit || 40;
+        const isQtyBased = ['BAG', 'BUNDLE'].includes((selectedItem.unit || '').toUpperCase());
+        const totalWeight = Number(procurementForm.weight) > 0
+            ? Number(procurementForm.weight)
+            : (isQtyBased && Number(selectedItem.weightPerUnit) > 0 ? Number(procurementForm.quantity) * Number(selectedItem.weightPerUnit) : 0);
 
-        if (isQtyBased && procurementForm.quantity && !procurementForm.weight) {
-            procurementForm.weight = procurementForm.quantity * assumedWeightPerUnit;
-        }
-
-        if (isQtyBased && (!procurementForm.quantity || !procurementForm.weight)) { toast.warning('Quantity and Weight are missing.'); return; }
+        if (isQtyBased && (!procurementForm.quantity || !totalWeight)) { toast.warning('Quantity and total weight are required.'); return; }
         if (!isQtyBased && !procurementForm.weight) { toast.warning('Weight is required.'); return; }
 
         // CORRECTED COST FORMULA:
@@ -325,7 +438,7 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
             ? procurementForm.quantity * procurementForm.rate
             : procurementForm.weight * procurementForm.rate;
 
-        const desc = isQtyBased ? `Purchase: ${selectedItem.name} (Qty: ${procurementForm.quantity} ${selectedItem.unit}s, Wt: ${procurementForm.weight} kg)` : `Purchase: ${selectedItem.name} (${procurementForm.weight} kg)`;
+        const desc = isQtyBased ? `Purchase: ${selectedItem.name} (Qty: ${procurementForm.quantity} ${selectedItem.unit}s, Wt: ${totalWeight} kg)` : `Purchase: ${selectedItem.name} (${totalWeight} kg)`;
 
         const updated: Expense = {
             ...editingExpense,
@@ -336,7 +449,7 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
             paymentStatus: procurementForm.paymentStatus as 'PAID' | 'PENDING' | 'PARTIAL',
             feedCategory: procurementForm.feedCategory,
             feedItemId: selectedItem.id,
-            weight: procurementForm.weight,
+            weight: totalWeight,
             quantity: isQtyBased ? procurementForm.quantity : undefined,
             rate: procurementForm.rate
         };
@@ -348,8 +461,13 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                 vendorId: procurementForm.vendorId,
                 feedItemId: selectedItem.id,
                 quantity: isQtyBased ? procurementForm.quantity : procurementForm.weight,
-                weight: procurementForm.weight,
+                weight: totalWeight,
                 rate: procurementForm.rate,
+                unitCost: procurementForm.rate,
+                amount: totalCost,
+                amountPaid: procurementForm.paymentStatus === 'PAID' ? totalCost : Number(editingExpense.amountPaid || 0),
+                date: procurementForm.date,
+                description: desc,
                 paymentStatus: procurementForm.paymentStatus,
             });
             await onRefreshProcurement?.();
@@ -387,7 +505,12 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
         setMovementsError(null);
         try {
             const rows = await backendService.getInventoryMovementsByItem(item.id);
-            setInventoryMovements(Array.isArray(rows) ? rows : []);
+            const sortedRows = Array.isArray(rows) ? [...rows].sort((a, b) => {
+                const aTime = new Date(a.movementDate ?? a.date ?? a.createdAt ?? 0).getTime();
+                const bTime = new Date(b.movementDate ?? b.date ?? b.createdAt ?? 0).getTime();
+                return bTime - aTime || String(b.id ?? '').localeCompare(String(a.id ?? ''));
+            }) : [];
+            setInventoryMovements(sortedRows);
         } catch (e: any) {
             setInventoryMovements([]);
             setMovementsError(e?.message || 'Unable to load inventory movement history.');
@@ -508,7 +631,11 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
 
     const handleRecordUsage = async (item: FeedInventory) => {
         const isQtyBased = ['BAG', 'BUNDLE'].includes((item.unit || '').toUpperCase());
-        const wpu = item.weightPerUnit || 40;
+        const wpu = Number(item.weightPerUnit) || 0;
+        if (isQtyBased && wpu <= 0) {
+            toast.warning('Configure an exact weight per bag/bundle before recording consumption in kilograms.');
+            return;
+        }
         const stockDisplay = isQtyBased
             ? `${item.quantity.toLocaleString()} ${item.unit}s (≈ ${(item.quantity * wpu).toLocaleString()} KG total)`
             : `${item.quantity.toLocaleString()} KG`;
@@ -574,7 +701,7 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                 <div className="flex gap-2">
                     <div className="bg-gradient-to-br from-slate-800 to-slate-900 px-5 py-2.5 rounded-xl text-xs font-bold text-slate-300 shadow-md flex items-center gap-2">
                         <Activity size={16} className="text-emerald-400" />
-                        TOTAL STOCK VALUE: <span className="text-emerald-400 text-sm">PKR {apiStockValue.toLocaleString()}</span>
+                        TOTAL FEED STOCK VALUE: <span className="text-emerald-400 text-sm">PKR {apiStockValue.toLocaleString()}</span>
                     </div>
                 </div>
             </div>
@@ -603,7 +730,7 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 flex-wrap">
                         <div className="bg-gradient-to-br from-emerald-500 to-emerald-700 p-6 rounded-3xl border border-emerald-400 shadow-lg text-white relative overflow-hidden group">
                             <DollarSign className="absolute -right-6 -bottom-6 text-white/10 group-hover:scale-110 transition-transform duration-500" size={120} />
-                            <p className="text-xs font-bold text-emerald-100 uppercase tracking-wider relative z-10">Monthly Feed Spend</p>
+                            <p className="text-xs font-bold text-emerald-100 uppercase tracking-wider relative z-10">Monthly Feed Purchases</p>
                             <h3 className="text-3xl font-black mt-2 relative z-10">PKR {monthlySpend.toLocaleString()}</h3>
                             <div className="mt-4 flex items-center text-xs font-medium text-emerald-100 bg-black/10 w-fit px-2 py-1 rounded-lg">
                                 <TrendingUp size={12} className="mr-1" /> This month
@@ -644,10 +771,10 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                         </div>
                     </div>
 
-                    {vendorPayablesReport && vendorPayablesReport.length > 0 && (
+                    {feedVendorPayables.length > 0 && (
                         <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm overflow-x-auto">
-                            <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2"><DollarSign size={18} className="text-indigo-500" /> Vendor payables (all categories)</h3>
-                            <p className="text-xs text-slate-500 mb-3">Aggregated from bills/expenses by supplier (server report).</p>
+                            <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2"><DollarSign size={18} className="text-indigo-500" /> Feed purchase payables</h3>
+                            <p className="text-xs text-slate-500 mb-3">Purchase bills only. Internal diet consumption is excluded and no overdue status is inferred without payment terms.</p>
                             <table className="min-w-full text-xs">
                                 <thead>
                                     <tr className="text-left text-slate-500 border-b border-slate-100">
@@ -655,17 +782,15 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                         <th className="py-2 pr-4 text-right">Total billed</th>
                                         <th className="py-2 pr-4 text-right">Total paid</th>
                                         <th className="py-2 pr-4 text-right">Outstanding</th>
-                                        <th className="py-2 text-right">Overdue</th>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {vendorPayablesReport.slice(0, 12).map(row => (
-                                        <tr key={row.vendorKey} className="border-b border-slate-50 hover:bg-slate-50/80">
-                                            <td className="py-2.5 font-semibold text-slate-700">{row.vendor}</td>
+                                    {feedVendorPayables.slice(0, 12).map(row => (
+                                        <tr key={row.vendorId} className="border-b border-slate-50 hover:bg-slate-50/80">
+                                            <td className="py-2.5 font-semibold text-slate-700">{row.vendorName}</td>
                                             <td className="py-2.5 text-right text-slate-600">{row.totalBilled.toLocaleString()}</td>
                                             <td className="py-2.5 text-right text-emerald-600">{row.totalPaid.toLocaleString()}</td>
                                             <td className="py-2.5 text-right font-bold text-amber-600">{row.outstanding.toLocaleString()}</td>
-                                            <td className="py-2.5 text-right text-red-500 font-bold">{row.overdueAmount.toLocaleString()}</td>
                                         </tr>
                                     ))}
                                 </tbody>
@@ -675,14 +800,14 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
 
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                         <div className="lg:col-span-2 bg-white rounded-3xl border border-slate-200 p-6 shadow-sm">
-                            <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2"><TrendingUp size={18} className="text-emerald-500" /> Monthly Procurement Spend</h3>
+                            <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2"><TrendingUp size={18} className="text-emerald-500" /> Monthly Feed Purchase Spend</h3>
                             <div className="h-64">
                                 {monthlySpendTrend.length > 0 ? (
                                     <ResponsiveContainer width="100%" height="100%">
                                         <LineChart data={monthlySpendTrend} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
                                             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
                                             <XAxis dataKey="name" tick={{ fontSize: 12, fill: '#64748b', fontWeight: 600 }} axisLine={false} tickLine={false} />
-                                            <YAxis tick={{ fontSize: 12, fill: '#64748b', fontWeight: 600 }} axisLine={false} tickLine={false} tickFormatter={(value) => `v${value >= 1000 ? (value / 1000).toFixed(0) + 'k' : value}`} />
+                                            <YAxis tick={{ fontSize: 12, fill: '#64748b', fontWeight: 600 }} axisLine={false} tickLine={false} tickFormatter={(value) => `PKR ${value >= 1000 ? (value / 1000).toFixed(0) + 'k' : value}`} />
                                             <Tooltip formatter={(value: number) => `PKR ${value.toLocaleString()}`} contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)' }} />
                                             <Line type="monotone" dataKey="Total" stroke="#10b981" strokeWidth={4} dot={{ stroke: '#10b981', strokeWidth: 2, r: 6, fill: '#fff' }} activeDot={{ r: 8 }} />
                                         </LineChart>
@@ -698,7 +823,7 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                         <div className="lg:col-span-1 bg-gradient-to-b from-slate-50 to-white rounded-3xl border border-slate-200 p-6 shadow-sm">
                             <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2"><Package size={18} className="text-slate-500" /> Inventory Value Spread</h3>
                             <div className="space-y-4">
-                                {['GRASS', 'TMR', 'WANDA'].map(cat => {
+                                {FEED_TYPES.map(cat => {
                                     const value = feedItems.filter(f => f.feedType === cat).reduce((sum, item) => sum + (item.quantity * item.unitCost), 0);
                                     const percentage = apiStockValue ? (value / apiStockValue) * 100 : 0;
                                     return (
@@ -715,20 +840,137 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                     );
                                 })}
                             </div>
-                            <div className="mt-8 space-y-4">
-                                <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2 text-sm"><Layers size={16} className="text-blue-500" /> Top Purchased Items</h3>
-                                {topPurchasedItems.map(item => (
-                                    <div key={item.name}>
-                                        <div className="flex justify-between text-xs font-bold text-slate-600 mb-1">
-                                            <span>{item.name}</span>
-                                            <span>PKR {(item.cost / 1000).toFixed(1)}k</span>
-                                        </div>
-                                        <div className="w-full bg-slate-100 rounded-full h-1.5">
-                                            <div className={`${item.bg} h-1.5 rounded-full`} style={{ width: `${Math.min(100, (item.cost / (topPurchasedItems[0]?.cost || 1)) * 100)}%` }}></div>
-                                        </div>
-                                    </div>
-                                ))}
+                        </div>
+                    </div>
+
+                    <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+                        <div className="p-6 border-b border-slate-100 flex flex-col xl:flex-row xl:items-end justify-between gap-4">
+                            <div>
+                                <h3 className="font-black text-slate-800 flex items-center gap-2"><Layers size={18} className="text-blue-500" /> Top Purchased Feed Items</h3>
+                                <p className="text-xs text-slate-500 mt-1">Genuine vendor purchases ranked by spend for {purchaseReport.label}. Diet consumption is excluded.</p>
                             </div>
+                            <div className="flex flex-wrap items-end gap-2">
+                                <div>
+                                    <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400 mb-1">Reference month</label>
+                                    <input
+                                        aria-label="Top purchase report reference month"
+                                        type="month"
+                                        value={purchaseReportMonth}
+                                        disabled={purchaseReportPeriod === 'ALL'}
+                                        onChange={event => { if (event.target.value) setPurchaseReportMonth(event.target.value); }}
+                                        className="h-9 px-3 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold text-slate-700 disabled:opacity-40"
+                                    />
+                                </div>
+                                <div className="flex bg-slate-100 p-1 rounded-xl">
+                                    {([
+                                        ['MONTH', 'Month'],
+                                        ['QUARTER', 'Quarter'],
+                                        ['YEAR', 'Year'],
+                                        ['ALL', 'All time']
+                                    ] as const).map(([value, label]) => (
+                                        <button
+                                            key={value}
+                                            type="button"
+                                            onClick={() => setPurchaseReportPeriod(value)}
+                                            className={`px-3 py-1.5 rounded-lg text-xs font-black transition-colors ${purchaseReportPeriod === value ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                                        >
+                                            {label}
+                                        </button>
+                                    ))}
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        const latestMonth = vendorExpenses[0]?.date?.slice(0, 7);
+                                        if (latestMonth) setPurchaseReportMonth(latestMonth);
+                                        setPurchaseReportPeriod('MONTH');
+                                    }}
+                                    className="h-9 px-3 rounded-xl border border-slate-200 text-xs font-bold text-slate-600 hover:bg-slate-50"
+                                >
+                                    Latest data
+                                </button>
+                                <button
+                                    type="button"
+                                    disabled={purchaseReport.rows.length === 0}
+                                    onClick={() => {
+                                        const rows = purchaseReport.rows.map((row, index) => ({
+                                            Rank: index + 1,
+                                            Item: row.name,
+                                            Purchases: row.purchases,
+                                            QuantityKg: row.quantityKg.toFixed(2),
+                                            TotalCostPKR: row.cost.toFixed(2),
+                                            WeightedRatePKRKg: row.averageRate?.toFixed(2) || '',
+                                            SpendChangePct: row.changePct?.toFixed(2) || ''
+                                        }));
+                                        if (rows.length === 0) return;
+                                        const csv = [Object.keys(rows[0]).join(','), ...rows.map(row => Object.values(row).map(value => `"${value}"`).join(','))].join('\n');
+                                        const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+                                        const anchor = document.createElement('a');
+                                        anchor.href = url;
+                                        anchor.download = `top-feed-purchases-${purchaseReportMonth}-${purchaseReportPeriod.toLowerCase()}.csv`;
+                                        anchor.click();
+                                        URL.revokeObjectURL(url);
+                                    }}
+                                    className="h-9 px-3 rounded-xl bg-emerald-600 text-white text-xs font-black flex items-center gap-1.5 hover:bg-emerald-700 disabled:opacity-40"
+                                >
+                                    <Download size={13} /> Export
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-3 border-b border-slate-100 bg-slate-50/60">
+                            <div className="p-4 sm:border-r border-slate-100">
+                                <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">Purchase spend</p>
+                                <p className="text-xl font-black text-slate-800 mt-1">PKR {purchaseReport.totalCost.toLocaleString(undefined, { maximumFractionDigits: 2 })}</p>
+                            </div>
+                            <div className="p-4 sm:border-r border-slate-100">
+                                <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">Recorded weight</p>
+                                <p className="text-xl font-black text-slate-800 mt-1">{purchaseReport.totalKg.toLocaleString(undefined, { maximumFractionDigits: 2 })} kg</p>
+                            </div>
+                            <div className="p-4">
+                                <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">Purchase transactions</p>
+                                <p className="text-xl font-black text-slate-800 mt-1">{purchaseReport.transactionCount}</p>
+                            </div>
+                        </div>
+
+                        <div className="overflow-x-auto">
+                            <table className="w-full min-w-[760px] text-sm">
+                                <thead className="bg-white border-b border-slate-100">
+                                    <tr className="text-[10px] font-black uppercase tracking-wider text-slate-500">
+                                        <th className="px-5 py-3 text-left w-16">Rank</th>
+                                        <th className="px-5 py-3 text-left">Feed item</th>
+                                        <th className="px-5 py-3 text-right">Purchases</th>
+                                        <th className="px-5 py-3 text-right">Weight (kg)</th>
+                                        <th className="px-5 py-3 text-right">Total spend</th>
+                                        <th className="px-5 py-3 text-right">Weighted PKR/kg</th>
+                                        <th className="px-5 py-3 text-right">Spend vs prior period</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {purchaseReport.rows.slice(0, 10).map((row, index) => (
+                                        <tr key={row.itemId} className="hover:bg-slate-50/70">
+                                            <td className="px-5 py-3 font-black text-slate-400">#{index + 1}</td>
+                                            <td className="px-5 py-3 font-bold text-slate-800">{row.name}</td>
+                                            <td className="px-5 py-3 text-right text-slate-600">{row.purchases}</td>
+                                            <td className="px-5 py-3 text-right text-slate-600">{row.quantityKg > 0 ? row.quantityKg.toLocaleString(undefined, { maximumFractionDigits: 2 }) : 'Weight missing'}</td>
+                                            <td className="px-5 py-3 text-right font-black text-emerald-700">PKR {row.cost.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                                            <td className="px-5 py-3 text-right font-bold text-slate-700">{row.averageRate === null ? '—' : `PKR ${row.averageRate.toLocaleString(undefined, { maximumFractionDigits: 2 })}`}</td>
+                                            <td className={`px-5 py-3 text-right font-black ${row.changePct === null ? 'text-slate-400' : row.changePct > 0 ? 'text-red-500' : 'text-emerald-600'}`}>
+                                                {row.changePct === null ? '—' : `${row.changePct > 0 ? '+' : ''}${row.changePct.toFixed(1)}%`}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                    {purchaseReport.rows.length === 0 && (
+                                        <tr>
+                                            <td colSpan={7} className="px-5 py-10 text-center">
+                                                <Package size={28} className="mx-auto text-slate-200 mb-2" />
+                                                <p className="text-sm font-bold text-slate-500">No feed purchases recorded for {purchaseReport.label}.</p>
+                                                <p className="text-xs text-slate-400 mt-1">Choose another period or use “Latest data”.</p>
+                                            </td>
+                                        </tr>
+                                    )}
+                                </tbody>
+                            </table>
                         </div>
                     </div>
                 </div>
@@ -739,7 +981,8 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                         {/* Price Trend Chart */}
                         <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                            <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2"><TrendingUp size={18} className="text-emerald-500" /> Item Price Trend (PKR)</h3>
+                            <h3 className="font-bold text-slate-800 mb-1 flex items-center gap-2"><TrendingUp size={18} className="text-emerald-500" /> Weighted Purchase Rate (PKR/kg)</h3>
+                            <p className="text-xs text-slate-500 mb-5">Monthly total purchase cost divided by recorded kilograms. Gaps remain visible.</p>
                             <div className="h-72">
                                 {priceTrendData.length > 0 ? (
                                     <ResponsiveContainer width="100%" height="100%">
@@ -749,8 +992,8 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                             <YAxis tick={{ fontSize: 12 }} />
                                             <Tooltip contentStyle={{ borderRadius: '12px' }} />
                                             <Legend wrapperStyle={{ fontSize: '12px' }} />
-                                            {feedItems.map((item, idx) => (
-                                                <Line key={item.id} type="monotone" dataKey={item.name} stroke={['#10b981', '#3b82f6', '#f59e0b', '#8b5cf6', '#ef4444'][idx % 5]} strokeWidth={3} dot={{ r: 4 }} connectNulls activeDot={{ r: 6 }} />
+                                            {topPurchasedItems.map((item, idx) => (
+                                                <Line key={item.name} type="monotone" dataKey={item.name} stroke={['#10b981', '#3b82f6', '#f59e0b', '#8b5cf6', '#ef4444'][idx % 5]} strokeWidth={3} dot={{ r: 4 }} activeDot={{ r: 6 }} />
                                             ))}
                                         </LineChart>
                                     </ResponsiveContainer>
@@ -762,13 +1005,14 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
 
                         {/* Payables Aging */}
                         <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                            <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2"><Clock size={18} className="text-red-500" /> Payables Aging Summary</h3>
+                            <h3 className="font-bold text-slate-800 mb-1 flex items-center gap-2"><Clock size={18} className="text-red-500" /> Outstanding Balance by Invoice Age</h3>
+                            <p className="text-xs text-slate-500 mb-5">Age is measured from the purchase date; it is not an overdue determination.</p>
                             <div className="h-72">
                                 {payablesAging.length > 0 ? (
                                     <ResponsiveContainer width="100%" height="100%">
                                         <RechartsBarChart data={payablesAging} layout="vertical" margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
                                             <CartesianGrid strokeDasharray="3 3" horizontal={false} />
-                                            <XAxis type="number" tickFormatter={(v) => `\${v >= 1000 ? v/1000+'k' : v}`} />
+                                            <XAxis type="number" tickFormatter={(v) => `PKR ${v >= 1000 ? v/1000+'k' : v}`} />
                                             <YAxis dataKey="name" type="category" tick={{ fontSize: 12, fontWeight: 600 }} width={80} />
                                             <Tooltip formatter={(value: number) => `PKR ${value.toLocaleString()}`} cursor={{ fill: 'transparent' }} contentStyle={{ borderRadius: '12px' }} />
                                             <Bar dataKey="amount" radius={[0, 4, 4, 0]} barSize={32}>
@@ -808,7 +1052,8 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
 
                         {/* Vendor Comparison Chart */}
                         <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                            <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2"><BarChart size={18} className="text-purple-500" /> Vendor Item Rate Comparison</h3>
+                            <h3 className="font-bold text-slate-800 mb-1 flex items-center gap-2"><BarChart size={18} className="text-purple-500" /> Weighted Vendor Rate (PKR/kg)</h3>
+                            <p className="text-xs text-slate-500 mb-5">Comparable only where a purchase has a reliable kilogram weight.</p>
                             <div className="h-72">
                                 {itemVendorComparisonData.data.length > 0 ? (
                                     <ResponsiveContainer width="100%" height="100%">
@@ -833,7 +1078,7 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                     {/* Quick Analytics Summary */}
                     <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm">
                         <div className="p-4 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
-                            <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2"><Archive size={16} /> Procurement History Detail</h3>
+                            <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2"><Archive size={16} /> Feed Purchase History Detail</h3>
                             <button onClick={() => {
                                 const rows = vendorExpenses.map(e => ({ Date: e.date, Item: state.feed.find(x => x.id === e.feedItemId)?.name || '-', Vendor: vendorEntities.find(x => x.id === e.supplier)?.name || 'Cash', Rate: e.rate, Amount: e.amount, QtyWt: e.weight > 0 ? e.weight + ' kg' : e.quantity, Status: e.paymentStatus }));
                                 const csvStr = [Object.keys(rows[0] || {}).join(','), ...rows.map(r => Object.values(r).map(x => `"${x}"`).join(','))].join('\n');
@@ -887,7 +1132,7 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                 <h3 className="text-xl font-black text-emerald-800 flex items-center gap-2">
                                     {editingExpense ? <><Edit2 size={24} className="text-amber-500" /> Editing Procurement Record</> : <><Truck size={24} className="text-emerald-500" /> New Supply Entry</>}
                                 </h3>
-                                <p className="text-sm text-slate-500 font-medium mt-1">Select materials, vendor and record weight to update inventory automatically.</p>
+                                <p className="text-sm text-slate-500 font-medium mt-1">One submission records the purchase, inventory receipt, payable and ledger reference together.</p>
                             </div>
                             {editingExpense && (
                                 <button onClick={() => setEditingExpense(null)} className="px-4 py-2 bg-slate-100 hover:bg-slate-200 rounded-xl text-slate-600 font-bold transition-colors flex items-center gap-2"><X size={16} /> Cancel Edit</button>
@@ -898,7 +1143,7 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                             {/* Col 1: Material Selection */}
                             <div className="space-y-4">
                                 <div className="p-1 bg-slate-100 rounded-xl flex items-center justify-between">
-                                    {['GRASS', 'TMR', 'WANDA'].map(type => (
+                                    {FEED_TYPES.map(type => (
                                         <button
                                             key={type}
                                             type="button"
@@ -946,8 +1191,8 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                             <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 space-y-4">
                                 {(() => {
                                     const selectedItem = state.feed.find(f => f.id === procurementForm.feedTypeId);
-                                    const isQtyBased = selectedItem && (['BAG', 'BUNDLE'].includes((selectedItem.unit || '').toUpperCase()) || ['WANDA', 'TMR'].includes(selectedItem.feedType || ''));
-                                    const assumedWeightPerUnit = selectedItem?.weightPerUnit || 40;
+                                    const isQtyBased = selectedItem && ['BAG', 'BUNDLE'].includes((selectedItem.unit || '').toUpperCase());
+                                    const configuredWeightPerUnit = Number(selectedItem?.weightPerUnit) || 0;
 
                                     if (isQtyBased) {
                                         return (
@@ -956,8 +1201,9 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                                     <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1">Qty ({selectedItem?.unit === 'kg' ? 'BAGs' : (selectedItem?.unit || 'BAGs')}) <span className="text-red-500">*</span></label>
                                                     <input type="number" min={0} value={procurementForm.quantity || ''} onChange={e => {
                                                         const q = parseFloat(e.target.value) || 0;
-                                                        setProcurementForm(p => ({ ...p, quantity: q, weight: q * assumedWeightPerUnit }));
+                                                        setProcurementForm(p => ({ ...p, quantity: q, weight: configuredWeightPerUnit > 0 ? q * configuredWeightPerUnit : p.weight }));
                                                     }} className="w-full border border-slate-200 focus:border-emerald-500 text-sm font-bold text-slate-700 rounded-xl px-3 py-2 outline-none" placeholder="0" />
+                                                    {configuredWeightPerUnit <= 0 && <p className="text-[9px] text-amber-600 mt-1">No weight/unit configured; enter total weight.</p>}
                                                 </div>
                                                 <div>
                                                     <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1">Total Wt. <span className="text-red-500">*</span></label>
@@ -1026,8 +1272,8 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                     <div className="bg-white rounded-[2rem] border border-slate-200 overflow-hidden shadow-sm">
                         <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
                             <div>
-                                <h3 className="font-bold text-slate-800 text-lg">Inventory Pipeline & History</h3>
-                                <p className="text-xs text-slate-500 font-medium mt-0.5">Detailed view of all store restocks and material received</p>
+                                <h3 className="font-bold text-slate-800 text-lg">Feed Purchase History</h3>
+                                <p className="text-xs text-slate-500 font-medium mt-0.5">Vendor purchases and store receipts only; generated diet usage is excluded</p>
                             </div>
                             <div className="flex gap-3 items-center">
                                 <div className="relative">
@@ -1224,7 +1470,7 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                             {isLow && <p className="text-[10px] font-bold text-red-500 flex items-center gap-1 mt-1"><AlertTriangle size={10} /> Restock Needed</p>}
                                         </div>
                                         <div className="text-right">
-                                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Moving Cost</p>
+                                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Latest Unit Rate</p>
                                             <p className="text-sm font-black text-slate-700 mt-0.5 border border-slate-200 bg-white px-2 py-1 rounded-lg shadow-sm">PKR {item.unitCost.toLocaleString()} / {item.unit?.toUpperCase() || 'KG'}</p>
                                         </div>
                                     </div>
@@ -1266,8 +1512,8 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                         {vendorEntities.map(vendor => {
                             const relatedBills = vendorExpenses.filter(e => e.supplier === vendor.id);
                             const total = relatedBills.reduce((sum, e) => sum + e.amount, 0);
-                            const paid = relatedBills.reduce((sum, e) => sum + (e.paymentStatus === 'PAID' ? e.amount : (e.amountPaid || 0)), 0);
-                            const pending = relatedBills.reduce((sum, e) => sum + Math.max(0, e.amount - (e.amountPaid || 0)), 0);
+                            const paid = relatedBills.reduce((sum, e) => sum + Math.min(e.amount, Number(e.amountPaid || (e.paymentStatus === 'PAID' ? e.amount : 0))), 0);
+                            const pending = Math.max(0, total - paid);
 
                             return (
                                 <div key={vendor.id} className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm relative group hover:border-blue-200 transition-colors">
@@ -1293,36 +1539,9 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                     </div>
 
                                     {pending > 0 ? (
-                                        <button onClick={async () => {
-                                            const ok = await confirmDialog({
-                                                title: 'Settle vendor dues',
-                                                message: `Create payment entries clearing PKR ${pending.toLocaleString()} dues for ${vendor.name}?`,
-                                                confirmLabel: 'Settle',
-                                            });
-                                            if (!ok) return;
-                                            const paymentDate = new Date().toISOString().split('T')[0];
-                                            try {
-                                                for (const bill of relatedBills.filter(b => b.paymentStatus !== 'PAID')) {
-                                                    const balance = Math.max(0, bill.amount - (bill.amountPaid || 0));
-                                                    if (balance <= 0) continue;
-                                                    await backendService.expensePayment(bill.id, {
-                                                        amount: balance,
-                                                        date: paymentDate,
-                                                        paymentMethod: 'CASH',
-                                                        notes: `Vendor settlement from Procurement for ${vendor.name}`
-                                                    });
-                                                    await onUpdateExpense({ ...bill, paymentStatus: 'PAID', amountPaid: bill.amount, paymentDate });
-                                                }
-                                                await onRefreshProcurement?.();
-                                                setProcurementRefreshKey(key => key + 1);
-                                                toast.success('Vendor dues settled.');
-                                            } catch (e) {
-                                                console.error(e);
-                                                toast.error('Failed to settle vendor dues.');
-                                            }
-                                        }} className="w-full bg-slate-800 hover:bg-slate-700 text-white py-3 rounded-xl text-xs font-black tracking-wider flex items-center justify-center gap-2 shadow-md transition-colors">
-                                            <CheckCircle size={14} /> SETTLE DUES
-                                        </button>
+                                        <div className="w-full text-center py-3 px-3 text-xs font-bold text-amber-700 bg-amber-50 rounded-xl border border-amber-100 flex items-center justify-center gap-2">
+                                            <Clock size={14} /> Settle against individual invoices in Finance &amp; Accounts
+                                        </div>
                                     ) : (
                                         <div className="w-full text-center py-3 text-xs font-black tracking-wider text-emerald-600 bg-emerald-50 rounded-xl border border-emerald-100 flex items-center justify-center gap-2">
                                             <CheckCircle size={14} /> ACCOUNT CLEAR
@@ -1340,59 +1559,6 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                         )}
                     </div>
 
-                    {/* Detailed Vendor Analytics */}
-                    <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 mt-8">
-                        {priceTrendData.length > 0 && (
-                            <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                                <h3 className="text-lg font-black text-slate-800 mb-6 flex items-center gap-2"><TrendingUp className="text-emerald-500" /> Date Variation Analytics (Cost/KG)</h3>
-                                <div className="h-80 w-full">
-                                    <ResponsiveContainer width="100%" height="100%">
-                                        <LineChart data={priceTrendData}>
-                                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                                            <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
-                                            <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} axisLine={false} tickLine={false} tickFormatter={(val) => `PKR ${val}`} />
-                                            <Tooltip
-                                                contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                                                itemStyle={{ fontSize: '12px', fontWeight: 'bold' }}
-                                                labelStyle={{ fontSize: '10px', color: '#64748b', fontWeight: 'bold' }}
-                                            />
-                                            <Legend wrapperStyle={{ fontSize: '12px', fontWeight: 'bold', paddingTop: '10px' }} />
-                                            {Array.from(new Set(state.feed.map(f => f.name))).map((name, i) => (
-                                                <Line key={name} type="monotone" dataKey={name} name={name} stroke={`hsl(${i * 45 + 150}, 70%, 50%)`} strokeWidth={3} dot={{ r: 4, strokeWidth: 2 }} activeDot={{ r: 6 }} connectNulls />
-                                            ))}
-                                        </LineChart>
-                                    </ResponsiveContainer>
-                                </div>
-                                <p className="text-xs font-medium text-slate-500 mt-4 text-center">Averaged per-KG rates across recent invoices dynamically graphed per product.</p>
-                            </div>
-                        )}
-
-                        {itemVendorComparisonData.data.length > 0 && (
-                            <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                                <h3 className="text-lg font-black text-slate-800 mb-6 flex items-center gap-2"><BarChart className="text-blue-500" /> Vendor Price Comparison per Item (Cost/KG)</h3>
-                                <div className="h-80 w-full">
-                                    <ResponsiveContainer width="100%" height="100%">
-                                        <RechartsBarChart data={itemVendorComparisonData.data}>
-                                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                                            <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
-                                            <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} axisLine={false} tickLine={false} tickFormatter={(val) => `PKR ${val}`} />
-                                            <Tooltip
-                                                contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                                                cursor={{ fill: '#f8fafc' }}
-                                                itemStyle={{ fontSize: '12px', fontWeight: 'bold' }}
-                                                labelStyle={{ fontSize: '10px', color: '#64748b', fontWeight: 'bold' }}
-                                            />
-                                            <Legend wrapperStyle={{ fontSize: '12px', fontWeight: 'bold', paddingTop: '10px' }} />
-                                            {itemVendorComparisonData.vendors.map((v, i) => (
-                                                <Bar key={v} dataKey={v} name={v} fill={`hsl(${i * 60 + 200}, 75%, 60%)`} radius={[4, 4, 0, 0]} maxBarSize={50} />
-                                            ))}
-                                        </RechartsBarChart>
-                                    </ResponsiveContainer>
-                                </div>
-                                <p className="text-xs font-medium text-slate-500 mt-4 text-center">Visualizes base pricing differentials to support economic purchasing.</p>
-                            </div>
-                        )}
-                    </div>
                 </div>
             )}
 
@@ -1402,7 +1568,7 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                         <div className="px-6 py-4 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
                             <div>
                                 <h3 className="font-black text-slate-800">Stock Card: {movementItem.name}</h3>
-                                <p className="text-xs text-slate-500 font-bold mt-0.5">Backend inventory movement ledger</p>
+                                <p className="text-xs text-slate-500 font-bold mt-0.5">Backend inventory movement ledger · newest first</p>
                             </div>
                             <button onClick={() => setMovementItem(null)} className="p-2 text-slate-400 hover:text-slate-700 hover:bg-white rounded-lg"><X size={18} /></button>
                         </div>
@@ -1416,6 +1582,12 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                 </div>
                             )}
                             {!movementsLoading && !movementsError && inventoryMovements.length > 0 && (
+                                <>
+                                {!inventoryMovements.some(row => ['IN', 'INCREASE'].includes(String(row.direction).toUpperCase()) && normalizeText(row.movementType ?? row.type).includes('purchase')) && (
+                                    <div className="m-4 mb-0 p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs font-medium text-amber-800">
+                                        Historical purchase-IN rows are not present for this item. The stock card cannot fully reconcile until the backend ledger backfill is completed; new atomic purchases will create receipt movements.
+                                    </div>
+                                )}
                                 <table className="w-full text-sm">
                                     <thead className="bg-white sticky top-0 border-b border-slate-100">
                                         <tr className="text-[10px] font-black uppercase tracking-wider text-slate-500">
@@ -1442,6 +1614,7 @@ export const Procurement: React.FC<Props> = ({ state, onAddExpense, onUpdateExpe
                                         ))}
                                     </tbody>
                                 </table>
+                                </>
                             )}
                         </div>
                     </div>

@@ -18,7 +18,7 @@ interface Props {
     currentLocationId?: string | null;
     onAddExpense: (e: Expense) => void | Promise<void>;
     onUpdateExpense?: (e: Expense) => void | Promise<void>;
-    onAddSale: (s: Sale) => void;
+    onAddSale: (s: Sale) => void | Promise<void>;
     onDeleteExpense: (id: string) => void;
     onDeleteSale: (id: string) => void;
     onRecordSalePayment?: (saleId: string, payment: { amount: number; date: string; paymentMethod?: string; notes?: string }) => void | Promise<void>;
@@ -29,7 +29,40 @@ interface Props {
 type FinancialView = 'LIST' | 'ADD_EXPENSE' | 'ADD_SALE';
 type FinancialPayment = { id: string; refType: string; refId: string; amount: number; date: string; paymentMethod?: string; notes?: string; status?: string };
 
-export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [], entities, infrastructure = [], farms = [], locations = [], currentFarmId, currentLocationId, onAddExpense, onUpdateExpense, onAddSale, onDeleteExpense, onDeleteSale, onRecordSalePayment, onAfterPaymentMutation, refreshKey }) => {
+const normalizeFinanceText = (value: unknown) => String(value ?? '').trim().toLowerCase();
+const localDateKey = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+const isSystemFeedConsumption = (expense: Expense) => {
+    const description = normalizeFinanceText(expense.description);
+    const referenceType = normalizeFinanceText(expense.referenceType);
+    return expense.category === ExpenseCategory.FEED && (
+        expense.isSystemGenerated === true
+        || normalizeFinanceText(expense.supplier) === 'internal inventory'
+        || referenceType.includes('diet')
+        || referenceType.includes('consumption')
+        || description.includes('daily feed')
+        || description.includes('diet consumption')
+        || description.includes('feed consumption')
+    );
+};
+const isFeedInventoryPurchase = (expense: Expense) => expense.category === ExpenseCategory.FEED && !isSystemFeedConsumption(expense);
+const isAssetAcquisition = (expense: Expense) => expense.category === ExpenseCategory.PURCHASE
+    || expense.category === ExpenseCategory.INFRASTRUCTURE
+    || isFeedInventoryPurchase(expense)
+    || (expense.category === ExpenseCategory.MEDICAL && normalizeFinanceText(expense.description).includes('purchase of medicine'));
+const isOperatingExpense = (expense: Expense) => !isAssetAcquisition(expense);
+const paidExpenseAmount = (expense: Expense) => Math.min(
+    Number(expense.amount) || 0,
+    Number(expense.amountPaid || (expense.paymentStatus === 'PAID' ? expense.amount : 0))
+);
+const receivedSaleAmount = (sale: Sale) => Math.min(
+    Number(sale.amount) || 0,
+    Number(sale.amountReceived || (sale.paymentStatus === 'PAID' ? sale.amount : 0))
+);
+const newFinanceMutationId = (prefix: string) => typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? `${prefix}-${crypto.randomUUID()}`
+    : `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [], entities, infrastructure = [], farms = [], locations = [], currentFarmId, currentLocationId, onAddExpense, onAddSale, onDeleteExpense, onDeleteSale, onRecordSalePayment, onAfterPaymentMutation, refreshKey }) => {
     const toast = useToast();
     const { confirm: confirmDialog, prompt: promptDialog } = useConfirm();
     const [activeTab, setActiveTab] = useState<'EXPENSES' | 'SALES' | 'LEDGER'>('EXPENSES');
@@ -39,7 +72,6 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
     const [searchTerm, setSearchTerm] = useState('');
     const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' }>({ key: 'date', direction: 'desc' });
     const [expandedVendors, setExpandedVendors] = useState<string[]>([]);
-    const [financialsKpis, setFinancialsKpis] = useState<{ totalRevenue: number; totalExpenses: number; netProfit: number } | null>(null);
     const [expensesPage, setExpensesPage] = useState<{ content: Expense[]; totalElements: number; totalPages: number; number: number; size: number } | null>(null);
     const [salesPage, setSalesPage] = useState<{ content: Sale[]; totalElements: number; totalPages: number; number: number; size: number } | null>(null);
     const [ledgerPage, setLedgerPage] = useState<{ content: { id: string; date: string; description: string; type: string; amount: number; balanceAfter: number; refId: string }[]; totalElements: number; totalPages: number; number: number; size: number } | null>(null);
@@ -47,8 +79,6 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
     const [salesPageNum, setSalesPageNum] = useState(0);
     const [ledgerPageNum, setLedgerPageNum] = useState(0);
     const [customCategories, setCustomCategories] = useState<{ id: string; name: string; type: string }[]>([]);
-    const [vendorSummary, setVendorSummary] = useState<{ supplierId: string; supplierName: string; totalBills: number; totalAmount: number; paidAmount: number; balanceDue: number }[] | null>(null);
-    const [expenseAnalytics, setExpenseAnalytics] = useState<{ byCategory: { category: string; totalCost: number }[]; byDay: { date: string; totalCost: number }[] } | null>(null);
     const [paymentPanel, setPaymentPanel] = useState<{ refType: 'EXPENSE' | 'SALE'; refId: string; title: string } | null>(null);
     const [paymentHistory, setPaymentHistory] = useState<FinancialPayment[]>([]);
     const [paymentHistoryLoading, setPaymentHistoryLoading] = useState(false);
@@ -90,19 +120,6 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
         }
     };
 
-    const deletePayment = async (paymentId: string) => {
-        const ok = await confirmDialog({ title: 'Delete payment', message: 'Delete this payment record? Use reversal instead when the ledger must remain auditable.', confirmLabel: 'Delete', danger: true });
-        if (!ok) return;
-        try {
-            await backendService.deleteFinancialsPayment(paymentId);
-            await refreshOpenPaymentHistory();
-            await onAfterPaymentMutation?.();
-            toast.success('Payment deleted.');
-        } catch (e: any) {
-            toast.error(e?.message || 'Failed to delete payment.');
-        }
-    };
-
     const recordSalePayment = async (sale: Sale) => {
         if (!onRecordSalePayment) return;
         const due = Math.max(0, sale.amount - (sale.amountReceived || 0));
@@ -114,7 +131,9 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
             defaultValue: due > 0 ? String(due) : '',
             validate: value => {
                 const amount = Number(value);
-                return !Number.isFinite(amount) || amount <= 0 ? 'Enter a valid payment amount.' : null;
+                if (!Number.isFinite(amount) || amount <= 0) return 'Enter a valid payment amount.';
+                if (amount > due) return 'Payment cannot exceed the outstanding balance.';
+                return null;
             },
         });
         if (!amountRaw) return;
@@ -128,37 +147,74 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
         });
     };
 
+    const recordExpensePayment = async (expense: Expense, vendorName: string) => {
+        const due = Math.max(0, Number(expense.amount) - paidExpenseAmount(expense));
+        if (due <= 0) { toast.warning('This bill has no outstanding balance.'); return; }
+        const amountRaw = await promptDialog({
+            title: 'Record vendor payment',
+            label: `Amount for ${vendorName}`,
+            message: `Balance due: PKR ${due.toLocaleString()}`,
+            inputType: 'number',
+            defaultValue: String(due),
+            validate: value => {
+                const amount = Number(value);
+                if (!Number.isFinite(amount) || amount <= 0) return 'Enter a valid payment amount.';
+                if (amount > due) return 'Payment cannot exceed the outstanding balance.';
+                return null;
+            }
+        });
+        if (!amountRaw) return;
+        const date = await promptDialog({ title: 'Payment date', label: 'Date', inputType: 'date', defaultValue: localDateKey(new Date()) });
+        if (!date) return;
+        const methodRaw = await promptDialog({
+            title: 'Payment method',
+            label: 'Method (CASH, BANK, CHEQUE or OTHER)',
+            defaultValue: 'CASH',
+            validate: value => ['CASH', 'BANK', 'CHEQUE', 'OTHER'].includes(value.trim().toUpperCase()) ? null : 'Use CASH, BANK, CHEQUE or OTHER.'
+        });
+        if (!methodRaw) return;
+        try {
+            await backendService.addFinancialsPayment({
+                refType: 'EXPENSE',
+                refId: expense.id,
+                amount: Number(amountRaw),
+                date,
+                paymentMethod: methodRaw.trim().toUpperCase(),
+                notes: `Vendor payment from Finance & Accounts for ${vendorName}`,
+                clientMutationId: newFinanceMutationId('expense-payment')
+            });
+            await onAfterPaymentMutation?.();
+            toast.success('Vendor payment recorded with audit history.');
+        } catch (e: any) {
+            toast.error(e?.message || 'Failed to record vendor payment.');
+        }
+    };
+
     const dateRangeFromFilter = useMemo(() => {
         const now = new Date();
         let start: string | undefined;
         let end: string | undefined;
-        const endStr = now.toISOString().split('T')[0];
+        const endStr = localDateKey(now);
         if (dateFilter === '7_DAYS') {
-            const d = new Date(now); d.setDate(d.getDate() - 7);
-            start = d.toISOString().split('T')[0];
+            const d = new Date(now); d.setDate(d.getDate() - 6);
+            start = localDateKey(d);
         } else if (dateFilter === '30_DAYS') {
-            const d = new Date(now); d.setDate(d.getDate() - 30);
-            start = d.toISOString().split('T')[0];
+            const d = new Date(now); d.setDate(d.getDate() - 29);
+            start = localDateKey(d);
         } else if (dateFilter === '90_DAYS') {
-            const d = new Date(now); d.setDate(d.getDate() - 90);
-            start = d.toISOString().split('T')[0];
+            const d = new Date(now); d.setDate(d.getDate() - 89);
+            start = localDateKey(d);
         } else if (dateFilter === 'THIS_MONTH') {
-            start = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+            start = localDateKey(new Date(now.getFullYear(), now.getMonth(), 1));
         } else if (dateFilter === 'LAST_MONTH') {
             const m = now.getMonth() === 0 ? 11 : now.getMonth() - 1;
             const y = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
-            start = new Date(y, m, 1).toISOString().split('T')[0];
-            end = new Date(y, m + 1, 0).toISOString().split('T')[0];
+            start = localDateKey(new Date(y, m, 1));
+            end = localDateKey(new Date(y, m + 1, 0));
         }
         if (!end) end = endStr;
         return { startDate: start, endDate: end };
     }, [dateFilter]);
-
-    useEffect(() => {
-        backendService.getFinancialsKpis({ farmId: currentFarmId || undefined, ...dateRangeFromFilter })
-            .then(setFinancialsKpis)
-            .catch(() => setFinancialsKpis(null));
-    }, [currentFarmId, dateRangeFromFilter.startDate, dateRangeFromFilter.endDate, refreshKey]);
 
     useEffect(() => { setExpensesPageNum(0); }, [dateFilter, searchTerm]);
     useEffect(() => { setSalesPageNum(0); }, [dateFilter, searchTerm]);
@@ -201,37 +257,11 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
         backendService.getCategories('EXPENSE').then(setCustomCategories).catch(() => setCustomCategories([]));
     }, []);
 
-    useEffect(() => {
-        const params: { farmId?: string; startDate?: string; endDate?: string; dateFilter?: string } = { farmId: currentFarmId || undefined, ...dateRangeFromFilter };
-        if (dateFilter !== 'ALL') params.dateFilter = dateFilter;
-        backendService.getVendorSummary(params).then(setVendorSummary).catch(() => setVendorSummary(null));
-    }, [currentFarmId, dateRangeFromFilter.startDate, dateRangeFromFilter.endDate, dateFilter, refreshKey]);
-
-    useEffect(() => {
-        const params: { farmId?: string; startDate?: string; endDate?: string; dateFilter?: string } = { farmId: currentFarmId || undefined, ...dateRangeFromFilter };
-        if (dateFilter !== 'ALL') params.dateFilter = dateFilter;
-        backendService.getExpenseAnalytics(params).then(setExpenseAnalytics).catch(() => setExpenseAnalytics(null));
-    }, [currentFarmId, dateRangeFromFilter.startDate, dateRangeFromFilter.endDate, dateFilter, refreshKey]);
-
     const isDateInRange = (dateStr: string | undefined | null) => {
-        if (!dateStr || dateFilter === 'ALL') return true;
-        const days = (new Date().getTime() - new Date(dateStr).getTime()) / (1000 * 60 * 60 * 24);
-        if (dateFilter === '7_DAYS') return days <= 7;
-        if (dateFilter === '30_DAYS') return days <= 30;
-        if (dateFilter === '90_DAYS') return days <= 90;
-        if (dateFilter === 'THIS_MONTH') {
-            const d = new Date(dateStr);
-            const today = new Date();
-            return d.getMonth() === today.getMonth() && d.getFullYear() === today.getFullYear();
-        }
-        if (dateFilter === 'LAST_MONTH') {
-            const d = new Date(dateStr);
-            const today = new Date();
-            const lastMonth = today.getMonth() === 0 ? 11 : today.getMonth() - 1;
-            const year = today.getMonth() === 0 ? today.getFullYear() - 1 : today.getFullYear();
-            return d.getMonth() === lastMonth && d.getFullYear() === year;
-        }
-        return true;
+        if (!dateStr) return false;
+        if (dateFilter === 'ALL') return true;
+        return (!dateRangeFromFilter.startDate || dateStr >= dateRangeFromFilter.startDate)
+            && (!dateRangeFromFilter.endDate || dateStr <= dateRangeFromFilter.endDate);
     };
 
     const handleSort = (key: string) => {
@@ -282,7 +312,7 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
             const matchesSearch = searchTerm ? entry.description.toLowerCase().includes(searchTerm.toLowerCase()) || entry.type.toLowerCase().includes(searchTerm.toLowerCase()) : true;
             return matchesDate && matchesSearch;
         });
-    }, [expenses, sales, dateFilter, searchTerm]);
+    }, [expenses, sales, dateFilter, searchTerm, dateRangeFromFilter.startDate, dateRangeFromFilter.endDate]);
 
     const filteredExpenses = useMemo(() => {
         return expenses.filter(e => {
@@ -294,7 +324,7 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
             if (sortConfig.key === 'amount') return sortConfig.direction === 'asc' ? a.amount - b.amount : b.amount - a.amount;
             return 0;
         });
-    }, [expenses, dateFilter, searchTerm, sortConfig]);
+    }, [expenses, dateFilter, searchTerm, sortConfig, dateRangeFromFilter.startDate, dateRangeFromFilter.endDate]);
 
     const filteredSales = useMemo(() => {
         return sales.filter(s => {
@@ -306,7 +336,7 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
             if (sortConfig.key === 'amount') return sortConfig.direction === 'asc' ? a.amount - b.amount : b.amount - a.amount;
             return 0;
         });
-    }, [sales, dateFilter, searchTerm, sortConfig]);
+    }, [sales, dateFilter, searchTerm, sortConfig, dateRangeFromFilter.startDate, dateRangeFromFilter.endDate]);
 
     const scopeLabel = currentFarmId
         ? farms.find(f => f.id === currentFarmId)?.name || 'Selected farm'
@@ -318,11 +348,11 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
 
     // Forms State
     const [newExpense, setNewExpense] = useState<Partial<Expense>>({
-        amount: 0, category: ExpenseCategory.OTHER, date: new Date().toISOString().split('T')[0], description: ''
+        amount: 0, category: ExpenseCategory.OTHER, date: localDateKey(new Date()), description: ''
     });
 
     const [newSale, setNewSale] = useState<Partial<Sale>>({
-        amount: 0, date: new Date().toISOString().split('T')[0], buyer: '', weightAtSale: 0, animalId: '', itemType: 'ANIMAL', quantity: 0, description: '', soldAnimalIds: [], saleType: 'SINGLE_ANIMAL'
+        amount: 0, date: localDateKey(new Date()), buyer: '', weightAtSale: 0, animalId: '', itemType: 'ANIMAL', quantity: 0, description: '', soldAnimalIds: [], saleType: 'SINGLE_ANIMAL', paymentStatus: 'PAID', amountReceived: 0, paymentMethod: 'CASH'
     });
     const [livestockSaleMode, setLivestockSaleMode] = useState<'SINGLE' | 'BULK'>('SINGLE');
     const [selectedAnimalIds, setSelectedAnimalIds] = useState<string[]>([]);
@@ -361,24 +391,24 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
             farmId: currentFarmId || '',
             category: categoryValue as ExpenseCategory,
             amount: Number(newExpense.amount),
-            date: newExpense.date || new Date().toISOString().split('T')[0],
+            date: newExpense.date || localDateKey(new Date()),
             description: newExpense.description,
             location: newExpense.location,
             relatedAnimalId: newExpense.relatedAnimalId,
             supplier: newExpense.supplier,
-            paymentStatus: newExpense.supplier ? 'PENDING' : 'PAID', // Default to pending if vendor selected
-            amountPaid: 0
+            paymentStatus: newExpense.supplier && newExpense.supplier !== 'CASH' ? 'PENDING' : 'PAID',
+            amountPaid: newExpense.supplier && newExpense.supplier !== 'CASH' ? 0 : Number(newExpense.amount)
         };
         try {
             await onAddExpense(expense);
             setViewMode('LIST');
-            setNewExpense({ amount: 0, category: ExpenseCategory.OTHER, date: new Date().toISOString().split('T')[0], description: '' });
+            setNewExpense({ amount: 0, category: ExpenseCategory.OTHER, date: localDateKey(new Date()), description: '' });
         } catch (e) {
             console.error(e);
         }
     };
 
-    const handleSaveSale = () => {
+    const handleSaveSale = async () => {
         if (!newSale.amount || !newSale.buyer) {
             toast.warning('Amount and buyer are required.');
             return;
@@ -394,6 +424,12 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
             if (d > today) { toast.warning('Sale date cannot be in the future.'); return; }
         }
         const itemType = newSale.itemType || 'ANIMAL';
+        const paymentStatus = newSale.paymentStatus === 'PENDING' ? 'PENDING' : 'PAID';
+        const paymentFields = {
+            paymentStatus,
+            amountReceived: paymentStatus === 'PAID' ? Number(newSale.amount) : 0,
+            paymentMethod: newSale.paymentMethod || 'CASH'
+        };
 
         if (itemType === 'ANIMAL') {
             if (!currentFarmId && !currentLocationId) {
@@ -405,33 +441,35 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                     toast.warning('Select the sold animal.');
                     return;
                 }
-                onAddSale({
+                await onAddSale({
                     id: Math.random().toString(36).substr(2, 9),
                     amount: Number(newSale.amount),
                     buyer: newSale.buyer,
-                    date: newSale.date || new Date().toISOString().split('T')[0],
+                    date: newSale.date || localDateKey(new Date()),
                     animalId: newSale.animalId,
                     soldAnimalIds: [newSale.animalId],
                     saleType: 'SINGLE_ANIMAL',
                     itemType,
                     weightAtSale: Number(newSale.weightAtSale) || 0,
-                    description: newSale.description || ''
+                    description: newSale.description || '',
+                    ...paymentFields
                 });
             } else {
                 if (!selectedAnimalIds.length) {
                     toast.warning('Select at least one animal for bulk sale.');
                     return;
                 }
-                onAddSale({
+                await onAddSale({
                     id: Math.random().toString(36).substr(2, 9),
                     amount: Number(newSale.amount),
                     buyer: newSale.buyer,
-                    date: newSale.date || new Date().toISOString().split('T')[0],
+                    date: newSale.date || localDateKey(new Date()),
                     soldAnimalIds: selectedAnimalIds,
                     saleType: 'BULK_ANIMALS',
                     itemType,
                     weightAtSale: Number(newSale.weightAtSale) || undefined,
-                    description: newSale.description || `Bulk sale: ${selectedAnimalIds.length} animals`
+                    description: newSale.description || `Bulk sale: ${selectedAnimalIds.length} animals`,
+                    ...paymentFields
                 });
             }
         } else {
@@ -441,27 +479,65 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
             else if (itemType === 'OTHER') description = (newSale.description && newSale.description.trim()) || 'Other Income';
             else description = newSale.description || '';
 
-            onAddSale({
+            await onAddSale({
                 id: Math.random().toString(36).substr(2, 9),
                 amount: Number(newSale.amount),
                 buyer: newSale.buyer,
-                date: newSale.date || new Date().toISOString().split('T')[0],
+                date: newSale.date || localDateKey(new Date()),
                 itemType,
                 quantity: Number(newSale.quantity) || 0,
-                description
+                description,
+                ...paymentFields
             });
         }
         setViewMode('LIST');
-        setNewSale({ amount: 0, date: new Date().toISOString().split('T')[0], buyer: '', weightAtSale: 0, animalId: '', itemType: 'ANIMAL', quantity: 0, description: '', soldAnimalIds: [], saleType: 'SINGLE_ANIMAL' });
+        setNewSale({ amount: 0, date: localDateKey(new Date()), buyer: '', weightAtSale: 0, animalId: '', itemType: 'ANIMAL', quantity: 0, description: '', soldAnimalIds: [], saleType: 'SINGLE_ANIMAL', paymentStatus: 'PAID', amountReceived: 0, paymentMethod: 'CASH' });
         setSelectedAnimalIds([]);
         setLivestockSaleMode('SINGLE');
     };
 
-    const totalExpensesCalc = financialsKpis != null ? financialsKpis.totalExpenses : filteredExpenses.reduce((sum, e) => sum + e.amount, 0);
-    const totalSalesCalc = financialsKpis != null ? financialsKpis.totalRevenue : filteredSales.reduce((sum, s) => sum + s.amount, 0);
+    const operatingExpenses = useMemo(() => filteredExpenses.filter(isOperatingExpense), [filteredExpenses]);
+    const acquisitionExpenses = useMemo(() => filteredExpenses.filter(isAssetAcquisition), [filteredExpenses]);
+    const totalExpensesCalc = operatingExpenses.reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
+    const totalAcquisitionsCalc = acquisitionExpenses.reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
+    const totalSalesCalc = filteredSales.reduce((sum, sale) => sum + Number(sale.amount || 0), 0);
+    const cashReceivedCalc = filteredSales.reduce((sum, sale) => sum + receivedSaleAmount(sale), 0);
+    const receivablesCalc = Math.max(0, totalSalesCalc - cashReceivedCalc);
+    const operatingResultCalc = totalSalesCalc - totalExpensesCalc;
+    const acquisitionBreakdown = useMemo(() => {
+        const rows = new Map<string, { label: string; count: number; amount: number }>();
+        acquisitionExpenses.forEach(expense => {
+            const key = isFeedInventoryPurchase(expense)
+                ? 'FEED_INVENTORY'
+                : expense.category === ExpenseCategory.PURCHASE
+                    ? 'LIVESTOCK'
+                    : expense.category === ExpenseCategory.INFRASTRUCTURE
+                        ? 'INFRASTRUCTURE'
+                        : 'MEDICINE_INVENTORY';
+            const label = key === 'FEED_INVENTORY' ? 'Feed inventory purchases'
+                : key === 'LIVESTOCK' ? 'Livestock acquisitions'
+                    : key === 'INFRASTRUCTURE' ? 'Infrastructure acquisitions'
+                        : 'Medicine inventory purchases';
+            const row = rows.get(key) || { label, count: 0, amount: 0 };
+            row.count += 1;
+            row.amount += Number(expense.amount || 0);
+            rows.set(key, row);
+        });
+        return Array.from(rows.values()).sort((a, b) => b.amount - a.amount);
+    }, [acquisitionExpenses]);
+    const operatingCategoryData = useMemo(() => {
+        const grouped = new Map<string, number>();
+        operatingExpenses.forEach(expense => grouped.set(expense.category, (grouped.get(expense.category) || 0) + Number(expense.amount || 0)));
+        return Array.from(grouped.entries()).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
+    }, [operatingExpenses]);
+    const operatingDailyData = useMemo(() => {
+        const grouped = new Map<string, number>();
+        operatingExpenses.forEach(expense => grouped.set(expense.date, (grouped.get(expense.date) || 0) + Number(expense.amount || 0)));
+        return Array.from(grouped.entries()).sort((a, b) => a[0].localeCompare(b[0])).map(([fullDate, cost]) => ({ fullDate, date: fullDate.slice(5), cost }));
+    }, [operatingExpenses]);
     const expensesForList = expensesPage?.content ?? filteredExpenses;
     const salesForList = salesPage?.content ?? filteredSales;
-    const ledgerForList = ledgerPage?.content ?? ledgerEntries;
+    const ledgerForList = searchTerm ? ledgerEntries : (ledgerPage?.content ?? ledgerEntries);
     const expenseCategoriesForDropdown = useMemo(() => {
         const builtIn = Object.values(ExpenseCategory);
         const custom = customCategories.filter(c => c.type === 'EXPENSE').map(c => c.name);
@@ -676,6 +752,36 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                             <input type="date" className="w-full border border-gray-300 rounded-lg px-4 py-2 outline-none focus:ring-2 focus:ring-emerald-500" value={newSale.date} onChange={e => setNewSale({ ...newSale, date: e.target.value })} />
                         </div>
                     </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-4 rounded-xl bg-slate-50 border border-slate-200">
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Invoice state</label>
+                            <select
+                                aria-label="Sale invoice state"
+                                className="w-full border border-gray-300 rounded-lg px-4 py-2 bg-white outline-none focus:ring-2 focus:ring-emerald-500"
+                                value={newSale.paymentStatus || 'PAID'}
+                                onChange={e => setNewSale({ ...newSale, paymentStatus: e.target.value as 'PAID' | 'PENDING' })}
+                            >
+                                <option value="PAID">Paid now</option>
+                                <option value="PENDING">Credit / receivable</option>
+                            </select>
+                            <p className="text-xs text-slate-400 mt-1">Credit sales remain outstanding until a payment is recorded.</p>
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Payment method</label>
+                            <select
+                                aria-label="Sale payment method"
+                                disabled={newSale.paymentStatus === 'PENDING'}
+                                className="w-full border border-gray-300 rounded-lg px-4 py-2 bg-white outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-50"
+                                value={newSale.paymentMethod || 'CASH'}
+                                onChange={e => setNewSale({ ...newSale, paymentMethod: e.target.value as Sale['paymentMethod'] })}
+                            >
+                                <option value="CASH">Cash</option>
+                                <option value="BANK">Bank</option>
+                                <option value="CHEQUE">Cheque</option>
+                                <option value="OTHER">Other</option>
+                            </select>
+                        </div>
+                    </div>
                     <div className="flex justify-end gap-3 pt-4">
                         <button onClick={() => setViewMode('LIST')} className="px-6 py-2 text-gray-600 hover:text-gray-800 font-medium">Cancel</button>
                         <button onClick={handleSaveSale} className="px-6 py-2 bg-emerald-600 text-white rounded-lg font-medium hover:bg-emerald-700">Confirm Sale</button>
@@ -694,20 +800,33 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                     <span className="bg-emerald-100 text-emerald-800 font-bold px-3 py-1 rounded-full border border-emerald-200">{scopeLabel}</span>
                 </div>
             )}
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-4">
-                <h2 className="text-3xl font-extrabold text-slate-800 tracking-tight font-display">Financial Management</h2>
-                <div className="flex gap-4 w-full md:w-auto">
-                    <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex-1 md:w-40 premium-card">
-                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Filtered Revenue</p>
+            <div className="space-y-4 mb-4">
+                <div>
+                    <h2 className="text-3xl font-extrabold text-slate-800 tracking-tight font-display">Financial Management</h2>
+                    <p className="text-xs text-slate-500 mt-1">Management view: purchases of feed, medicine, livestock and infrastructure are separated from operating expenses.</p>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3 w-full">
+                    <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 premium-card">
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Invoice Revenue</p>
                         <p className="text-xl font-extrabold text-emerald-600">PKR {totalSalesCalc.toLocaleString()}</p>
                     </div>
-                    <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex-1 md:w-40 premium-card">
-                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Filtered Expenses</p>
+                    <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 premium-card">
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Operating Expenses</p>
                         <p className="text-xl font-extrabold text-red-500">PKR {totalExpensesCalc.toLocaleString()}</p>
                     </div>
-                    <div className={`p-4 rounded-2xl shadow-lg flex-1 md:w-48 text-white ${(totalSalesCalc - totalExpensesCalc) >= 0 ? 'bg-gradient-to-br from-emerald-500 to-teal-600 shadow-emerald-200' : 'bg-gradient-to-br from-red-500 to-pink-600 shadow-red-200'}`}>
-                        <p className="text-[10px] font-bold text-white/80 uppercase tracking-widest mb-1">Filtered Profit</p>
-                        <p className="text-2xl font-extrabold">PKR {(totalSalesCalc - totalExpensesCalc).toLocaleString()}</p>
+                    <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 premium-card">
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Asset &amp; Inventory Purchases</p>
+                        <p className="text-xl font-extrabold text-indigo-600">PKR {totalAcquisitionsCalc.toLocaleString()}</p>
+                    </div>
+                    <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 premium-card">
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Accounts Receivable</p>
+                        <p className="text-xl font-extrabold text-amber-600">PKR {receivablesCalc.toLocaleString()}</p>
+                        <p className="text-[10px] text-slate-400 mt-1">Received: PKR {cashReceivedCalc.toLocaleString()}</p>
+                    </div>
+                    <div className={`p-4 rounded-2xl shadow-lg text-white ${operatingResultCalc >= 0 ? 'bg-gradient-to-br from-emerald-500 to-teal-600 shadow-emerald-200' : 'bg-gradient-to-br from-red-500 to-pink-600 shadow-red-200'}`}>
+                        <p className="text-[10px] font-bold text-white/80 uppercase tracking-widest mb-1">Result Before Livestock COGS</p>
+                        <p className="text-xl font-extrabold">PKR {operatingResultCalc.toLocaleString()}</p>
+                        <p className="text-[10px] text-white/75 mt-1">Not final net profit until sold-animal cost is posted.</p>
                     </div>
                 </div>
             </div>
@@ -797,23 +916,15 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-fade-in">
                             {/* Expense By Category */}
                             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 premium-card">
-                                <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2 font-display"><PieChartIcon size={20} className="text-emerald-500" /> Expenses by Category (Filtered)</h3>
+                                <h3 className="font-bold text-slate-800 mb-1 flex items-center gap-2 font-display"><PieChartIcon size={20} className="text-emerald-500" /> Operating Expenses by Category</h3>
+                                <p className="text-xs text-slate-500 mb-5">Inventory and asset acquisitions are excluded to prevent double-counting.</p>
                                 <div className="h-64 mb-4">
                                     <ResponsiveContainer width="100%" height="100%">
                                         {(() => {
-                                            const categoryData = expenseAnalytics?.byCategory?.length
-                                                ? expenseAnalytics.byCategory.map(c => ({ name: c.category, value: c.totalCost }))
-                                                : filteredExpenses.reduce((acc, curr) => {
-                                                    const existing = acc.find(x => x.name === curr.category);
-                                                    if (existing) existing.value += curr.amount;
-                                                    else acc.push({ name: curr.category, value: curr.amount });
-                                                    return acc;
-                                                }, [] as any[]).sort((a, b) => b.value - a.value);
-
                                             return (
                                                 <PieChart>
-                                                    <Pie data={categoryData} cx="50%" cy="50%" innerRadius={60} outerRadius={80} paddingAngle={5} dataKey="value" stroke="none">
-                                                        {categoryData.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />)}
+                                                    <Pie data={operatingCategoryData} cx="50%" cy="50%" innerRadius={60} outerRadius={80} paddingAngle={5} dataKey="value" stroke="none">
+                                                        {operatingCategoryData.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />)}
                                                     </Pie>
                                                     <RechartsTooltip formatter={(value: number) => `PKR ${value.toLocaleString()}`} contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} />
                                                 </PieChart>
@@ -822,14 +933,9 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                     </ResponsiveContainer>
                                 </div>
                                 <div className="grid grid-cols-2 gap-2 text-xs">
-                                    {(expenseAnalytics?.byCategory ?? filteredExpenses.reduce((acc, curr) => {
-                                        const existing = acc.find(x => x.name === curr.category);
-                                        if (existing) existing.value += curr.amount;
-                                        else acc.push({ name: curr.category, value: curr.amount });
-                                        return acc;
-                                    }, [] as any[]).map(c => ({ category: c.name, totalCost: c.value }))).slice(0, 6).map((cat: { category?: string; name?: string; totalCost?: number; value?: number }, idx: number) => {
-                                        const name = cat.category ?? cat.name ?? '';
-                                        const cost = cat.totalCost ?? cat.value ?? 0;
+                                    {operatingCategoryData.map((cat, idx) => {
+                                        const name = cat.name;
+                                        const cost = cat.value;
                                         return (
                                             <div key={idx} className="flex justify-between p-1">
                                                 <span className="text-slate-600 font-bold flex items-center gap-1"><div className="w-2 h-2 rounded-full" style={{ backgroundColor: COLORS[idx % COLORS.length] }}></div> {name}</span>
@@ -842,21 +948,13 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
 
                             {/* Expenses Trend Date-Wise */}
                             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 premium-card">
-                                <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2 font-display"><LineChartIcon size={20} className="text-blue-500" /> Daily Expense Trend</h3>
+                                <h3 className="font-bold text-slate-800 mb-1 flex items-center gap-2 font-display"><LineChartIcon size={20} className="text-blue-500" /> Daily Operating Expense Trend</h3>
+                                <p className="text-xs text-slate-500 mb-5">Uses the complete selected period and the same scope as the operating-expense KPI.</p>
                                 <div className="h-64">
                                     <ResponsiveContainer width="100%" height="100%">
                                         {(() => {
-                                            const dateData = expenseAnalytics?.byDay?.length
-                                                ? expenseAnalytics.byDay.map(d => ({ date: d.date.slice(5), fullDate: d.date, cost: d.totalCost })).sort((a, b) => a.fullDate.localeCompare(b.fullDate))
-                                                : filteredExpenses.reduce((acc, curr) => {
-                                                    const existing = acc.find(x => x.date === curr.date?.substring(5));
-                                                    if (existing) existing.cost += curr.amount;
-                                                    else acc.push({ date: (curr.date || '').substring(5), fullDate: curr.date || '', cost: curr.amount });
-                                                    return acc;
-                                                }, [] as any[]).sort((a, b) => new Date(a.fullDate).getTime() - new Date(b.fullDate).getTime());
-
                                             return (
-                                                <BarChart data={dateData}>
+                                                <BarChart data={operatingDailyData}>
                                                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                                                     <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#94a3b8', fontWeight: 'bold' }} />
                                                     <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#94a3b8', fontWeight: 'bold' }} />
@@ -868,6 +966,34 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                     </ResponsiveContainer>
                                 </div>
                             </div>
+                            <div className="md:col-span-2 bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden premium-card">
+                                <div className="p-5 border-b border-slate-100 bg-slate-50/70 flex items-center justify-between gap-3">
+                                    <div>
+                                        <h3 className="font-bold text-slate-800 flex items-center gap-2"><Building2 size={18} className="text-indigo-500" /> Asset &amp; Inventory Purchase Register</h3>
+                                        <p className="text-xs text-slate-500 mt-1">Shown separately from operating expenses. These amounts require inventory, livestock or fixed-asset accounting.</p>
+                                    </div>
+                                    <p className="font-black text-indigo-700">PKR {totalAcquisitionsCalc.toLocaleString()}</p>
+                                </div>
+                                <table className="w-full text-sm">
+                                    <thead className="border-b border-slate-100">
+                                        <tr className="text-[10px] uppercase tracking-wider text-slate-400">
+                                            <th className="px-5 py-3 text-left">Classification</th>
+                                            <th className="px-5 py-3 text-right">Transactions</th>
+                                            <th className="px-5 py-3 text-right">Amount</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">
+                                        {acquisitionBreakdown.map(row => (
+                                            <tr key={row.label}>
+                                                <td className="px-5 py-3 font-bold text-slate-700">{row.label}</td>
+                                                <td className="px-5 py-3 text-right text-slate-500">{row.count}</td>
+                                                <td className="px-5 py-3 text-right font-black text-indigo-700">PKR {row.amount.toLocaleString()}</td>
+                                            </tr>
+                                        ))}
+                                        {acquisitionBreakdown.length === 0 && <tr><td colSpan={3} className="px-5 py-8 text-center text-slate-400">No asset or inventory purchases in this scope.</td></tr>}
+                                    </tbody>
+                                </table>
+                            </div>
                         </div>
                     )}
 
@@ -878,7 +1004,7 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                     <Store className="text-indigo-600" size={20} />
                                     Vendor Payables & Credit Bills
                                 </h3>
-                                <p className="text-xs text-slate-500 font-medium">To log a bill, select a Vendor when adding an expense.</p>
+                                <p className="text-xs text-slate-500 font-medium">External vendor bills only. Internal feed-consumption postings are excluded.</p>
                             </div>
                             <div className="overflow-x-auto">
                                 <table className="min-w-full divide-y divide-gray-200">
@@ -894,18 +1020,21 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                     </thead>
                                     <tbody className="bg-white divide-y divide-gray-100">
                                         {(() => {
-                                            const useServerSummary = vendorSummary && vendorSummary.length > 0;
-                                            const vendorBills = filteredExpenses.filter(e => e.supplier);
+                                            const vendorBills = filteredExpenses.filter(e => e.supplier
+                                                && e.supplier !== 'CASH'
+                                                && normalizeFinanceText(e.supplier) !== 'internal inventory'
+                                                && !isSystemFeedConsumption(e));
                                             const billsByVendor = vendorBills.reduce((acc, exp) => {
                                                 if (!acc[exp.supplier!]) acc[exp.supplier!] = { vendorId: exp.supplier!, bills: [], total: 0, pending: 0, paid: 0 };
                                                 acc[exp.supplier!].bills.push(exp);
                                                 acc[exp.supplier!].total += exp.amount;
-                                                if (exp.paymentStatus === 'PAID') acc[exp.supplier!].paid += exp.amount;
-                                                else acc[exp.supplier!].pending += exp.amount;
+                                                const paid = paidExpenseAmount(exp);
+                                                acc[exp.supplier!].paid += paid;
+                                                acc[exp.supplier!].pending += Math.max(0, Number(exp.amount) - paid);
                                                 return acc;
                                             }, {} as Record<string, { vendorId: string, bills: Expense[], total: number, pending: number, paid: number }>);
 
-                                            const hasVendors = useServerSummary || (billsByVendor && Object.keys(billsByVendor).length > 0);
+                                            const hasVendors = billsByVendor && Object.keys(billsByVendor).length > 0;
                                             if (!hasVendors) {
                                                 return (
                                                     <tr>
@@ -918,24 +1047,9 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                                 );
                                             }
 
-                                            return (useServerSummary ? vendorSummary!.map((v) => ({
-                                                vendorId: v.supplierId,
-                                                bills: billsByVendor[v.supplierId]?.bills || [] as Expense[],
-                                                totalBills: v.totalBills,
-                                                total: v.totalAmount,
-                                                pending: v.balanceDue,
-                                                paid: v.paidAmount,
-                                            })) : Object.values(billsByVendor! as any).map((v: any) => ({ vendorId: v.vendorId, bills: v.bills, totalBills: v.bills.length, total: v.total, pending: v.pending, paid: v.paid }))).map(({ vendorId, bills, totalBills, pending, paid, total }) => {
+                                            return Object.values(billsByVendor).map((v) => ({ vendorId: v.vendorId, bills: v.bills, totalBills: v.bills.length, total: v.total, pending: v.pending, paid: v.paid })).map(({ vendorId, bills, totalBills, pending, paid, total }) => {
                                                 const vendor = entities.find(v => v.id === vendorId);
-                                                let vendorName = vendorId === 'CASH' ? 'Cash / Walk-in' : (vendor?.name);
-
-                                                if (useServerSummary) {
-                                                    const s = vendorSummary!.find(v => v.supplierId === vendorId || (v as any).vendorId === vendorId || (v as any).id === vendorId);
-                                                    if (s) {
-                                                        const sName = s.supplierName || (s as any).vendorName || (s as any).name;
-                                                        if (sName && sName.trim() !== '' && sName !== 'null') vendorName = sName;
-                                                    }
-                                                }
+                                                let vendorName = vendor?.name;
 
                                                 if (!vendorName) {
                                                     vendorName = `Archived / Unlinked Vendor (${vendorId.slice(0, 6)}...)`;
@@ -971,7 +1085,7 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                                         </tr>
                                                         {/* Expanded Bills list */}
                                                         {isExpanded && bills.length > 0 && bills.slice().sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map((exp, idx) => {
-                                                            const isPaid = exp.paymentStatus === 'PAID';
+                                                            const isPaid = paidExpenseAmount(exp) >= Number(exp.amount);
                                                             return (
                                                                 <tr key={exp.id} className={`bg-white hover:bg-slate-50 transition-colors border-l-4 ${isPaid ? 'border-l-emerald-400' : 'border-l-indigo-500'} ${idx === bills.length - 1 ? 'border-b-4 border-b-slate-100' : 'border-b border-b-gray-50'}`}>
                                                                     <td className="px-6 py-3 whitespace-nowrap text-xs font-bold text-slate-500 pl-10 border-b border-gray-50">{exp.date}</td>
@@ -989,35 +1103,15 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                                                         PKR {exp.amount.toLocaleString()}
                                                                     </td>
                                                                     <td className="px-6 py-3 whitespace-nowrap text-right text-sm border-b border-gray-50">
-                                                                        {!isPaid && onUpdateExpense && (
+                                                                        {!isPaid && (
                                                                             <button
-                                                                                onClick={async (e) => {
+                                                                                onClick={(e) => {
                                                                                     e.stopPropagation();
-                                                                                    const ok = await confirmDialog({ title: 'Mark bill paid', message: `Mark bill from ${vendorName} as fully PAID in cash/bank?`, confirmLabel: 'Mark paid' });
-                                                                                    if (ok) onUpdateExpense({ ...exp, paymentStatus: 'PAID', amountPaid: exp.amount, paymentDate: new Date().toISOString().split('T')[0] });
+                                                                                    void recordExpensePayment(exp, vendorName);
                                                                                 }}
                                                                                 className="px-4 py-1.5 bg-indigo-50 border border-indigo-200 hover:bg-indigo-600 hover:border-indigo-600 hover:text-white text-indigo-700 font-extrabold text-[11px] uppercase tracking-wider rounded-lg transition-all shadow-sm"
                                                                             >
                                                                                 Pay
-                                                                            </button>
-                                                                        )}
-                                                                        {isPaid && onUpdateExpense && (
-                                                                            <button
-                                                                                onClick={async (e) => {
-                                                                                    e.stopPropagation();
-                                                                                    const ok = await confirmDialog({
-                                                                                        title: 'Revert payment',
-                                                                                        message: 'Revert bill payment status to UNPAID?',
-                                                                                        confirmLabel: 'Revert',
-                                                                                        danger: true,
-                                                                                    });
-                                                                                    if (!ok) return;
-                                                                                    onUpdateExpense({ ...exp, paymentStatus: 'PENDING', amountPaid: 0, paymentDate: undefined });
-                                                                                    toast.success('Bill reverted to unpaid.');
-                                                                                }}
-                                                                                className="px-2 py-1 text-slate-400 hover:text-slate-600 font-bold text-[10px] uppercase underline transition-colors"
-                                                                            >
-                                                                                Revert
                                                                             </button>
                                                                         )}
                                                                         <button
@@ -1139,6 +1233,9 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                         <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Item / Reference</th>
                                         <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Qty / Weight</th>
                                         <th onClick={() => handleSort('amount')} className="px-6 py-3 text-right text-xs font-bold text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"><div className="flex items-center justify-end gap-1">Amount <ArrowUpDown size={12} /></div></th>
+                                        <th className="px-6 py-3 text-right text-xs font-bold text-gray-500 uppercase tracking-wider">Received</th>
+                                        <th className="px-6 py-3 text-right text-xs font-bold text-gray-500 uppercase tracking-wider">Balance</th>
+                                        <th className="px-6 py-3 text-center text-xs font-bold text-gray-500 uppercase tracking-wider">Status</th>
                                         <th className="px-6 py-3 text-right text-xs font-bold text-gray-500 uppercase tracking-wider">Actions</th>
                                     </tr>
                                 </thead>
@@ -1157,6 +1254,13 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{saleQtyWeightDisplay(sale)}</td>
                                             <td className="px-6 py-4 whitespace-nowrap text-sm text-right font-bold text-green-600">
                                                 +PKR {sale.amount.toLocaleString()}
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-right font-bold text-emerald-600">PKR {receivedSaleAmount(sale).toLocaleString()}</td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-right font-bold text-amber-600">PKR {Math.max(0, sale.amount - receivedSaleAmount(sale)).toLocaleString()}</td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-center">
+                                                <span className={`px-2 py-1 rounded-full text-[10px] font-black ${receivedSaleAmount(sale) >= sale.amount ? 'bg-emerald-100 text-emerald-700' : receivedSaleAmount(sale) > 0 ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'}`}>
+                                                    {receivedSaleAmount(sale) >= sale.amount ? 'PAID' : receivedSaleAmount(sale) > 0 ? 'PARTIAL' : 'PENDING'}
+                                                </span>
                                             </td>
                                             <td className="px-6 py-4 whitespace-nowrap text-right">
                                                 {onRecordSalePayment && (sale.paymentStatus !== 'PAID' || (sale.amountReceived || 0) < sale.amount) && (
@@ -1210,7 +1314,7 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                     ))}
                                     {salesForList.length === 0 && (
                                         <tr>
-                                            <td colSpan={showFarmColumn ? 8 : 7} className="text-center py-16 bg-slate-50/50">
+                                            <td colSpan={showFarmColumn ? 11 : 10} className="text-center py-16 bg-slate-50/50">
                                                 <DollarSign className="mx-auto mb-4 opacity-30 text-emerald-600" size={48} />
                                                 <p className="font-bold text-slate-600 text-lg">No sales recorded yet</p>
                                                 <p className="text-sm text-slate-400 mt-1">Click the 'Record New Sale' button to register revenue.</p>
@@ -1237,8 +1341,9 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                         <div className="p-4 border-b border-gray-100 flex items-center justify-between bg-slate-50">
                             <h3 className="font-bold text-slate-800 flex items-center gap-2 font-display">
                                 <BookOpen className="text-emerald-600" size={20} />
-                                Chronological Double-Entry Ledger
+                                Financial Transaction Register
                             </h3>
+                            <p className="text-xs text-slate-500">Accrual sales and recorded expenses with an all-time cumulative net position. This is not a general ledger or cash-book.</p>
                         </div>
                         <div className="overflow-x-auto">
                             <table className="min-w-full divide-y divide-gray-200">
@@ -1247,9 +1352,9 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                         <th className="px-6 py-3 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest">Date</th>
                                         <th className="px-6 py-3 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest">Description</th>
                                         {showFarmColumn && <th className="px-6 py-3 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest">Farm</th>}
-                                        <th className="px-6 py-3 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest text-emerald-600">Credit (In)</th>
-                                        <th className="px-6 py-3 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest text-red-500">Debit (Out)</th>
-                                        <th className="px-6 py-3 text-right text-[10px] font-bold text-slate-400 uppercase tracking-widest">Running Balance</th>
+                                        <th className="px-6 py-3 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest text-emerald-600">Invoiced Revenue</th>
+                                        <th className="px-6 py-3 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest text-red-500">Recorded Expense</th>
+                                        <th className="px-6 py-3 text-right text-[10px] font-bold text-slate-400 uppercase tracking-widest">Cumulative Net Position</th>
                                     </tr>
                                 </thead>
                                 <tbody className="bg-white divide-y divide-gray-100">
@@ -1285,7 +1390,7 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                 </tbody>
                             </table>
                         </div>
-                        {ledgerPage && ledgerPage.totalPages > 1 && (
+                        {ledgerPage && !searchTerm && ledgerPage.totalPages > 1 && (
                             <div className="px-6 py-3 border-t border-gray-100 flex items-center justify-between bg-gray-50">
                                 <span className="text-sm text-gray-600">Page {ledgerPage.number + 1} of {ledgerPage.totalPages} ({ledgerPage.totalElements} total)</span>
                                 <div className="flex gap-2">
@@ -1327,7 +1432,6 @@ export const Financials: React.FC<Props> = ({ expenses, sales, livestockList = [
                                         </div>
                                         <div className="flex flex-col gap-2">
                                             <button onClick={() => reversePayment(payment.id)} className="px-3 py-1.5 rounded-lg bg-amber-50 text-amber-700 text-[10px] font-black uppercase hover:bg-amber-100">Reverse</button>
-                                            <button onClick={() => deletePayment(payment.id)} className="px-3 py-1.5 rounded-lg bg-red-50 text-red-700 text-[10px] font-black uppercase hover:bg-red-100">Delete</button>
                                         </div>
                                     </div>
                                 </div>
